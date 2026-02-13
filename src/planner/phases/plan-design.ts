@@ -16,7 +16,7 @@ import type { ContextData } from "../types.js";
 import { createLogger, type Logger } from "../../utils/logger.js";
 import { ProgressReporter } from "../../utils/progress.js";
 import { hookDispatch, unhookDispatch, type WorkflowDispatch, type PlanRef } from "../tools/dispatch.js";
-import { checkPermission, PLAN_GETTER_TOOLS } from "../tools/registry.js";
+import { checkPermission, PLAN_MUTATION_TOOLS } from "../tools/registry.js";
 
 type PlanDesignStep = 1 | 2 | 3 | 4 | 5 | 6;
 
@@ -132,8 +132,11 @@ export class PlanDesignPhase {
         return { block: true, reason: perm.reason };
       }
 
+      // Step gate: mutation tools are step-6-only. Blocklist (not whitelist)
+      // so read tools and future pi-native tools pass through after
+      // checkPermission approves them.
       const step = this.state.step;
-      if (step < 6 && !PLAN_GETTER_TOOLS.has(event.toolName) && event.toolName !== "koan_next_step") {
+      if (step < 6 && PLAN_MUTATION_TOOLS.has(event.toolName)) {
         return {
           block: true,
           reason: `${event.toolName} available in step 6 (current: ${step})`,
