@@ -83,7 +83,7 @@ export function refineGuidance(opts: RefinePromptOptions): StepGuidance {
   return {
     title: "Context Capture: Refine",
     instructions,
-    // Refine completes with koan_store_context, not koan_next_step.
+    // Refine completes with koan_store_context, not koan_complete_step.
     invokeAfter: [
       "WHEN DONE: After completing the instructions above, call koan_store_context with the verified context data.",
       "Do NOT call this tool until you have prepared the structured context.",

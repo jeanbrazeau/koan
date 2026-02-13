@@ -24,6 +24,7 @@ between exposing more or less information, always choose less. This is
 a permanent invariant.
 
 Concrete implications:
+
 - No implementation details in prompts (temp dirs, state file paths,
   orchestrator internals, phase routing)
 - No full plan state when partial suffices (QR reviewer for design does
@@ -56,6 +57,7 @@ from tools: always `throw new Error(msg)` -- never `return { isError: true }`.
 ### AD-2: Self-Loading Extension Pattern
 
 Same extension file (extensions/koan.ts) serves both modes:
+
 - **Parent mode** (no --koan-role flag): registers /koan command, tools,
   and dispatch. Zero overhead in normal pi sessions.
 - **Subagent mode** (--koan-role present): activates role-specific event
@@ -74,29 +76,40 @@ to ensure one-shot dispatch.
 
 ### AD-4: Tool-Call-Driven Step Transitions (Uniform Pattern)
 
-ALL step transitions use the koan_next_step registered tool. The LLM
-calls koan_next_step -> tool execute() returns next step's prompt.
+ALL step transitions use the koan_complete_step registered tool. The LLM
+calls koan_complete_step -> tool execute() returns next step's prompt.
 This works in both -p mode and interactive mode. sendUserMessage()
-is only used for the initial trigger (/koan plan) and as a safety net
-in agent_end when the LLM fails to call the expected tool.
+is only used for the initial trigger (/koan plan).
 
-**KEY CORRECTION**: Early design (Feb 10) considered turn_end + agent_end
-+ sendUserMessage() chaining for step transitions. This was ABANDONED
-because subagents in -p mode exit after the first agent loop completes.
-Tool calls keep the agent loop alive within a single loop. The context
-capture phase preserves sendUserMessage() in agent_end only as a
-fallback retry mechanism, not as the primary transition path.
+**KEY CORRECTION**: Early design (Feb 10) considered turn_end +
+agent_end + sendUserMessage() chaining for step transitions. This was
+ABANDONED because subagents in -p mode exit after the first agent loop
+completes. Tool calls keep the agent loop alive within a single loop.
 
-### AD-5: koan_next_step Has No Arguments
+**ANTI-PATTERN**: agent_end + sendUserMessage for retry was removed.
+sendUserMessage is fire-and-forget in the extension binding. In -p mode
+(subagents), the process can exit before the retry completes. Even in
+interactive mode, some models say "calling tool X now" as text without
+emitting a tool_call block, causing agent_end to fire spuriously.
+
+### AD-5: koan_complete_step Accepts Optional `thoughts`
 
 The extension is stateful -- it knows exactly which step the LLM is on
 via closure state. No step number parameter needed. The tool response
 contains the next step's full prompt.
 
+The optional `thoughts` parameter captures the model's work output
+(analysis, findings, review) as a tool parameter instead of as text
+output. This solves a cross-model compatibility issue: GPT-5-codex
+cannot produce text + tool_call in the same response, so requiring
+text output alongside a tool call caused it to narrate "Calling
+koan_complete_step now" without emitting an actual tool_call block.
+
 ### AD-6: Tool Naming Conventions
 
 Settled names (corrected from earlier iterations):
-- `koan_next_step` (was koan_complete_step)
+
+- `koan_complete_step` (was koan_next_step -- renamed to accept `thoughts`)
 - `koan_store_context` (was koan_finalize_context)
 - `koan_store_plan` was later REMOVED entirely (see AD-14)
 - Prompts use "instructions" not "actions"
@@ -104,7 +117,7 @@ Settled names (corrected from earlier iterations):
 ### AD-7: invoke_after Pattern Is Critical
 
 Every step prompt MUST have a clear "invoke after" directive telling
-the LLM to call koan_next_step after completing the step's work.
+the LLM to call koan_complete_step after completing the step's work.
 Mirrors the reference planner's "NEXT STEP: Command: python3 -m ...
 --step N" pattern. Without this, the LLM produces text-only responses
 and the agent loop exits.
@@ -148,12 +161,13 @@ per user preference.
 ### AD-12: Context Capture Phases
 
 Three sub-phases within context capture:
+
 1. **Drafting**: LLM reflects on conversation. MAY use tools for "high
    value" targeted exploration (confirm API signature, check file existence).
    DO NOT explore speculatively. Confidence tagging: HIGH (direct evidence)
    vs LOW (extrapolating).
 2. **Verifying**: Self-check. Completeness, accuracy, phrasing for
-   downstream agents. No tools except koan_next_step.
+   downstream agents. No tools except koan_complete_step.
 3. **Refining**: Pure tool invocation (koan_store_context). Up to 3
    attempts with validation feedback.
 
@@ -199,7 +213,7 @@ needs evidence that each tool call produces results.
 5. Assumption Surfacing
 6. Milestone Definition & Plan Writing (plan mutation tools available)
 
-Steps 1-5: only READ_TOOLS + PLAN_GETTER_TOOLS + koan_next_step allowed.
+Steps 1-5: only READ_TOOLS + PLAN_GETTER_TOOLS + koan_complete_step allowed.
 Step 6: plan mutation tools unlocked.
 
 ---
@@ -208,7 +222,7 @@ Step 6: plan mutation tools unlocked.
 
 ### WorkflowDispatch (dispatch pattern)
 
-Workflow tools (koan_next_step, koan_store_context) are registered once
+Workflow tools (koan_complete_step, koan_store_context) are registered once
 at init. Their execute() callbacks read from a mutable dispatch object.
 Phases hook/unhook dispatch slots at activation/deactivation time.
 
@@ -221,9 +235,9 @@ All plan mutation tools share a mutable `{ dir: string | null }` set
 when /koan plan creates a directory or when --koan-plan-dir is received.
 Decouples tool registration (init-time) from directory creation (runtime).
 
-### Pi Registers Tools at _buildRuntime()
+### Pi Registers Tools at \_buildRuntime()
 
-Pi snapshots tools during _buildRuntime(). Tools registered after this
+Pi snapshots tools during \_buildRuntime(). Tools registered after this
 point are invisible to the LLM. All 44+ tools register unconditionally
 at init; phases restrict access via tool_call blocking at runtime.
 
@@ -231,15 +245,15 @@ at init; phases restrict access via tool_call blocking at runtime.
 
 ## What Is NOT Ported from Reference Planner
 
-| Reference planner component | Koan replacement |
-|----|-----|
-| CLI mutation scripts (cli/plan.py) | Pi extension tool registration |
+| Reference planner component             | Koan replacement                      |
+| --------------------------------------- | ------------------------------------- |
+| CLI mutation scripts (cli/plan.py)      | Pi extension tool registration        |
 | Thin router pattern (shared/routing.py) | Orchestrator deterministic gate logic |
-| File-based state_dir | In-memory state + appendEntry() |
-| Template dispatch | Direct process spawning |
-| Constraint enforcement via prompt | tool_call event blocking |
-| Agent markdown definitions | Self-loading extension pattern |
-| Question relay handler | Not implemented (may add later) |
+| File-based state_dir                    | In-memory state + appendEntry()       |
+| Template dispatch                       | Direct process spawning               |
+| Constraint enforcement via prompt       | tool_call event blocking              |
+| Agent markdown definitions              | Self-loading extension pattern        |
+| Question relay handler                  | Not implemented (may add later)       |
 
 ---
 
@@ -256,7 +270,7 @@ tool usage instructions, coding style guides, or editor/IDE conventions."
 
 ### BUG-2: LLM Skips Mutation Tools
 
-The LLM called koan_next_step through steps 1-5, then at step 6 skipped
+The LLM called koan_complete_step through steps 1-5, then at step 6 skipped
 all mutation tools and called koan_store_plan directly. The in-memory
 plan was empty. Root cause: mutation tools returned opaque JSON with no
 feedback -- they felt like ceremony. Solution: remove finalize tool,
@@ -280,8 +294,9 @@ always throw new Error(msg) for error conditions (INV-3).
 Original weak format ("Now call koan_next_step.") produced skipped steps.
 The LLM called the tool immediately without doing work, because tool
 calls with empty params have zero friction. Solution: strengthen to
-"WHEN DONE: After completing the instructions above, call koan_next_step.
-Do NOT call this tool until the work described in this step is finished."
+"WHEN DONE: Call koan_complete_step with your findings in the `thoughts`
+parameter. Do NOT call this tool until the work described in this step
+is finished."
 
 ### BUG-6: Flag Detection at Init Time
 
@@ -320,6 +335,7 @@ koan_qr_get_item, koan_qr_list_items, koan_qr_summary.
 ## Current Implementation State (Feb 13 2026)
 
 Implemented:
+
 - [x] Extension entry point with dual-mode detection
 - [x] Context capture (3-phase: draft/verify/refine)
 - [x] Plan-design architect subagent (6-step workflow)
@@ -331,6 +347,7 @@ Implemented:
 - [x] Plan validation (design + cross-references)
 
 Not yet implemented:
+
 - [ ] Developer role (plan-code phase)
 - [ ] Technical writer role (plan-docs phase)
 - [ ] QR decompose subagent
