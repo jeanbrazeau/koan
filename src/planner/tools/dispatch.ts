@@ -25,7 +25,7 @@ export interface StepResult {
 // -- Dispatch --
 
 export interface WorkflowDispatch {
-  onNextStep: (() => StepResult) | null;
+  onNextStep: (() => StepResult | Promise<StepResult>) | null;
   onStoreContext:
     | ((payload: unknown, ctx: ExtensionContext) => Promise<ContextToolResult>)
     | null;
@@ -102,7 +102,7 @@ export function registerWorkflowTools(
       if (!dispatch.onNextStep) {
         throw new Error("No workflow phase is active.");
       }
-      const r = dispatch.onNextStep();
+      const r = await dispatch.onNextStep();
       if (!r.ok) {
         throw new Error(r.error ?? "Step transition failed.");
       }
