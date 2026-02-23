@@ -1,8 +1,8 @@
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-import { PlanDesignPhase } from "./plan-design.js";
+import { PlanDesignPhase } from "./plan-design/phase.js";
 import { createLogger, type Logger } from "../../utils/logger.js";
-import type { WorkflowDispatch, PlanRef } from "../tools/dispatch.js";
+import type { WorkflowDispatch, PlanRef } from "../lib/dispatch.js";
 
 export interface SubagentConfig {
   role: string;

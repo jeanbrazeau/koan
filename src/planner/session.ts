@@ -4,13 +4,13 @@ import * as path from "node:path";
 
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { ContextCapturePhase } from "./phases/context-capture.js";
+import { ContextCapturePhase } from "./phases/context-capture/phase.js";
 import { createInitialState, initializePlanState, type WorkflowState } from "./state.js";
 import { createPlanInfo } from "../utils/plan.js";
 import { spawnArchitect } from "./subagent.js";
 import { createLogger } from "../utils/logger.js";
 import { createSubagentDir, readSubagentState } from "../utils/progress.js";
-import type { WorkflowDispatch, PlanRef } from "./tools/dispatch.js";
+import type { WorkflowDispatch, PlanRef } from "./lib/dispatch.js";
 
 interface Session {
   plan(args: string, ctx: ExtensionCommandContext): Promise<void>;

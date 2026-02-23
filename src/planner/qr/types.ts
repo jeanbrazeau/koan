@@ -6,7 +6,6 @@ export interface QRItem {
   scope: string;
   check: string;
   status: QRItemStatus;
-  version: number;
   finding: string | null;
   parent_id: string | null;
   group_id: string | null;

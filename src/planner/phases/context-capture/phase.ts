@@ -8,15 +8,15 @@ import {
   verifyGuidance,
   refineGuidance,
   type RefinePromptOptions,
-} from "../prompts/context-capture.js";
-import { formatStep } from "../prompts/step.js";
-import type { ContextCaptureState, PlanInfo, WorkflowState } from "../state.js";
-import type { ContextData } from "../types.js";
-import { CONTEXT_KEYS } from "../types.js";
-import type { ContextToolResult } from "../tools/context-store.js";
-import { hookDispatch, unhookDispatch, type WorkflowDispatch } from "../tools/dispatch.js";
-import { createLogger, type Logger } from "../../utils/logger.js";
-import { checkPermission } from "../tools/registry.js";
+} from "./prompts.js";
+import { formatStep } from "../../lib/step.js";
+import type { ContextCaptureState, PlanInfo, WorkflowState } from "../../state.js";
+import type { ContextData } from "../../types.js";
+import { CONTEXT_KEYS } from "../../types.js";
+import type { ContextToolResult } from "../../tools/context-store.js";
+import { hookDispatch, unhookDispatch, type WorkflowDispatch } from "../../lib/dispatch.js";
+import { createLogger, type Logger } from "../../../utils/logger.js";
+import { checkPermission } from "../../lib/permissions.js";
 
 const MAX_ATTEMPTS = 3;
 

@@ -18,7 +18,6 @@ export function addQRItem(
     scope: data.scope,
     check: data.check,
     status: "TODO",
-    version: 1,
     finding: null,
     parent_id: null,
     group_id: null,
@@ -68,7 +67,6 @@ export function setQRItem(
 
   const updated: QRItem = {
     ...item,
-    version: item.version + 1,
     status,
     finding,
     check: data.check ?? item.check,
@@ -81,7 +79,6 @@ export function setQRItem(
   return { ...qr, items };
 }
 
-// Does not increment version (grouping is metadata).
 export function assignGroup(qr: QRFile, ids: string[], groupId: string): QRFile {
   const idSet = new Set(ids);
   const items = qr.items.map((item) =>

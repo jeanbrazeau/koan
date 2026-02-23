@@ -2,8 +2,8 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import type { ContextData } from "../types.js";
-import type { StepGuidance } from "./step.js";
+import type { ContextData } from "../../types.js";
+import type { StepGuidance } from "../../lib/step.js";
 
 export const STEP_NAMES: Record<1 | 2 | 3 | 4 | 5 | 6, string> = {
   1: "Task Analysis & Exploration Planning",

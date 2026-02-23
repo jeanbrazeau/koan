@@ -1,7 +1,7 @@
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-import type { PlanRef } from "./dispatch.js";
+import type { PlanRef } from "../lib/dispatch.js";
 import { loadPlan } from "../plan/serialize.js";
 import type { Plan, Milestone, CodeIntent, CodeChange } from "../plan/types.js";
 

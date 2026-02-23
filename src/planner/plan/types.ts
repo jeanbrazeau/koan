@@ -1,6 +1,5 @@
 export interface Decision {
   id: string;
-  version: number;
   decision: string;
   reasoning_chain: string;
 }
@@ -40,7 +39,6 @@ export interface Overview {
 
 export interface CodeIntent {
   id: string;
-  version: number;
   file: string;
   function?: string | null;
   behavior: string;
@@ -49,7 +47,6 @@ export interface CodeIntent {
 
 export interface CodeChange {
   id: string;
-  version: number;
   intent_ref: string | null;
   file: string;
   diff: string;
@@ -117,7 +114,6 @@ export interface DiagramGraph {
 
 export interface Milestone {
   id: string;
-  version: number;
   number: number;
   name: string;
   files: string[];

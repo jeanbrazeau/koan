@@ -1,13 +1,13 @@
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-import type { PlanRef } from "./dispatch.js";
+import type { PlanRef } from "../lib/dispatch.js";
 import { loadPlan, savePlan } from "../plan/serialize.js";
 import {
   setOverview,
   setConstraints,
   setInvisibleKnowledge,
-} from "../plan/mutate.js";
+} from "../plan/mutate/index.js";
 
 export function registerPlanSetterTools(
   pi: ExtensionAPI,

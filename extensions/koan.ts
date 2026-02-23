@@ -2,11 +2,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import { createSession } from "../src/planner/session.js";
 import { detectSubagentMode, dispatchPhase } from "../src/planner/phases/dispatch.js";
-import { createDispatch, registerWorkflowTools, createPlanRef } from "../src/planner/tools/dispatch.js";
-import { registerPlanGetterTools } from "../src/planner/tools/plan-getters.js";
-import { registerPlanSetterTools } from "../src/planner/tools/plan-setters.js";
-import { registerPlanEntityTools } from "../src/planner/tools/plan-entities.js";
-import { registerQRTools } from "../src/planner/tools/qr-tools.js";
+import { registerAllTools, createDispatch, createPlanRef } from "../src/planner/tools/index.js";
 import { createLogger } from "../src/utils/logger.js";
 
 export default function koan(pi: ExtensionAPI): void {
@@ -42,11 +38,7 @@ export default function koan(pi: ExtensionAPI): void {
   const dispatch = createDispatch();
   const planRef = createPlanRef();
 
-  registerWorkflowTools(pi, dispatch);
-  registerPlanGetterTools(pi, planRef);
-  registerPlanSetterTools(pi, planRef);
-  registerPlanEntityTools(pi, planRef);
-  registerQRTools(pi, planRef);
+  registerAllTools(pi, planRef, dispatch);
 
   // Subagent detection runs at before_agent_start (flags
   // are unavailable during init).

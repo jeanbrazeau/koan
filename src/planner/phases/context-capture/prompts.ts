@@ -1,4 +1,4 @@
-import type { StepGuidance } from "./step.js";
+import type { StepGuidance } from "../../lib/step.js";
 
 export function draftGuidance(taskDescription: string): StepGuidance {
   return {

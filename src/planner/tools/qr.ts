@@ -3,9 +3,10 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
-import type { PlanRef } from "./dispatch.js";
+import type { PlanRef } from "../lib/dispatch.js";
 import type { QRFile } from "../qr/types.js";
 import { addQRItem, setQRItem, assignGroup } from "../qr/mutate.js";
+import { withFileLock } from "../../utils/lock.js";
 
 function createEmptyQRFile(phase: string): QRFile {
   return {
@@ -55,13 +56,16 @@ export function registerQRTools(pi: ExtensionAPI, planRef: PlanRef): void {
     }),
     async execute(_toolCallId, params) {
       if (!planRef.dir) throw new Error("No plan directory is active.");
-      const qr = await loadQR(planRef.dir, params.phase);
-      const r = addQRItem(qr, params);
-      await saveQR(r.qr, planRef.dir, params.phase);
-      return {
-        content: [{ type: "text" as const, text: `Added QR item ${r.id}` }],
-        details: undefined,
-      };
+      const qrPath = path.join(planRef.dir, `qr-${params.phase}.json`);
+      return withFileLock(qrPath, async () => {
+        const qr = await loadQR(planRef.dir!, params.phase);
+        const r = addQRItem(qr, params);
+        await saveQR(r.qr, planRef.dir!, params.phase);
+        return {
+          content: [{ type: "text" as const, text: `Added QR item ${r.id}` }],
+          details: undefined,
+        };
+      });
     },
   });
 
@@ -91,13 +95,16 @@ export function registerQRTools(pi: ExtensionAPI, planRef: PlanRef): void {
     }),
     async execute(_toolCallId, params) {
       if (!planRef.dir) throw new Error("No plan directory is active.");
-      const qr = await loadQR(planRef.dir, params.phase);
-      const updated = setQRItem(qr, params.id, params);
-      await saveQR(updated, planRef.dir, params.phase);
-      return {
-        content: [{ type: "text" as const, text: `Updated QR item ${params.id}` }],
-        details: undefined,
-      };
+      const qrPath = path.join(planRef.dir, `qr-${params.phase}.json`);
+      return withFileLock(qrPath, async () => {
+        const qr = await loadQR(planRef.dir!, params.phase);
+        const updated = setQRItem(qr, params.id, params);
+        await saveQR(updated, planRef.dir!, params.phase);
+        return {
+          content: [{ type: "text" as const, text: `Updated QR item ${params.id}` }],
+          details: undefined,
+        };
+      });
     },
   });
 
@@ -112,18 +119,21 @@ export function registerQRTools(pi: ExtensionAPI, planRef: PlanRef): void {
     }),
     async execute(_toolCallId, params) {
       if (!planRef.dir) throw new Error("No plan directory is active.");
-      const qr = await loadQR(planRef.dir, params.phase);
-      const updated = assignGroup(qr, params.ids, params.group_id);
-      await saveQR(updated, planRef.dir, params.phase);
-      return {
-        content: [
-          {
-            type: "text" as const,
-            text: `Assigned ${params.ids.length} items to group ${params.group_id}`,
-          },
-        ],
-        details: undefined,
-      };
+      const qrPath = path.join(planRef.dir, `qr-${params.phase}.json`);
+      return withFileLock(qrPath, async () => {
+        const qr = await loadQR(planRef.dir!, params.phase);
+        const updated = assignGroup(qr, params.ids, params.group_id);
+        await saveQR(updated, planRef.dir!, params.phase);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Assigned ${params.ids.length} items to group ${params.group_id}`,
+            },
+          ],
+          details: undefined,
+        };
+      });
     },
   });
 

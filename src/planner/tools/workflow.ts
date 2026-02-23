@@ -1,76 +1,15 @@
-// Workflow tool dispatch for koan.
-//
-// Workflow tools (koan_complete_step, koan_store_context) are registered
-// once at init and read from this dispatch at call time.
-// Pi snapshots tools during _buildRuntime() -- late registration is
-// invisible to the LLM. The dispatch decouples static registration
-// from dynamic phase routing.
+// Workflow tool registration: koan_complete_step and koan_store_context.
+// Tools register once at init; execute callbacks read from the mutable
+// dispatch at call time, decoupling static registration from phase routing.
 
 import { Type } from "@sinclair/typebox";
-import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-import { ContextStoreSchema, type ContextToolResult } from "./context-store.js";
+import { ContextStoreSchema } from "./context-store.js";
 import { createLogger } from "../../utils/logger.js";
+import type { WorkflowDispatch } from "../lib/dispatch.js";
 
 const log = createLogger("Dispatch");
-
-// -- Result types --
-
-export interface StepResult {
-  ok: boolean;
-  prompt?: string;
-  error?: string;
-}
-
-// -- Dispatch --
-
-export interface WorkflowDispatch {
-  onCompleteStep: ((thoughts?: string) => StepResult | Promise<StepResult>) | null;
-  onStoreContext:
-    | ((payload: unknown, ctx: ExtensionContext) => Promise<ContextToolResult>)
-    | null;
-}
-
-export function createDispatch(): WorkflowDispatch {
-  return { onCompleteStep: null, onStoreContext: null };
-}
-
-// Decouples tool registration (init-time, before _buildRuntime) from
-// plan directory creation (runtime, after flags available). Same
-// indirection pattern as WorkflowDispatch.
-export interface PlanRef {
-  dir: string | null;
-}
-
-export function createPlanRef(): PlanRef {
-  return { dir: null };
-}
-
-// Sets a dispatch slot. Throws if the slot is already occupied --
-// prevents silent misrouting when two phases attempt to claim
-// the same tool.
-export function hookDispatch<K extends keyof WorkflowDispatch>(
-  dispatch: WorkflowDispatch,
-  key: K,
-  handler: NonNullable<WorkflowDispatch[K]>,
-): void {
-  if (dispatch[key] !== null) {
-    throw new Error(`dispatch.${String(key)} is already hooked`);
-  }
-  // TypeScript cannot verify generic key-value assignment.
-  // Call-site generic constraint (handler: NonNullable<WorkflowDispatch[K]>)
-  // ensures type safety; collision guard above prevents double-hooking.
-  (dispatch as any)[key] = handler;
-}
-
-export function unhookDispatch(
-  dispatch: WorkflowDispatch,
-  key: keyof WorkflowDispatch,
-): void {
-  (dispatch as any)[key] = null;
-}
-
-// -- Tool registration --
 
 // Registers workflow tools. Called once at init in koan.ts,
 // before pi's _buildRuntime() snapshot. Tool execute callbacks read

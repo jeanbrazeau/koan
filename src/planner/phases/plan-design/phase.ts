@@ -3,20 +3,20 @@ import * as path from "node:path";
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-import { validatePlanDesign, validateRefs } from "../plan/validate.js";
+import { validatePlanDesign, validateRefs } from "../../plan/validate.js";
 import {
   loadPlanDesignSystemPrompt,
   formatContextForStep1,
   buildPlanDesignSystemPrompt,
   planDesignStepGuidance,
   STEP_NAMES,
-} from "../prompts/plan-design.js";
-import { formatStep } from "../prompts/step.js";
-import type { ContextData } from "../types.js";
-import { createLogger, type Logger } from "../../utils/logger.js";
-import { ProgressReporter } from "../../utils/progress.js";
-import { hookDispatch, unhookDispatch, type WorkflowDispatch, type PlanRef } from "../tools/dispatch.js";
-import { checkPermission, PLAN_MUTATION_TOOLS } from "../tools/registry.js";
+} from "./prompts.js";
+import { formatStep } from "../../lib/step.js";
+import type { ContextData } from "../../types.js";
+import { createLogger, type Logger } from "../../../utils/logger.js";
+import { ProgressReporter } from "../../../utils/progress.js";
+import { hookDispatch, unhookDispatch, type WorkflowDispatch, type PlanRef } from "../../lib/dispatch.js";
+import { checkPermission, PLAN_MUTATION_TOOLS } from "../../lib/permissions.js";
 
 type PlanDesignStep = 1 | 2 | 3 | 4 | 5 | 6;
 
