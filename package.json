@@ -22,7 +22,10 @@
     "LICENSE"
   ],
   "scripts": {
-    "check": "tsc --noEmit"
+    "check": "tsc --noEmit",
+    "build": "tsc --project tsconfig.build.json",
+    "pretest": "npm run build",
+    "test": "node --test build/tests"
   },
   "dependencies": {
     "@sinclair/typebox": "^0.32.30"
