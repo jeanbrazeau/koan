@@ -26,6 +26,8 @@ export interface ToolFileEvent extends EventBase {
 export interface ToolBashEvent extends EventBase {
   kind: "tool_bash";
   bin: string;
+  lines?: number;
+  chars?: number;
   error: boolean;
 }
 
@@ -118,8 +120,10 @@ export function summarize(e: ToolEvent): string {
       const suffix = e.lines != null ? ` (${e.lines}L, ${e.chars}c)` : "";
       return `${e.tool} ${e.path}${suffix}`;
     }
-    case "tool_bash":
-      return `bash ${e.bin}`;
+    case "tool_bash": {
+      const suffix = e.lines != null ? ` (${e.lines}L, ${e.chars}c)` : "";
+      return `bash ${e.bin}${suffix}`;
+    }
     case "tool_koan":
       return e.tool;
     case "tool_generic":
@@ -200,7 +204,8 @@ export function extractToolEvent(piEvent: PiToolResultEvent): ToolEvent {
   if (toolName === "bash") {
     const cmd = (input["command"] as string | undefined) ?? "";
     const bin = cmd.trim().split(/\s+/)[0] ?? "bash";
-    return { kind: "tool_bash", bin, error: isError, ts, seq };
+    const text = content.find((c) => c.type === "text")?.text ?? "";
+    return { kind: "tool_bash", bin, lines: text.split("\n").length, chars: text.length, error: isError, ts, seq };
   }
 
   if (toolName.startsWith("koan_")) {
@@ -336,9 +341,17 @@ export async function readProjection(dir: string): Promise<Projection | null> {
   }
 }
 
-// Reads the tail of events.jsonl and returns human-readable summary lines.
+// Structured log line for the widget log card. The widget applies
+// theme-aware coloring: prefix dim, highlight normal, meta dim.
+export interface LogLine {
+  prefix: string;
+  highlight: string;
+  meta: string;
+}
+
+// Reads the tail of events.jsonl and returns structured log entries.
 // Filters out heartbeats (noisy). Used by session.ts to feed the widget log card.
-export async function readRecentLogs(dir: string, count = 5): Promise<string[]> {
+export async function readRecentLogs(dir: string, count = 5): Promise<LogLine[]> {
   try {
     const raw = await fs.readFile(path.join(dir, "events.jsonl"), "utf8");
     const events = raw
@@ -353,25 +366,27 @@ export async function readRecentLogs(dir: string, count = 5): Promise<string[]> 
   }
 }
 
-function formatLogLine(e: AuditEvent): string {
+function sizeSuffix(e: { lines?: number; chars?: number }): string {
+  return e.lines != null ? `(${e.lines}L, ${e.chars}c)` : "";
+}
+
+function formatLogLine(e: AuditEvent): LogLine {
   switch (e.kind) {
     case "phase_start":
-      return `${e.phase} started (${e.totalSteps} steps)`;
+      return { prefix: "phase", highlight: e.phase, meta: `(${e.totalSteps} steps)` };
     case "step_transition":
-      return `step ${e.step}/${e.totalSteps}: ${e.name}`;
+      return { prefix: `step ${e.step}/${e.totalSteps}`, highlight: e.name, meta: "" };
     case "phase_end":
-      return `${e.outcome}${e.detail ? ` -- ${e.detail}` : ""}`;
-    case "tool_file": {
-      const suffix = e.lines != null ? ` (${e.lines}L, ${e.chars}c)` : "";
-      return `${e.tool} ${e.path}${suffix}`;
-    }
+      return { prefix: "phase", highlight: e.outcome, meta: e.detail ?? "" };
+    case "tool_file":
+      return { prefix: e.tool, highlight: e.path, meta: sizeSuffix(e) };
     case "tool_bash":
-      return `bash ${e.bin}`;
+      return { prefix: "bash", highlight: e.bin, meta: sizeSuffix(e) };
     case "tool_koan":
-      return e.tool;
+      return { prefix: "koan", highlight: e.tool, meta: "" };
     case "tool_generic":
-      return e.tool;
+      return { prefix: "tool", highlight: e.tool, meta: "" };
     case "heartbeat":
-      return "heartbeat";
+      return { prefix: "", highlight: "heartbeat", meta: "" };
   }
 }

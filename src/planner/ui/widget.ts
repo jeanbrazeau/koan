@@ -10,6 +10,7 @@
 import type { ExtensionUIContext } from "@mariozechner/pi-coding-agent";
 import type { Theme, ThemeColor } from "@mariozechner/pi-coding-agent";
 import { truncateToWidth, visibleWidth, wrapTextWithAnsi } from "@mariozechner/pi-tui";
+import type { LogLine } from "../lib/audit.js";
 
 // -- Types --
 
@@ -35,7 +36,7 @@ interface WidgetState {
   step: string;
   activity: string;
   startedAt: number;
-  logLines: string[];
+  logLines: LogLine[];
   qrIteration: number | null;
   qrIterationsMax: number | null;
   qrMode: QRMode | null;
@@ -48,7 +49,7 @@ export interface WidgetUpdate {
   activity?: string;
   phaseStatus?: { index: number; status: PhaseStatus };
   mode?: WidgetMode;
-  logLines?: readonly string[];
+  logLines?: readonly LogLine[];
   qrIteration?: number | null;
   qrIterationsMax?: number | null;
   qrMode?: QRMode | null;
@@ -175,10 +176,9 @@ function activePhase(state: WidgetState): PhaseEntry | null {
   return state.phases[state.activeIndex] ?? null;
 }
 
-function normalizeLogLines(lines: readonly string[] | undefined): string[] {
+function normalizeLogLines(lines: readonly LogLine[] | undefined): LogLine[] {
   if (!lines || lines.length === 0) return [];
-  const trimmed = lines.map((line) => line.replace(/\s+$/u, ""));
-  return trimmed.slice(-LOG_LINES);
+  return [...lines].slice(-LOG_LINES);
 }
 
 function phaseChipLabel(phase: PhaseEntry, index: number, state: WidgetState, theme: Theme): string {
@@ -466,18 +466,25 @@ function renderPlanningCard(state: WidgetState, theme: Theme, width: number): st
   );
 }
 
+function renderLogLine(entry: LogLine, theme: Theme): string {
+  const parts: string[] = [];
+  if (entry.prefix) parts.push(theme.fg("dim", entry.prefix));
+  if (entry.highlight) parts.push(theme.bold(entry.highlight));
+  if (entry.meta) parts.push(theme.fg("dim", entry.meta));
+  return `${theme.fg("dim", "•")} ${parts.join(" ")}`;
+}
+
 function renderLogCard(state: WidgetState, theme: Theme, width: number): string[] {
   const innerWidth = Math.max(0, width - 2);
-  const raw = state.logLines.length > 0 ? state.logLines.slice(-LOG_LINES) : [LOG_PLACEHOLDER];
-  const padded = [...raw];
-  while (padded.length < LOG_LINES) padded.push("");
+  const hasEntries = state.logLines.length > 0;
+  const entries = hasEntries ? state.logLines.slice(-LOG_LINES) : [];
 
-  const lines = padded.map((line) => {
-    if (!line) return "";
-    return theme.fg("dim", `• ${line}`);
-  });
+  const formatted: string[] = hasEntries
+    ? entries.map((entry) => renderLogLine(entry, theme))
+    : [theme.fg("dim", `• ${LOG_PLACEHOLDER}`)];
+  while (formatted.length < LOG_LINES) formatted.push("");
 
-  const body = indentLines(lines, innerWidth);
+  const body = indentLines(formatted, innerWidth);
   return renderBox(
     `${BODY_INDENT}${theme.bold(theme.fg("accent", "Latest log"))}`,
     "",
@@ -620,7 +627,7 @@ export class WidgetController {
     const state = {
       ...this.state,
       phases: this.state.phases.map((p) => ({ ...p })),
-      logLines: [...this.state.logLines],
+      logLines: this.state.logLines.map((l) => ({ ...l })),
     };
     const theme = this.ui.theme;
 
