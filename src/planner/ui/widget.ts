@@ -41,6 +41,11 @@ interface WidgetState {
   qrIterationsMax: number | null;
   qrMode: QRMode | null;
   qrPhase: QRPhase;
+  qrDone: number | null;
+  qrTotal: number | null;
+  qrPass: number | null;
+  qrFail: number | null;
+  qrTodo: number | null;
 }
 
 export interface WidgetUpdate {
@@ -54,6 +59,11 @@ export interface WidgetUpdate {
   qrIterationsMax?: number | null;
   qrMode?: QRMode | null;
   qrPhase?: QRPhase;
+  qrDone?: number | null;
+  qrTotal?: number | null;
+  qrPass?: number | null;
+  qrFail?: number | null;
+  qrTodo?: number | null;
 }
 
 // -- Constants --
@@ -66,7 +76,7 @@ const LOG_LINES = 5;
 const BODY_INDENT = "    ";
 
 const PLANNING_PHASES: ReadonlyArray<{ key: string; label: string; detail: string }> = [
-  { key: "ctx", label: "Context", detail: "Gathering context" },
+  { key: "ctx", label: "Context gathering", detail: "Gathering initial context" },
   { key: "design", label: "Plan design", detail: "Designing plan" },
   { key: "code", label: "Plan code", detail: "Creating code plan" },
   { key: "docs", label: "Plan docs", detail: "Documenting plan" },
@@ -97,6 +107,7 @@ const LOG_PLACEHOLDER = "No recent log entries";
 const TIMELINE_MIN_WIDTH = 16;
 const TIMELINE_MAX_WIDTH = 28;
 const CONNECTOR = "│";
+const COLUMN_GAP = 4;
 
 interface BorderStyle {
   topLeft: string;
@@ -112,15 +123,6 @@ const BORDER_SOLID: BorderStyle = {
   topRight: "┐",
   bottomLeft: "└",
   bottomRight: "┘",
-  horizontal: "─",
-  vertical: "│",
-};
-
-const BORDER_SUBTLE: BorderStyle = {
-  topLeft: "╭",
-  topRight: "╮",
-  bottomLeft: "╰",
-  bottomRight: "╯",
   horizontal: "─",
   vertical: "│",
 };
@@ -159,6 +161,22 @@ function indentLines(lines: string[], width: number, indent = BODY_INDENT): stri
   return lines.map((line) => indent + clampToWidth(line, available));
 }
 
+interface PlanningColumns {
+  innerWidth: number;
+  contentWidth: number;
+  timelineWidth: number;
+  detailWidth: number;
+}
+
+function planningColumns(width: number): PlanningColumns {
+  const innerWidth = Math.max(0, width - 2);
+  const indentWidth = visibleWidth(BODY_INDENT);
+  const contentWidth = Math.max(0, innerWidth - indentWidth);
+  const timelineWidth = Math.min(TIMELINE_MAX_WIDTH, Math.max(TIMELINE_MIN_WIDTH, Math.floor(contentWidth * 0.3)));
+  const detailWidth = Math.max(14, contentWidth - timelineWidth - COLUMN_GAP);
+  return { innerWidth, contentWidth, timelineWidth, detailWidth };
+}
+
 function formatElapsed(ms: number): string {
   const totalSec = Math.floor(ms / 1000);
   const m = Math.floor(totalSec / 60);
@@ -178,7 +196,7 @@ function activePhase(state: WidgetState): PhaseEntry | null {
 
 function normalizeLogLines(lines: readonly LogLine[] | undefined): LogLine[] {
   if (!lines || lines.length === 0) return [];
-  return [...lines].slice(-LOG_LINES);
+  return [...lines].slice(-(LOG_LINES * 2));
 }
 
 function phaseChipLabel(phase: PhaseEntry, index: number, state: WidgetState, theme: Theme): string {
@@ -238,38 +256,165 @@ function renderTimelineLines(state: WidgetState, theme: Theme, width: number): s
   return lines;
 }
 
-function upcomingSummary(state: WidgetState): string {
-  const remaining = state.activeIndex < 0
-    ? []
-    : state.phases.slice(state.activeIndex + 1).filter((p) => p.status !== "failed");
-  if (state.activeIndex < 0) return "Planning complete";
-  if (remaining.length === 0) return "Final step in progress";
-  const labels = remaining.map((p) => p.label).join(" → ");
-  return `Upcoming: ${labels}`;
+function shouldShowQR(state: WidgetState): boolean {
+  if (state.qrIteration === null) return false;
+  const active = activePhase(state);
+  if (!active) return false;
+  return active.key !== "ctx";
 }
 
-function renderQRStatusWidget(state: WidgetState, theme: Theme, width: number): string[] {
-  if (state.qrIteration === null || state.qrPhase === "idle") {
+type QRTier = "wide" | "medium" | "tight";
+
+const QR_TIER_MEDIUM_WIDTH = 68;
+const QR_TIER_TIGHT_WIDTH = 52;
+const QR_META_MAX_CHARS = 64;
+
+function qrTier(width: number): QRTier {
+  if (width < QR_TIER_TIGHT_WIDTH) return "tight";
+  if (width < QR_TIER_MEDIUM_WIDTH) return "medium";
+  return "wide";
+}
+
+function qrPhaseLabel(phase: QRPhase): string {
+  switch (phase) {
+    case "idle":
+      return "execute";
+    case "execute":
+      return "execute";
+    case "decompose":
+      return "decompose";
+    case "verify":
+      return "verify";
+    case "done":
+      return "done";
+  }
+}
+
+function qrPhaseShortLabel(phase: QRPhase): string {
+  switch (phase) {
+    case "idle":
+      return "exec";
+    case "execute":
+      return "exec";
+    case "decompose":
+      return "decomp";
+    case "verify":
+      return "vfy";
+    case "done":
+      return "done";
+  }
+}
+
+function firstBudgeted(candidates: string[], budget: number): string {
+  for (const c of candidates) {
+    if (visibleWidth(c) <= budget) return c;
+  }
+  const fallback = candidates[candidates.length - 1] ?? "";
+  return truncateToWidth(fallback, budget, "…", false);
+}
+
+function qrMetaText(state: WidgetState, tier: QRTier, budget: number): string {
+  const phase = qrPhaseLabel(state.qrPhase);
+  const short = qrPhaseShortLabel(state.qrPhase);
+  const modeFull = state.qrMode === "fix" ? "fix" : "initial";
+  const modeShort = state.qrMode === "fix" ? "fx" : "in";
+  const iter = state.qrIteration ?? 0;
+  const iterMax = state.qrIterationsMax ? `/${state.qrIterationsMax}` : "";
+  const iterFull = `${iter}${iterMax}`;
+
+  const wide = `phase:${phase} · iter ${iterFull} ${modeFull}`;
+  const medium = `${phase} · iter ${iterFull} ${modeFull}`;
+  const compact = `${short} · i${iterFull} ${modeFull}`;
+  const tight = `${short} i${iterFull} ${modeShort}`;
+
+  const candidates = tier === "wide"
+    ? [wide, medium, compact, tight]
+    : tier === "medium"
+      ? [medium, compact, tight]
+      : [compact, tight];
+
+  return firstBudgeted(candidates, budget);
+}
+
+interface QRCounterValues {
+  done: string;
+  pass: string;
+  fail: string;
+  todo: string;
+}
+
+function qrCounterValues(state: WidgetState): QRCounterValues {
+  const meaningful = (state.qrPhase === "verify" || state.qrPhase === "done") && state.qrTotal !== null;
+  if (!meaningful || state.qrTotal === null) {
+    return { done: "-/-", pass: "-", fail: "-", todo: "-" };
+  }
+
+  return {
+    done: `${state.qrDone ?? 0}/${state.qrTotal}`,
+    pass: String(state.qrPass ?? 0),
+    fail: String(state.qrFail ?? 0),
+    todo: String(state.qrTodo ?? 0),
+  };
+}
+
+function renderQRCounterLine(state: WidgetState, theme: Theme, tier: QRTier, width: number, budget: number): string {
+  const values = qrCounterValues(state);
+
+  const labelSets = tier === "wide"
+    ? [
+      { done: "done", pass: "pass", fail: "fail", todo: "todo" },
+      { done: "d", pass: "p", fail: "f", todo: "t" },
+    ]
+    : [{ done: "d", pass: "p", fail: "f", todo: "t" }];
+
+  const render = (labels: { done: string; pass: string; fail: string; todo: string }) => [
+    `${theme.fg("muted", `${labels.done}:`)}${theme.fg("dim", values.done)}`,
+    `${theme.fg("muted", `${labels.pass}:`)}${theme.fg("accent", values.pass)}`,
+    `${theme.fg("muted", `${labels.fail}:`)}${theme.bold(theme.fg("error", values.fail))}`,
+    `${theme.fg("muted", `${labels.todo}:`)}${theme.fg("muted", values.todo)}`,
+  ].join(" ");
+
+  const candidates = labelSets.map(render);
+  const selected = firstBudgeted(candidates, budget);
+  return clampToWidth(selected, width, "…");
+}
+
+function renderQRStatusSection(state: WidgetState, theme: Theme, width: number): string[] {
+  if (!shouldShowQR(state)) {
     return [];
   }
 
-  const innerWidth = Math.max(0, width - 2);
-  const iterationTotal = state.qrIterationsMax ? ` / ${state.qrIterationsMax}` : "";
-  const modeLabel = state.qrMode === "fix" ? "Fix" : "Initial";
+  const tier = qrTier(width);
+  const budget = Math.min(width, QR_META_MAX_CHARS);
 
-  const headerLeft = theme.bold(theme.fg("accent", "Quality review"));
-  const headerRightParts = [`Iter ${state.qrIteration}${iterationTotal}`];
-  if (modeLabel) headerRightParts.push(modeLabel);
-  const headerRight = theme.fg("dim", headerRightParts.join(" · "));
+  const headerMeta = qrMetaText(state, tier, budget);
+  const header = clampToWidth(
+    `${theme.bold(theme.fg("accent", "QR"))} ${theme.fg("muted", "|")} ${theme.fg("dim", headerMeta)}`,
+    width,
+    "…",
+  );
 
-  const phaseEntries: Array<{ key: Exclude<QRPhase, "idle" | "done">; label: string }> = [
-    { key: "execute", label: state.qrMode === "fix" ? "Execute (fix)" : "Execute" },
-    { key: "decompose", label: "QR decompose" },
-    { key: "verify", label: "QR verify" },
-  ];
+  const phaseEntries: Array<{ key: Exclude<QRPhase, "idle" | "done">; label: string }> = tier === "wide"
+    ? [
+      { key: "execute", label: state.qrMode === "fix" ? "Execute (fix)" : "Execute" },
+      { key: "decompose", label: "QR decompose" },
+      { key: "verify", label: "QR verify" },
+    ]
+    : tier === "medium"
+      ? [
+        { key: "execute", label: state.qrMode === "fix" ? "Exec(fix)" : "Exec" },
+        { key: "decompose", label: "Decomp" },
+        { key: "verify", label: "Verify" },
+      ]
+      : [
+        { key: "execute", label: "X" },
+        { key: "decompose", label: "D" },
+        { key: "verify", label: "V" },
+      ];
 
-  let currentIndex = phaseEntries.findIndex((entry) => entry.key === state.qrPhase);
-  if (state.qrPhase === "done") {
+  const effectivePhase: Exclude<QRPhase, "idle"> = state.qrPhase === "idle" ? "execute" : state.qrPhase;
+  let currentIndex = phaseEntries.findIndex((entry) => entry.key === effectivePhase);
+  if (effectivePhase === "done") {
     currentIndex = phaseEntries.length;
   }
 
@@ -283,36 +428,11 @@ function renderQRStatusWidget(state: WidgetState, theme: Theme, width: number): 
     return theme.fg("muted", entry.label);
   });
 
-  const separator = theme.fg("muted", " → ");
-  const stageLine = clampToWidth(segments.join(separator), innerWidth, "…");
+  const rail = clampToWidth(segments.join(theme.fg("muted", " → ")), width, "…");
+  const counters = renderQRCounterLine(state, theme, tier, width, budget);
+  const divider = clampToWidth(theme.fg("muted", "─".repeat(width)), width);
 
-  const description = (() => {
-    if (state.qrPhase === "execute") {
-      return state.qrMode === "fix"
-        ? "Fix-mode architect applies QR feedback."
-        : "Initial execution to gather plan context.";
-    }
-    if (state.qrPhase === "decompose") {
-      return state.qrIteration && state.qrIteration > 1
-        ? "Re-decomposing updates into review items."
-        : "Deriving QR checklist from the current plan.";
-    }
-    if (state.qrPhase === "verify") {
-      return "Massively parallel reviewers scoring QR items.";
-    }
-    if (state.qrPhase === "done") {
-      return "Quality review loop complete.";
-    }
-    return "";
-  })();
-
-  const body: string[] = [];
-  body.push(stageLine);
-  if (description) {
-    body.push(clampToWidth(theme.fg("muted", description), innerWidth, "…"));
-  }
-
-  return renderBox(headerLeft, headerRight, body, width, theme, BORDER_SUBTLE);
+  return [header, rail, counters, divider];
 }
 
 interface DetailSections {
@@ -327,6 +447,7 @@ function buildDetailSections(state: WidgetState, theme: Theme, width: number): D
 
   const active = activePhase(state);
   const stepTitle = state.step || active?.detail || active?.label || "Awaiting step";
+  core.push(clampToWidth(theme.fg("dim", "Current step"), width));
   core.push(clampToWidth(theme.bold(theme.fg("accent", stepTitle)), width, "…"));
 
   if (state.activity) {
@@ -336,22 +457,16 @@ function buildDetailSections(state: WidgetState, theme: Theme, width: number): D
     }
   }
 
-  const qrWidget = renderQRStatusWidget(state, theme, width);
-  if (qrWidget.length > 0) {
+  const qrSection = renderQRStatusSection(state, theme, width);
+  if (qrSection.length > 0) {
     if (core.length > 0 && core[core.length - 1].trim() !== "") {
       core.push(blank);
     }
-    core.push(...qrWidget.map((line) => clampToWidth(line, width)));
+    core.push(...qrSection.map((line) => clampToWidth(line, width)));
   }
 
   if (active) {
-    footer.push(...wrapTextWithAnsi(theme.fg("dim", `Phase ${state.activeIndex + 1}/${state.phases.length}`), width).map((line) => clampToWidth(line, width, "…")));
     footer.push(...wrapTextWithAnsi(theme.fg("dim", `Plan · ${state.planId}`), width).map((line) => clampToWidth(line, width, "…")));
-  }
-
-  const summary = upcomingSummary(state);
-  if (summary) {
-    footer.push(...wrapTextWithAnsi(theme.fg("muted", summary), width).map((line) => clampToWidth(line, width, "…")));
   }
 
   return { core, footer };
@@ -403,9 +518,7 @@ function renderBox(
 
 function renderPlanningCard(state: WidgetState, theme: Theme, width: number): string[] {
   const elapsed = theme.fg("dim", formatElapsed(Date.now() - state.startedAt));
-  const innerWidth = Math.max(0, width - 2);
-  const indentWidth = visibleWidth(BODY_INDENT);
-  const contentWidth = Math.max(0, innerWidth - indentWidth);
+  const { innerWidth, contentWidth, timelineWidth, detailWidth } = planningColumns(width);
 
   if (innerWidth < 60 || contentWidth < 40) {
     const fallbackContent: string[] = [
@@ -417,6 +530,10 @@ function renderPlanningCard(state: WidgetState, theme: Theme, width: number): st
     ];
     const detail = formatDetail(state, theme, contentWidth);
     if (detail) fallbackContent.push(detail);
+    const qrCompact = formatQRCompact(state, theme, contentWidth);
+    if (qrCompact.length > 0) {
+      fallbackContent.push(...qrCompact);
+    }
     fallbackContent.push("");
 
     const body = indentLines(fallbackContent, innerWidth);
@@ -430,8 +547,6 @@ function renderPlanningCard(state: WidgetState, theme: Theme, width: number): st
   }
 
   const chipsLine = renderPhaseChips(state, theme, contentWidth);
-  const timelineWidth = Math.min(TIMELINE_MAX_WIDTH, Math.max(TIMELINE_MIN_WIDTH, Math.floor(contentWidth * 0.3)));
-  const detailWidth = Math.max(14, contentWidth - timelineWidth - 4);
 
   const timelineLines = renderTimelineLines(state, theme, timelineWidth);
   const detailSections = buildDetailSections(state, theme, detailWidth);
@@ -442,7 +557,7 @@ function renderPlanningCard(state: WidgetState, theme: Theme, width: number): st
   for (let i = 0; i < maxLines; i++) {
     const left = timelineLines[i] ?? "";
     const right = detailLines[i] ?? "";
-    const composed = `${clampToWidth(left, timelineWidth)}    ${clampToWidth(right, detailWidth)}`;
+    const composed = `${clampToWidth(left, timelineWidth)}${" ".repeat(COLUMN_GAP)}${clampToWidth(right, detailWidth)}`;
     combined.push(clampToWidth(composed, contentWidth));
   }
 
@@ -458,7 +573,7 @@ function renderPlanningCard(state: WidgetState, theme: Theme, width: number): st
   );
 
   return renderBox(
-    `${BODY_INDENT}${theme.bold(theme.fg("accent", "Planning Workspace"))}`,
+    `${BODY_INDENT}${theme.bold(theme.fg("accent", "Planning"))}`,
     elapsed,
     body,
     width,
@@ -466,25 +581,99 @@ function renderPlanningCard(state: WidgetState, theme: Theme, width: number): st
   );
 }
 
-function renderLogLine(entry: LogLine, theme: Theme): string {
-  const parts: string[] = [];
-  if (entry.prefix) parts.push(theme.fg("dim", entry.prefix));
-  if (entry.highlight) parts.push(theme.bold(entry.highlight));
-  if (entry.meta) parts.push(theme.fg("dim", entry.meta));
-  return `${theme.fg("dim", "•")} ${parts.join(" ")}`;
+function wrapRightColumn(entry: LogLine, width: number): string[] {
+  const summary = entry.summary.trim();
+  if (!summary) return [""];
+
+  if (!entry.highValue) {
+    return [clampToWidth(summary, width, "…")];
+  }
+
+  const wrapped = wrapTextWithAnsi(summary, width).map((line) => clampToWidth(line, width, "…"));
+  if (wrapped.length <= 1) return wrapped;
+  if (wrapped.length === 2) return wrapped;
+
+  const tail = wrapped.slice(1).join(" ").replace(/\s+/gu, " ").trim();
+  return [wrapped[0], clampToWidth(truncateToWidth(tail, width, "…", false), width)];
 }
 
-function renderLogCard(state: WidgetState, theme: Theme, width: number): string[] {
+function renderLogEntry(entry: LogLine, theme: Theme, leftWidth: number, rightWidth: number, gap: number): string[] {
+  const rightLines = wrapRightColumn(entry, rightWidth);
+  const rows: string[] = [];
+
+  rightLines.forEach((line, index) => {
+    const left = index === 0
+      ? theme.bold(theme.fg("accent", entry.tool))
+      : "";
+    const composed = `${clampToWidth(left, leftWidth)}${" ".repeat(gap)}${clampToWidth(theme.fg("muted", line), rightWidth)}`;
+    rows.push(composed);
+  });
+
+  return rows;
+}
+
+interface LogColumns {
+  left: number;
+  right: number;
+  gap: number;
+}
+
+function logColumnWidths(availableWidth: number, entries: readonly LogLine[], gap: number): LogColumns {
+  const longestTool = entries.reduce((max, entry) => Math.max(max, visibleWidth(entry.tool)), 0);
+  const preferredLeft = Math.max(16, Math.min(38, longestTool + 2));
+
+  const minRight = availableWidth < 64 ? 18 : 24;
+  let left = Math.min(preferredLeft, Math.floor(availableWidth * 0.42));
+  left = Math.min(left, Math.max(14, availableWidth - minRight - gap));
+  left = Math.max(14, left);
+
+  const right = Math.max(8, availableWidth - left - gap);
+  return { left, right, gap };
+}
+
+function renderLogCard(state: WidgetState, theme: Theme, width: number, forcedColumns?: LogColumns): string[] {
   const innerWidth = Math.max(0, width - 2);
+  const availableWidth = Math.max(0, innerWidth - visibleWidth(BODY_INDENT));
   const hasEntries = state.logLines.length > 0;
-  const entries = hasEntries ? state.logLines.slice(-LOG_LINES) : [];
+  const entries = hasEntries ? state.logLines.slice(-(LOG_LINES * 2)) : [];
 
-  const formatted: string[] = hasEntries
-    ? entries.map((entry) => renderLogLine(entry, theme))
-    : [theme.fg("dim", `• ${LOG_PLACEHOLDER}`)];
-  while (formatted.length < LOG_LINES) formatted.push("");
+  const columns = forcedColumns ?? logColumnWidths(availableWidth, entries, 2);
+  const leftWidth = Math.max(8, Math.min(columns.left, Math.max(8, availableWidth - columns.gap - 8)));
+  const rightWidth = Math.max(8, availableWidth - leftWidth - columns.gap);
 
-  const body = indentLines(formatted, innerWidth);
+  const visualRows: string[] = [];
+  if (entries.length > 0) {
+    const rendered = entries.map((entry) => renderLogEntry(entry, theme, leftWidth, rightWidth, columns.gap));
+    const selected: string[][] = [];
+    let remaining = LOG_LINES;
+
+    for (let i = rendered.length - 1; i >= 0; i--) {
+      if (remaining <= 0) break;
+      const rowLines = rendered[i];
+      if (rowLines.length <= remaining) {
+        selected.push(rowLines);
+        remaining -= rowLines.length;
+      } else {
+        selected.push(rowLines.slice(0, remaining));
+        remaining = 0;
+      }
+    }
+
+    selected.reverse();
+    for (const lines of selected) {
+      visualRows.push(...lines);
+    }
+  }
+
+  if (visualRows.length === 0) {
+    visualRows.push(clampToWidth(theme.fg("muted", LOG_PLACEHOLDER), innerWidth));
+  }
+
+  while (visualRows.length < LOG_LINES) {
+    visualRows.push("");
+  }
+
+  const body = indentLines(visualRows, innerWidth);
   return renderBox(
     `${BODY_INDENT}${theme.bold(theme.fg("accent", "Latest log"))}`,
     "",
@@ -513,6 +702,17 @@ function formatDetail(state: WidgetState, theme: Theme, width: number): string {
   return clampToWidth(detail, width, "…");
 }
 
+function formatQRCompact(state: WidgetState, theme: Theme, width: number): string[] {
+  if (!shouldShowQR(state)) return [];
+
+  const tier = qrTier(width);
+  const budget = Math.min(width, QR_META_MAX_CHARS);
+  const meta = qrMetaText(state, tier, budget);
+  const line1 = clampToWidth(`${theme.fg("muted", "QR")} ${theme.fg("muted", "|")} ${theme.fg("dim", meta)}`, width, "…");
+  const line2 = renderQRCounterLine(state, theme, tier, width, budget);
+  return [line1, line2];
+}
+
 function formatStepLine(state: WidgetState, theme: Theme): string {
   const total = state.phases.length;
   const active = activePhase(state);
@@ -525,6 +725,46 @@ function formatStepLine(state: WidgetState, theme: Theme): string {
 }
 
 // Pure render: (state, theme, termWidth) -> lines. No side effects.
+function stripBoxFrame(lines: string[]): string[] {
+  if (lines.length <= 2) return [];
+  return lines.slice(1, -1).map((line) => (line.length >= 2 ? line.slice(1, -1) : ""));
+}
+
+function renderIntegratedWorkspaceCard(state: WidgetState, theme: Theme, width: number): string[] {
+  const innerWidth = Math.max(0, width - 2);
+  const elapsed = theme.fg("dim", formatElapsed(Date.now() - state.startedAt));
+  const rightInset = " ".repeat(visibleWidth(BODY_INDENT));
+
+  const { innerWidth: planningInnerWidth, contentWidth, timelineWidth, detailWidth } = planningColumns(width);
+  const alignedColumns: LogColumns | undefined = planningInnerWidth >= 60 && contentWidth >= 40
+    ? { left: timelineWidth, right: detailWidth, gap: COLUMN_GAP }
+    : undefined;
+
+  const planningInner = stripBoxFrame(renderPlanningCard(state, theme, width));
+  const logInner = stripBoxFrame(renderLogCard(state, theme, width, alignedColumns));
+
+  const divider = clampToWidth(theme.fg("muted", "─".repeat(innerWidth)), innerWidth);
+  const spacer = clampToWidth("", innerWidth);
+  const logTitle = clampToWidth(`${BODY_INDENT}${theme.bold(theme.fg("accent", "Latest log"))}`, innerWidth, "…");
+
+  const body = [
+    ...planningInner,
+    divider,
+    spacer,
+    logTitle,
+    ...logInner,
+  ];
+
+  return renderBox(
+    `${BODY_INDENT}${theme.bold(theme.fg("accent", "Planning"))}`,
+    `${elapsed}${rightInset}`,
+    body,
+    width,
+    theme,
+  );
+}
+
+// Pure render: (state, theme, termWidth) -> lines. No side effects.
 function render(state: WidgetState, theme: Theme, termWidth: number): string[] {
   const c = (s: string) => canvasLine(s, termWidth, theme);
   const cw = contentWidth(termWidth);
@@ -532,11 +772,7 @@ function render(state: WidgetState, theme: Theme, termWidth: number): string[] {
   const margin = " ".repeat(CARD_MARGIN);
 
   lines.push(c(""));
-  for (const line of renderPlanningCard(state, theme, cw - CARD_MARGIN)) {
-    lines.push(c(margin + line));
-  }
-  lines.push(c(margin));
-  for (const line of renderLogCard(state, theme, cw - CARD_MARGIN)) {
+  for (const line of renderIntegratedWorkspaceCard(state, theme, cw - CARD_MARGIN)) {
     lines.push(c(margin + line));
   }
   lines.push(c(""));
@@ -567,6 +803,11 @@ export class WidgetController {
       qrIterationsMax: null,
       qrMode: null,
       qrPhase: "idle",
+      qrDone: null,
+      qrTotal: null,
+      qrPass: null,
+      qrFail: null,
+      qrTodo: null,
     };
     this.state.phases[0].status = "running";
 
@@ -613,6 +854,21 @@ export class WidgetController {
     }
     if (patch.qrPhase !== undefined) {
       this.state.qrPhase = patch.qrPhase;
+    }
+    if (patch.qrDone !== undefined) {
+      this.state.qrDone = patch.qrDone;
+    }
+    if (patch.qrTotal !== undefined) {
+      this.state.qrTotal = patch.qrTotal;
+    }
+    if (patch.qrPass !== undefined) {
+      this.state.qrPass = patch.qrPass;
+    }
+    if (patch.qrFail !== undefined) {
+      this.state.qrFail = patch.qrFail;
+    }
+    if (patch.qrTodo !== undefined) {
+      this.state.qrTodo = patch.qrTodo;
     }
     this.doRender();
   }
