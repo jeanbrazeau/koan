@@ -3,13 +3,19 @@
 // via CLI flags). All tools register unconditionally at init; phases restrict
 // access via tool_call blocking at runtime.
 
-import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import { createSession } from "../src/planner/session.js";
 import { detectSubagentMode, dispatchPhase } from "../src/planner/phases/dispatch.js";
 import { registerAllTools, createDispatch, createPlanRef } from "../src/planner/tools/index.js";
 import { createLogger } from "../src/utils/logger.js";
 import { EventLog, extractToolEvent } from "../src/planner/lib/audit.js";
+
+function currentModelId(ctx: ExtensionContext): string | null {
+  const model = ctx.model;
+  if (!model) return null;
+  return `${model.provider}/${model.id}`;
+}
 
 export default function koan(pi: ExtensionAPI): void {
   const log = createLogger("Koan");
@@ -61,7 +67,7 @@ export default function koan(pi: ExtensionAPI): void {
   // Subagent detection runs at before_agent_start (flags
   // are unavailable during init).
   let dispatched = false;
-  pi.on("before_agent_start", async () => {
+  pi.on("before_agent_start", async (_event, ctx) => {
     if (dispatched) return;
     dispatched = true;
     const config = detectSubagentMode(pi);
@@ -72,9 +78,11 @@ export default function koan(pi: ExtensionAPI): void {
       }
 
       // EventLog exists only in subagent mode. Parent mode has no audit log.
+      // Model identity is captured by the subagent itself and persisted in
+      // state.json for parent widget rendering.
       let eventLog: EventLog | undefined;
       if (config.subagentDir) {
-        eventLog = new EventLog(config.subagentDir, config.role, config.phase);
+        eventLog = new EventLog(config.subagentDir, config.role, config.phase, currentModelId(ctx));
         await eventLog.open();
 
         // Capture all tool results for the audit trail. Graduated detail:

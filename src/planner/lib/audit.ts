@@ -51,6 +51,7 @@ export interface PhaseStartEvent extends EventBase {
   kind: "phase_start";
   phase: string;
   role: string;
+  model?: string | null;
   totalSteps: number;
 }
 
@@ -84,6 +85,7 @@ export type AuditEvent =
 export interface Projection {
   role: string;
   phase: string;
+  model: string | null;
   status: "running" | "completed" | "failed";
   step: number;
   totalSteps: number;
@@ -142,6 +144,7 @@ export function fold(s: Projection, e: AuditEvent): Projection {
         ...base,
         role: e.role,
         phase: e.phase,
+        model: e.model ?? s.model,
         status: "running",
         step: 0,
         totalSteps: e.totalSteps,
@@ -233,13 +236,14 @@ export class EventLog {
   // writeState() calls race on the shared tmp file (ENOENT on rename).
   private pending: Promise<void> = Promise.resolve();
 
-  constructor(dir: string, role: string, phase: string) {
+  constructor(dir: string, role: string, phase: string, model: string | null = null) {
     this.eventsPath = path.join(dir, "events.jsonl");
     this.statePath = path.join(dir, "state.json");
     this.stateTmpPath = path.join(dir, "state.tmp.json");
     this.projection = {
       role,
       phase,
+      model,
       status: "running",
       step: 0,
       totalSteps: 0,
@@ -284,6 +288,7 @@ export class EventLog {
       kind: "phase_start",
       phase: this.projection.phase,
       role: this.projection.role,
+      model: this.projection.model,
       totalSteps,
     } as Omit<PhaseStartEvent, "ts" | "seq">);
   }

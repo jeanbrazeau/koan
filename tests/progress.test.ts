@@ -17,7 +17,7 @@ describe("EventLog", () => {
   it("persists events and projection through step transitions", async () => {
     const dir = await createTempDir("koan-audit-");
 
-    const log = new EventLog(dir, "architect", "plan-design");
+    const log = new EventLog(dir, "architect", "plan-design", "anthropic/claude-sonnet-4-20250514");
     await log.open();
 
     await log.emitPhaseStart(6);
@@ -30,6 +30,7 @@ describe("EventLog", () => {
     assert.ok(proj, "projection should be readable");
     assert.equal(proj.role, "architect");
     assert.equal(proj.phase, "plan-design");
+    assert.equal(proj.model, "anthropic/claude-sonnet-4-20250514");
     assert.equal(proj.status, "completed");
     assert.equal(proj.step, 2);
     assert.equal(proj.totalSteps, 6);
@@ -155,6 +156,7 @@ describe("fold", () => {
   const initial: Projection = {
     role: "",
     phase: "",
+    model: null,
     status: "running",
     step: 0,
     totalSteps: 0,
@@ -170,6 +172,7 @@ describe("fold", () => {
       kind: "phase_start",
       phase: "plan-design",
       role: "architect",
+      model: "openai/gpt-5-codex",
       totalSteps: 6,
       ts: "2026-01-01T00:00:00Z",
       seq: 0,
@@ -177,6 +180,7 @@ describe("fold", () => {
     const s = fold(initial, e);
     assert.equal(s.role, "architect");
     assert.equal(s.phase, "plan-design");
+    assert.equal(s.model, "openai/gpt-5-codex");
     assert.equal(s.totalSteps, 6);
     assert.equal(s.eventCount, 1);
   });
