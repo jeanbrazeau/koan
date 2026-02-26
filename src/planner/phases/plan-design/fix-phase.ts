@@ -1,16 +1,20 @@
-// Plan-design fix phase -- 3-step targeted repair for QR failures.
+// Plan-design fix phase -- dynamic N-step targeted repair for QR failures.
+//
+// totalSteps = 2 + failures.length. Step 1 reads all failures (read-only).
+// Steps 2..N+1 each fix one QR item (mutations enabled). Step N+2 reviews
+// all fixes (read-only). The step counter IS the item iterator:
+// failures[step - 2] gives the current item.
 //
 // Separate class from PlanDesignPhase because the workflows diverge:
 // initial = 6 steps of exploration then writing (mutations at step 6);
-// fix = 3 steps of reading failures then applying targeted fixes
-// (mutations at step 2). Conditional branching at every method
-// boundary produces worse code than two focused classes.
+// fix = dynamic N steps iterating one QR item per step (mutations in
+// per-item range only). Conditional branching at every method boundary
+// produces worse code than two focused classes.
 //
-// The fix architect receives QR failures as XML in step 1. It reads
-// the current plan state via getter tools, applies minimal mutations
-// to address the specific findings, then validates the result. The
-// session orchestrator decides whether to re-run QR -- the fix phase
-// does not know about iterations or severity escalation.
+// The fix architect receives QR failures as XML in step 1. Per-item steps
+// present a single failure with mutation tools enabled. The session
+// orchestrator decides whether to re-run QR -- the fix phase does not
+// know about iterations or severity escalation.
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
@@ -20,11 +24,10 @@ import {
   buildPlanDesignSystemPrompt,
 } from "./prompts.js";
 import {
-  FIX_STEP_NAMES,
+  fixStepName,
   buildFixSystemPrompt,
   fixStepGuidance,
   formatFailuresXml,
-  type FixStep,
 } from "./fix-prompts.js";
 import { formatStep } from "../../lib/step.js";
 import type { QRItem } from "../../qr/types.js";
@@ -35,17 +38,15 @@ import { checkPermission, PLAN_MUTATION_TOOLS } from "../../lib/permissions.js";
 
 interface FixPhaseState {
   active: boolean;
-  step: FixStep;
+  step: number;
   step1Prompt: string | null;
   systemPrompt: string | null;
 }
 
-const TOTAL_STEPS = 3;
-
 export class PlanDesignFixPhase {
   private readonly pi: ExtensionAPI;
   private readonly planDir: string;
-  private readonly failures: QRItem[];
+  private readonly failures: ReadonlyArray<QRItem>;
   private readonly log: Logger;
   private readonly state: FixPhaseState;
   private readonly eventLog: EventLog | undefined;
@@ -78,6 +79,13 @@ export class PlanDesignFixPhase {
     this.registerHandlers();
   }
 
+  // Computed from failure count. Step 1 (understand) + N per-item steps
+  // + 1 final review = 2 + N. Single source of truth for all step-range
+  // checks in this class.
+  private get totalSteps(): number {
+    return 2 + this.failures.length;
+  }
+
   async begin(): Promise<void> {
     let basePrompt: string;
     try {
@@ -89,11 +97,17 @@ export class PlanDesignFixPhase {
     }
 
     const failuresXml = formatFailuresXml(this.failures);
+    // Local copy for consistent reads across this method. The getter is stable
+    // (this.failures is readonly) but a local communicates "one value, many uses".
+    const totalSteps = this.totalSteps;
     this.state.systemPrompt = buildFixSystemPrompt(
       buildPlanDesignSystemPrompt(basePrompt),
       this.failures.length,
+      totalSteps,
     );
-    this.state.step1Prompt = formatStep(fixStepGuidance(1, failuresXml));
+    this.state.step1Prompt = formatStep(
+      fixStepGuidance(1, totalSteps, { allFailuresXml: failuresXml }),
+    );
     this.state.active = true;
     this.state.step = 1;
 
@@ -101,10 +115,15 @@ export class PlanDesignFixPhase {
 
     this.log("Starting plan-design fix workflow", {
       step: 1,
+      totalSteps,
       failureCount: this.failures.length,
     });
-    await this.eventLog?.emitPhaseStart(TOTAL_STEPS);
-    await this.eventLog?.emitStepTransition(1, FIX_STEP_NAMES[1], TOTAL_STEPS);
+    await this.eventLog?.emitPhaseStart(totalSteps);
+    await this.eventLog?.emitStepTransition(
+      1,
+      fixStepName(1, totalSteps),
+      totalSteps,
+    );
   }
 
   private registerHandlers(): void {
@@ -137,14 +156,17 @@ export class PlanDesignFixPhase {
         return { block: true, reason: perm.reason };
       }
 
-      // Step gate: mutation tools are blocked before step 2. Blocklist
-      // (not whitelist) so read tools and future pi-native tools pass
-      // through after checkPermission approves them.
+      // Step gate: mutation tools allowed ONLY in per-item steps (step 2
+      // through totalSteps-1). Both step 1 (understand) and the final step
+      // (review) are read-only. The upper bound prevents accidental mutations
+      // during review that would bypass QR re-verification.
       const step = this.state.step;
-      if (step < 2 && PLAN_MUTATION_TOOLS.has(event.toolName)) {
+      const total = this.totalSteps;
+      const inItemRange = step >= 2 && step < total;
+      if (!inItemRange && PLAN_MUTATION_TOOLS.has(event.toolName)) {
         return {
           block: true,
-          reason: `${event.toolName} available from step 2 (current: ${step})`,
+          reason: `${event.toolName} available in steps 2-${total - 1} (current: ${step})`,
         };
       }
 
@@ -154,8 +176,10 @@ export class PlanDesignFixPhase {
 
   private async handleStepComplete(): Promise<{ ok: boolean; prompt?: string; error?: string }> {
     const prev = this.state.step;
+    const total = this.totalSteps;
 
-    if (prev === 3) {
+    // Terminal: final step completed -> validate plan and end phase.
+    if (prev === total) {
       const result = await this.handleFinalize();
       if (!result.ok) {
         await this.eventLog?.emitPhaseEnd("failed", result.errors?.join("; "));
@@ -168,12 +192,21 @@ export class PlanDesignFixPhase {
       return { ok: true, prompt: "Fix phase validation passed. Workflow complete." };
     }
 
-    this.state.step = (prev + 1) as FixStep;
-    const nextName = FIX_STEP_NAMES[this.state.step];
-    const prompt = formatStep(fixStepGuidance(this.state.step));
+    // Advance to next step. Step always increments -- no cursor, no hold.
+    const next = prev + 1;
+    this.state.step = next;
 
-    this.log("Fix step complete, advancing", { from: prev, to: this.state.step, name: nextName });
-    await this.eventLog?.emitStepTransition(this.state.step, nextName, TOTAL_STEPS);
+    // Per-item steps (2 <= next < total) pass the individual failure item
+    // so fixStepGuidance generates item-specific prompts. Only the final
+    // step (next === total) does not carry an item.
+    const item = (next >= 2 && next < total)
+      ? this.failures[next - 2]
+      : undefined;
+    const name = fixStepName(next, total, item);
+    const prompt = formatStep(fixStepGuidance(next, total, { item }));
+
+    this.log("Fix step complete, advancing", { from: prev, to: next, name });
+    await this.eventLog?.emitStepTransition(next, name, total);
 
     return { ok: true, prompt };
   }
