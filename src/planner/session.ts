@@ -224,6 +224,23 @@ async function runQRBlock(
   log: Logger,
   widget: WidgetController | null,
 ): Promise<QRBlockResult> {
+  const qrPath = path.join(planDir, "qr-plan-design.json");
+  const keyOf = (scope: string, check: string): string => `${scope}\u0000${check}`;
+
+  // Carry forward confirmed PASS concerns across re-decompose runs.
+  const previousPassKeys = new Set<string>();
+  try {
+    const raw = await fs.readFile(qrPath, "utf8");
+    const prev = JSON.parse(raw) as QRFile;
+    for (const item of prev.items) {
+      if (item.status === "PASS") {
+        previousPassKeys.add(keyOf(item.scope, item.check));
+      }
+    }
+  } catch {
+    // No previous QR file yet.
+  }
+
   // 1. Spawn decomposer subagent
   state.phase = "qr-decompose-running";
   widget?.update({
@@ -271,7 +288,6 @@ async function runQRBlock(
   }
 
   // 2. Read QR items
-  const qrPath = path.join(planDir, "qr-plan-design.json");
   let qr: QRFile;
   try {
     const raw = await fs.readFile(qrPath, "utf8");
@@ -289,62 +305,130 @@ async function runQRBlock(
     return { summary: "QR decompose completed but produced no items.", passed: false };
   }
 
-  const itemIds = qr.items.map((i) => i.id);
-  const initialPass = qr.items.filter((i) => i.status === "PASS").length;
+  // Re-apply previously confirmed PASS concerns if re-decompose reset them.
+  const carriedPasses = qr.items.filter((item) =>
+    item.status !== "PASS" && previousPassKeys.has(keyOf(item.scope, item.check))).length;
+  if (carriedPasses > 0) {
+    qr = {
+      ...qr,
+      items: qr.items.map((item) =>
+        previousPassKeys.has(keyOf(item.scope, item.check))
+          ? { ...item, status: "PASS", finding: null }
+          : item),
+    };
+    try {
+      const tmpPath = `${qrPath}.tmp`;
+      await fs.writeFile(tmpPath, `${JSON.stringify(qr, null, 2)}\n`, "utf8");
+      await fs.rename(tmpPath, qrPath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log("Failed to persist carried PASS statuses", { error: message });
+      return { summary: "QR verify aborted: failed to preserve PASS statuses.", passed: false };
+    }
+  }
+
+  // Preserve prior PASS verdicts, but force all FAIL items back to TODO for
+  // re-verification. This keeps confirmed concerns stable while requiring
+  // explicit re-check of previously failing concerns.
+  const resetFailures = qr.items.filter((i) => i.status === "FAIL").length;
+  if (resetFailures > 0) {
+    qr = {
+      ...qr,
+      items: qr.items.map((item) =>
+        item.status === "FAIL"
+          ? { ...item, status: "TODO", finding: null }
+          : item),
+    };
+    try {
+      const tmpPath = `${qrPath}.tmp`;
+      await fs.writeFile(tmpPath, `${JSON.stringify(qr, null, 2)}\n`, "utf8");
+      await fs.rename(tmpPath, qrPath);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      log("Failed to persist QR FAIL->TODO reset", { error: message });
+      return { summary: "QR verify aborted: failed to prepare QR item states.", passed: false };
+    }
+  }
+
+  const verifyIds = qr.items.filter((i) => i.status === "TODO").map((i) => i.id);
+  const totalItems = qr.items.length;
+  const preservedPass = qr.items.filter((i) => i.status === "PASS").length;
   const initialFail = qr.items.filter((i) => i.status === "FAIL").length;
   const initialTodo = qr.items.filter((i) => i.status === "TODO").length;
-  log("QR decompose complete", { itemCount: itemIds.length });
+
+  log("QR decompose complete", {
+    itemCount: totalItems,
+    verifyCount: verifyIds.length,
+    preservedPass,
+    carriedPasses,
+    resetFailures,
+  });
+
   widget?.update({
-    step: `qr-verify: 0/${itemIds.length}`,
+    step: `qr-verify: 0/${verifyIds.length}`,
     activity: "",
-    qrTotal: itemIds.length,
-    qrDone: 0,
-    qrPass: initialPass,
+    qrTotal: totalItems,
+    qrDone: preservedPass,
+    qrPass: preservedPass,
     qrFail: initialFail,
     qrTodo: initialTodo,
   });
 
-  // 3. Spawn reviewer pool
+  // 3. Spawn reviewer pool (TODO-only)
   state.phase = "qr-verify-running";
   widget?.update({ qrPhase: "verify" });
 
   let verifyDone = 0;
-  const verifyStatsPoll = setInterval(async () => {
-    try {
-      const raw = await fs.readFile(qrPath, "utf8");
-      const current = JSON.parse(raw) as QRFile;
-      const pass = current.items.filter((i) => i.status === "PASS").length;
-      const fail = current.items.filter((i) => i.status === "FAIL").length;
-      const todo = current.items.filter((i) => i.status === "TODO").length;
-      widget?.update({ qrPass: pass, qrFail: fail, qrTodo: todo, qrDone: verifyDone, qrTotal: current.items.length });
-    } catch {
-      // Ignore transient read races while reviewers write.
-    }
-  }, 2000);
+  let failedReviewers: string[] = [];
 
-  let result: Awaited<ReturnType<typeof pool>>;
-  try {
-    result = await pool(
-      itemIds,
-      QR_POOL_CONCURRENCY,
-      async (itemId) => {
-        const reviewerDir = await createSubagentDir(planDir, `qr-reviewer-${itemId}`);
-        return spawnReviewer({
-          planDir,
-          subagentDir: reviewerDir,
-          cwd,
-          extensionPath,
-          itemId,
-          log,
+  if (verifyIds.length > 0) {
+    const verifyStatsPoll = setInterval(async () => {
+      try {
+        const raw = await fs.readFile(qrPath, "utf8");
+        const current = JSON.parse(raw) as QRFile;
+        const pass = current.items.filter((i) => i.status === "PASS").length;
+        const fail = current.items.filter((i) => i.status === "FAIL").length;
+        const todo = current.items.filter((i) => i.status === "TODO").length;
+        widget?.update({
+          qrPass: pass,
+          qrFail: fail,
+          qrTodo: todo,
+          qrDone: preservedPass + verifyDone,
+          qrTotal: current.items.length,
         });
-      },
-      (done, total) => {
-        verifyDone = done;
-        widget?.update({ step: `qr-verify: ${done}/${total}`, qrDone: done, qrTotal: total });
-      },
-    );
-  } finally {
-    clearInterval(verifyStatsPoll);
+      } catch {
+        // Ignore transient read races while reviewers write.
+      }
+    }, 2000);
+
+    try {
+      const result = await pool(
+        verifyIds,
+        QR_POOL_CONCURRENCY,
+        async (itemId) => {
+          const reviewerDir = await createSubagentDir(planDir, `qr-reviewer-${itemId}`);
+          return spawnReviewer({
+            planDir,
+            subagentDir: reviewerDir,
+            cwd,
+            extensionPath,
+            itemId,
+            log,
+          });
+        },
+        (done, total) => {
+          verifyDone = done;
+          widget?.update({
+            step: `qr-verify: ${done}/${total}`,
+            qrDone: preservedPass + done,
+            qrTotal: totalItems,
+          });
+        },
+      );
+      failedReviewers = result.failed;
+    } finally {
+      clearInterval(verifyStatsPoll);
+    }
   }
 
   // 4. Read final results
@@ -360,16 +444,16 @@ async function runQRBlock(
   const pass = finalQR.items.filter((i) => i.status === "PASS").length;
   const fail = finalQR.items.filter((i) => i.status === "FAIL").length;
   const todo = finalQR.items.filter((i) => i.status === "TODO").length;
-  const summary = `QR complete: ${pass} PASS, ${fail} FAIL, ${todo} TODO (${result.failed.length} reviewers failed).`;
+  const summary = `QR complete: ${pass} PASS, ${fail} FAIL, ${todo} TODO (${failedReviewers.length} reviewers failed).`;
 
-  log("QR block complete", { pass, fail, todo, failedReviewers: result.failed });
+  log("QR block complete", { pass, fail, todo, failedReviewers });
 
-  const passed = fail === 0 && result.failed.length === 0;
+  const passed = fail === 0 && failedReviewers.length === 0;
   widget?.update({
     step: summary,
     activity: "",
-    qrDone: itemIds.length,
-    qrTotal: itemIds.length,
+    qrDone: pass + fail,
+    qrTotal: totalItems,
     qrPass: pass,
     qrFail: fail,
     qrTodo: todo,
@@ -383,12 +467,14 @@ async function runQRBlock(
 //
 // Re-decomposes on each iteration rather than re-verifying only. The fix
 // architect may change plan structure (add milestones, split intents, remove
-// decisions); old QR items referencing stale scopes produce incorrect verdicts.
-// Fresh decomposition generates items matched to the current plan state.
+// decisions); old QR items referencing stale scopes can produce stale verdicts.
 //
-// The session's for-loop counter is the iteration source of truth. Each
-// re-decompose writes a fresh qr-plan-design.json with iteration=1 and
-// all-TODO items. The loop counter survives those resets.
+// Verification semantics per iteration:
+// - PASS items are preserved (confirmed concerns stay confirmed).
+// - FAIL items are reset to TODO (must be re-verified after fixes).
+// - TODO items are verified.
+//
+// The session's for-loop counter remains the iteration source of truth.
 async function runPlanDesignWithQR(
   planDir: string,
   cwd: string,
