@@ -13,12 +13,12 @@ import { createPlanInfo } from "../utils/plan.js";
 import { spawnArchitect, spawnArchitectFix, spawnQRDecomposer, spawnReviewer } from "./subagent.js";
 import { createLogger, setLogDir, type Logger } from "../utils/logger.js";
 import { createSubagentDir } from "../utils/progress.js";
-import { readProjection, readRecentLogs } from "./lib/audit.js";
+import { readProjection, readRecentLogs, type Projection } from "./lib/audit.js";
 import type { WorkflowDispatch, PlanRef } from "./lib/dispatch.js";
 import { pool } from "./lib/pool.js";
 import type { QRFile } from "./qr/types.js";
 import { MAX_FIX_ITERATIONS, qrPassesAtIteration } from "./qr/severity.js";
-import { WidgetController } from "./ui/widget.js";
+import { WidgetController, type WidgetUpdate } from "./ui/widget.js";
 
 // -- Types --
 
@@ -31,6 +31,28 @@ interface Session {
 interface QRBlockResult {
   summary: string;
   passed: boolean;
+}
+
+function singleSubagentStart(role: string): WidgetUpdate {
+  return {
+    subagentRole: role,
+    subagentParallelCount: 1,
+    subagentQueued: 0,
+    subagentActive: 1,
+    subagentDone: 0,
+  };
+}
+
+function singleSubagentFromProjection(p: Projection): WidgetUpdate {
+  const running = p.status === "running";
+  return {
+    subagentRole: p.role,
+    subagentModel: p.model,
+    subagentParallelCount: 1,
+    subagentQueued: 0,
+    subagentActive: running ? 1 : 0,
+    subagentDone: running ? 0 : 1,
+  };
 }
 
 // -- Session --
@@ -71,6 +93,7 @@ export function createSession(pi: ExtensionAPI, dispatch: WorkflowDispatch, plan
         qrPass: null,
         qrFail: null,
         qrTodo: null,
+        ...singleSubagentStart("architect"),
       });
       log("Spawning architect after context capture", { planDir, subagentDir });
 
@@ -86,6 +109,7 @@ export function createSession(pi: ExtensionAPI, dispatch: WorkflowDispatch, plan
             step: s.stepName,
             activity: s.lastAction ?? "",
             logLines: logs,
+            ...singleSubagentFromProjection(s),
           });
         }
       }, 2000);
@@ -108,6 +132,8 @@ export function createSession(pi: ExtensionAPI, dispatch: WorkflowDispatch, plan
           phaseStatus: { index: 1, status: "failed" },
           step: "architect failed",
           activity: "",
+          subagentActive: 0,
+          subagentDone: 1,
         });
         return `Context captured. Architect subagent failed (exit ${result.exitCode}).\n\nStderr:\n${detail}`;
       }
@@ -127,6 +153,8 @@ export function createSession(pi: ExtensionAPI, dispatch: WorkflowDispatch, plan
           phaseStatus: { index: 1, status: "failed" },
           step: "no plan produced",
           activity: "",
+          subagentActive: 0,
+          subagentDone: 1,
         });
         return "Context captured. Architect completed but produced no plan.";
       }
@@ -146,6 +174,8 @@ export function createSession(pi: ExtensionAPI, dispatch: WorkflowDispatch, plan
         qrPass: null,
         qrFail: null,
         qrTodo: null,
+        subagentActive: 0,
+        subagentDone: 1,
       });
 
       const qr = await runPlanDesignWithQR(planDir, ctx.cwd, extensionPath, state, log, widget);
@@ -252,6 +282,7 @@ async function runQRBlock(
     qrPass: null,
     qrFail: null,
     qrTodo: null,
+    ...singleSubagentStart("qr-decomposer"),
   });
   const decomposeDir = await createSubagentDir(planDir, "qr-decomposer");
 
@@ -265,6 +296,7 @@ async function runQRBlock(
         step: `qr-decompose: ${s.stepName}`,
         activity: s.lastAction ?? "",
         logLines: logs,
+        ...singleSubagentFromProjection(s),
       });
     }
   }, 2000);
@@ -283,7 +315,12 @@ async function runQRBlock(
     state.phase = "qr-decompose-failed";
     const detail = decompose.stderr.slice(0, 500);
     log("QR decomposer failed", { exitCode: decompose.exitCode, stderr: detail });
-    widget?.update({ step: "qr-decompose: failed", activity: "" });
+    widget?.update({
+      step: "qr-decompose: failed",
+      activity: "",
+      subagentActive: 0,
+      subagentDone: 1,
+    });
     return { summary: `QR decompose failed (exit ${decompose.exitCode}).\n\nStderr:\n${detail}`, passed: false };
   }
 
@@ -372,6 +409,11 @@ async function runQRBlock(
     qrPass: preservedPass,
     qrFail: initialFail,
     qrTodo: initialTodo,
+    subagentRole: "reviewer",
+    subagentParallelCount: QR_POOL_CONCURRENCY,
+    subagentQueued: verifyIds.length,
+    subagentActive: 0,
+    subagentDone: 0,
   });
 
   // 3. Spawn reviewer pool (TODO-only)
@@ -402,12 +444,13 @@ async function runQRBlock(
     }, 2000);
 
     try {
+      let reviewerModel: string | null = null;
       const result = await pool(
         verifyIds,
         QR_POOL_CONCURRENCY,
         async (itemId) => {
           const reviewerDir = await createSubagentDir(planDir, `qr-reviewer-${itemId}`);
-          return spawnReviewer({
+          const r = await spawnReviewer({
             planDir,
             subagentDir: reviewerDir,
             cwd,
@@ -415,13 +458,26 @@ async function runQRBlock(
             itemId,
             log,
           });
+
+          if (reviewerModel === null) {
+            const projection = await readProjection(reviewerDir);
+            reviewerModel = projection?.model ?? null;
+            if (reviewerModel) {
+              widget?.update({ subagentModel: reviewerModel });
+            }
+          }
+
+          return r;
         },
-        (done, total) => {
-          verifyDone = done;
+        (progress) => {
+          verifyDone = progress.done;
           widget?.update({
-            step: `qr-verify: ${done}/${total}`,
-            qrDone: preservedPass + done,
+            step: `qr-verify: ${progress.done}/${progress.total}`,
+            qrDone: preservedPass + progress.done,
             qrTotal: totalItems,
+            subagentQueued: progress.queued,
+            subagentActive: progress.active,
+            subagentDone: progress.done,
           });
         },
       );
@@ -457,6 +513,9 @@ async function runQRBlock(
     qrPass: pass,
     qrFail: fail,
     qrTodo: todo,
+    subagentQueued: 0,
+    subagentActive: 0,
+    subagentDone: verifyIds.length,
   });
   return { summary, passed };
 }
@@ -542,7 +601,12 @@ async function runPlanDesignWithQR(
 
     // Spawn fix-mode architect
     const fixIndex = iteration - 1;
-    widget?.update({ step: `fix ${fixIndex}/${MAX_FIX_ITERATIONS}: spawning architect...`, activity: "", qrPhase: "execute" });
+    widget?.update({
+      step: `fix ${fixIndex}/${MAX_FIX_ITERATIONS}: spawning architect...`,
+      activity: "",
+      qrPhase: "execute",
+      ...singleSubagentStart("architect"),
+    });
 
     const fixDir = await createSubagentDir(planDir, `architect-fix-${fixIndex}`);
 
@@ -556,6 +620,7 @@ async function runPlanDesignWithQR(
           step: `fix ${fixIndex}/${MAX_FIX_ITERATIONS}: ${s.stepName}`,
           activity: s.lastAction ?? "",
           logLines: logs,
+          ...singleSubagentFromProjection(s),
         });
       }
     }, 2000);
@@ -573,13 +638,20 @@ async function runPlanDesignWithQR(
 
     if (fixResult.exitCode !== 0) {
       log("Fix architect failed", { iteration: fixIndex, exitCode: fixResult.exitCode, stderr: fixResult.stderr.slice(0, 500) });
-      widget?.update({ step: `fix ${fixIndex}/${MAX_FIX_ITERATIONS}: architect failed, re-running QR...`, activity: "" });
+      widget?.update({
+        step: `fix ${fixIndex}/${MAX_FIX_ITERATIONS}: architect failed, re-running QR...`,
+        activity: "",
+        subagentActive: 0,
+        subagentDone: 1,
+      });
     }
 
     // Re-run full QR (decompose + verify)
     widget?.update({
       step: `fix ${fixIndex}/${MAX_FIX_ITERATIONS}: re-running QR...`,
       activity: "",
+      subagentActive: 0,
+      subagentDone: 1,
     });
     qr = await runQRBlock(planDir, cwd, extensionPath, state, log, widget);
     if (qr.passed) {

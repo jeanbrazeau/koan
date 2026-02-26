@@ -12,6 +12,13 @@ export interface PoolResult {
   failed: string[];
 }
 
+export interface PoolProgress {
+  done: number;
+  total: number;
+  active: number;
+  queued: number;
+}
+
 // -- Constants --
 
 export const DEFAULT_REVIEWER_TIMEOUT_MS = 10 * 60 * 1000;
@@ -47,24 +54,40 @@ export async function pool(
   itemIds: string[],
   limit: number,
   worker: (itemId: string) => Promise<SubagentResult>,
-  onProgress?: (done: number, total: number) => void,
+  onProgress?: (progress: PoolProgress) => void,
 ): Promise<PoolResult> {
   const sem = new Semaphore(limit);
   const total = itemIds.length;
   const failed: string[] = [];
   let completed = 0;
+  let running = 0;
+
+  const emit = () => {
+    onProgress?.({
+      done: completed,
+      total,
+      active: running,
+      queued: Math.max(0, total - completed - running),
+    });
+  };
+
+  emit();
 
   await Promise.all(
     itemIds.map(async (id) => {
       await sem.acquire();
+      running++;
+      emit();
+
       try {
         const r = await worker(id);
         if (r.exitCode !== 0) {
           failed.push(id);
         }
       } finally {
+        running = Math.max(0, running - 1);
         completed++;
-        onProgress?.(completed, total);
+        emit();
         sem.release();
       }
     }),

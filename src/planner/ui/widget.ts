@@ -46,6 +46,12 @@ interface WidgetState {
   qrPass: number | null;
   qrFail: number | null;
   qrTodo: number | null;
+  subagentRole: string | null;
+  subagentModel: string | null;
+  subagentParallelCount: number | null;
+  subagentQueued: number | null;
+  subagentActive: number | null;
+  subagentDone: number | null;
 }
 
 export interface WidgetUpdate {
@@ -64,6 +70,12 @@ export interface WidgetUpdate {
   qrPass?: number | null;
   qrFail?: number | null;
   qrTodo?: number | null;
+  subagentRole?: string | null;
+  subagentModel?: string | null;
+  subagentParallelCount?: number | null;
+  subagentQueued?: number | null;
+  subagentActive?: number | null;
+  subagentDone?: number | null;
 }
 
 // -- Constants --
@@ -446,33 +458,160 @@ interface DetailSections {
   footer: string[];
 }
 
+interface DetailSectionDefinition<ViewModel> {
+  id: string;
+  placement: "core" | "footer";
+  select: (state: WidgetState) => ViewModel | null;
+  render: (view: ViewModel, theme: Theme, width: number) => string[];
+}
+
+interface CurrentStepView {
+  title: string;
+  activity: string;
+}
+
+interface IdentityView {
+  planId: string;
+  agentLabel: "Agent" | "Agent pool";
+  agentValue: string;
+  model: string;
+}
+
+const IDENTITY_KEY_WIDTH = 10;
+
+function shouldShowSubagentSection(state: WidgetState): boolean {
+  if (state.subagentRole) return true;
+  return state.subagentQueued !== null || state.subagentActive !== null || state.subagentDone !== null;
+}
+
+function subagentCount(value: number | null): string {
+  return value === null ? "-" : String(value);
+}
+
+function renderSubagentStatusSection(state: WidgetState, theme: Theme, width: number): string[] {
+  if (!shouldShowSubagentSection(state)) {
+    return [];
+  }
+
+  const parallel = state.subagentParallelCount ?? 1;
+  const mode = parallel > 1 ? `pool x${parallel}` : "single";
+
+  const header = clampToWidth(
+    `${theme.bold(theme.fg("accent", "Subagents"))} ${theme.fg("muted", "|")} ${theme.fg("dim", mode)}`,
+    width,
+    "…",
+  );
+
+  const counters = [
+    `${theme.fg("muted", "queued:")}${theme.fg("muted", subagentCount(state.subagentQueued))}`,
+    `${theme.fg("muted", "active:")}${theme.bold(theme.fg("accent", subagentCount(state.subagentActive)))}`,
+    `${theme.fg("muted", "done:")}${theme.fg("dim", subagentCount(state.subagentDone))}`,
+  ].join(" ");
+
+  const divider = clampToWidth(theme.fg("muted", "─".repeat(width)), width);
+  return [header, clampToWidth(counters, width, "…"), divider];
+}
+
+function identityView(state: WidgetState): IdentityView {
+  const role = state.subagentRole ?? "—";
+  const parallel = state.subagentParallelCount ?? 1;
+
+  if (parallel > 1) {
+    return {
+      planId: state.planId,
+      agentLabel: "Agent pool",
+      agentValue: `${role} x${parallel}`,
+      model: state.subagentModel ?? "—",
+    };
+  }
+
+  return {
+    planId: state.planId,
+    agentLabel: "Agent",
+    agentValue: role,
+    model: state.subagentModel ?? "—",
+  };
+}
+
+function renderIdentityRow(theme: Theme, width: number, key: string, value: string): string {
+  const padded = key.padEnd(IDENTITY_KEY_WIDTH, " ");
+  return clampToWidth(`${theme.fg("muted", padded)} : ${theme.fg("dim", value)}`, width, "…");
+}
+
+function renderIdentitySection(view: IdentityView, theme: Theme, width: number): string[] {
+  return [
+    renderIdentityRow(theme, width, "Plan ID", view.planId),
+    renderIdentityRow(theme, width, view.agentLabel, view.agentValue),
+    renderIdentityRow(theme, width, "Model", view.model),
+  ];
+}
+
+const DETAIL_SECTION_REGISTRY: Array<DetailSectionDefinition<any>> = [
+  {
+    id: "current-step",
+    placement: "core",
+    select: (state: WidgetState): CurrentStepView => {
+      const active = activePhase(state);
+      return {
+        title: state.step || active?.detail || active?.label || "Awaiting step",
+        activity: state.activity,
+      };
+    },
+    render: (view: CurrentStepView, theme: Theme, width: number): string[] => {
+      const lines = [
+        clampToWidth(theme.fg("dim", "Current step"), width),
+        clampToWidth(theme.bold(theme.fg("accent", view.title)), width, "…"),
+      ];
+
+      if (view.activity) {
+        for (const line of wrapTextWithAnsi(theme.fg("muted", view.activity), width)) {
+          lines.push(clampToWidth(line, width));
+        }
+      }
+
+      return lines;
+    },
+  },
+  {
+    id: "qr-status",
+    placement: "core",
+    select: (state: WidgetState): WidgetState | null => (shouldShowQR(state) ? state : null),
+    render: (view: WidgetState, theme: Theme, width: number): string[] => renderQRStatusSection(view, theme, width),
+  },
+  {
+    id: "subagent-status",
+    placement: "core",
+    select: (state: WidgetState): WidgetState | null => (shouldShowSubagentSection(state) ? state : null),
+    render: (view: WidgetState, theme: Theme, width: number): string[] => renderSubagentStatusSection(view, theme, width),
+  },
+  {
+    id: "identity",
+    placement: "footer",
+    select: (state: WidgetState): IdentityView => identityView(state),
+    render: (view: IdentityView, theme: Theme, width: number): string[] => renderIdentitySection(view, theme, width),
+  },
+];
+
 function buildDetailSections(state: WidgetState, theme: Theme, width: number): DetailSections {
   const core: string[] = [];
   const footer: string[] = [];
   const blank = clampToWidth("", width);
 
-  const active = activePhase(state);
-  const stepTitle = state.step || active?.detail || active?.label || "Awaiting step";
-  core.push(clampToWidth(theme.fg("dim", "Current step"), width));
-  core.push(clampToWidth(theme.bold(theme.fg("accent", stepTitle)), width, "…"));
+  for (const section of DETAIL_SECTION_REGISTRY) {
+    const view = section.select(state);
+    if (!view) continue;
 
-  if (state.activity) {
-    const activityLines = wrapTextWithAnsi(theme.fg("muted", state.activity), width);
-    for (const line of activityLines) {
-      core.push(clampToWidth(line, width));
+    const rendered = section.render(view, theme, width).map((line) => clampToWidth(line, width));
+    if (section.placement === "core") {
+      if (rendered.length === 0) continue;
+      if (core.length > 0 && core[core.length - 1].trim() !== "") {
+        core.push(blank);
+      }
+      core.push(...rendered);
+      continue;
     }
-  }
 
-  const qrSection = renderQRStatusSection(state, theme, width);
-  if (qrSection.length > 0) {
-    if (core.length > 0 && core[core.length - 1].trim() !== "") {
-      core.push(blank);
-    }
-    core.push(...qrSection.map((line) => clampToWidth(line, width)));
-  }
-
-  if (active) {
-    footer.push(...wrapTextWithAnsi(theme.fg("dim", `Plan · ${state.planId}`), width).map((line) => clampToWidth(line, width, "…")));
+    footer.push(...rendered);
   }
 
   return { core, footer };
@@ -540,6 +679,14 @@ function renderPlanningCard(state: WidgetState, theme: Theme, width: number): st
     if (qrCompact.length > 0) {
       fallbackContent.push(...qrCompact);
     }
+    const subagentCompact = formatSubagentCompact(state, theme, contentWidth);
+    if (subagentCompact.length > 0) {
+      if (qrCompact.length > 0) fallbackContent.push("");
+      fallbackContent.push(...subagentCompact);
+    }
+
+    fallbackContent.push("");
+    fallbackContent.push(...formatIdentityCompact(state, theme, contentWidth));
     fallbackContent.push("");
 
     const body = indentLines(fallbackContent, innerWidth);
@@ -719,6 +866,24 @@ function formatQRCompact(state: WidgetState, theme: Theme, width: number): strin
   return [line1, line2];
 }
 
+function formatSubagentCompact(state: WidgetState, theme: Theme, width: number): string[] {
+  if (!shouldShowSubagentSection(state)) return [];
+
+  const parallel = state.subagentParallelCount ?? 1;
+  const mode = parallel > 1 ? `pool x${parallel}` : "single";
+  const line1 = clampToWidth(`${theme.fg("muted", "Subagents")} ${theme.fg("muted", "|")} ${theme.fg("dim", mode)}`, width, "…");
+  const line2 = clampToWidth(
+    `${theme.fg("muted", `queued:${subagentCount(state.subagentQueued)}`)} ${theme.fg("accent", `active:${subagentCount(state.subagentActive)}`)} ${theme.fg("dim", `done:${subagentCount(state.subagentDone)}`)}`,
+    width,
+    "…",
+  );
+  return [line1, line2];
+}
+
+function formatIdentityCompact(state: WidgetState, theme: Theme, width: number): string[] {
+  return renderIdentitySection(identityView(state), theme, width);
+}
+
 function formatStepLine(state: WidgetState, theme: Theme): string {
   const total = state.phases.length;
   const active = activePhase(state);
@@ -814,6 +979,12 @@ export class WidgetController {
       qrPass: null,
       qrFail: null,
       qrTodo: null,
+      subagentRole: null,
+      subagentModel: null,
+      subagentParallelCount: null,
+      subagentQueued: null,
+      subagentActive: null,
+      subagentDone: null,
     };
     this.state.phases[0].status = "running";
 
@@ -875,6 +1046,24 @@ export class WidgetController {
     }
     if (patch.qrTodo !== undefined) {
       this.state.qrTodo = patch.qrTodo;
+    }
+    if (patch.subagentRole !== undefined) {
+      this.state.subagentRole = patch.subagentRole;
+    }
+    if (patch.subagentModel !== undefined) {
+      this.state.subagentModel = patch.subagentModel;
+    }
+    if (patch.subagentParallelCount !== undefined) {
+      this.state.subagentParallelCount = patch.subagentParallelCount;
+    }
+    if (patch.subagentQueued !== undefined) {
+      this.state.subagentQueued = patch.subagentQueued;
+    }
+    if (patch.subagentActive !== undefined) {
+      this.state.subagentActive = patch.subagentActive;
+    }
+    if (patch.subagentDone !== undefined) {
+      this.state.subagentDone = patch.subagentDone;
     }
     this.doRender();
   }
