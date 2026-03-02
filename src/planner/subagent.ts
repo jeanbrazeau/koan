@@ -53,7 +53,7 @@ export interface SpawnReviewerOptions {
   cwd: string;
   extensionPath: string;
   phase: WorkPhaseKey;
-  itemId: string;
+  itemIds: string[];
   modelOverride?: string;
   log?: Logger;
 }
@@ -198,11 +198,15 @@ export function spawnQRDecomposer(opts: SpawnQRDecomposerOptions): Promise<Subag
 
 export function spawnReviewer(opts: SpawnReviewerOptions): Promise<SubagentResult> {
   const log = opts.log ?? createLogger("Subagent");
+  const itemList = opts.itemIds.join(",");
+  const prompt = opts.itemIds.length === 1
+    ? "Verify the assigned QR item."
+    : `Verify the ${opts.itemIds.length} assigned QR items.`;
   return spawnSubagent(
     "reviewer",
     `qr-${opts.phase}`,
-    "Verify the assigned QR item.",
-    { ...opts, extraFlags: ["--koan-qr-item", opts.itemId] },
+    prompt,
+    { ...opts, extraFlags: ["--koan-qr-item", itemList] },
     log,
   );
 }

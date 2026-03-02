@@ -543,26 +543,47 @@ async function runQRBlock(
     }
   }
 
-  const verifyIds = qr.items.filter((i) => i.status === "TODO").map((i) => i.id);
+  // Group TODO items by group_id for batch verification.
+  // Items sharing a group_id are verified by a single subagent, amortizing
+  // process startup cost. Items without group_id are treated as singletons.
+  const todoItems = qr.items.filter((i) => i.status === "TODO");
+  const groups = new Map<string, string[]>();
+  for (const item of todoItems) {
+    const gid = item.group_id ?? item.id;
+    const existing = groups.get(gid);
+    if (existing) {
+      existing.push(item.id);
+    } else {
+      groups.set(gid, [item.id]);
+    }
+  }
+  const groupEntries = Array.from(groups.entries()); // [groupId, itemIds[]]
   const totalItems = qr.items.length;
+  const totalTodoItems = todoItems.length;
   const preservedPass = qr.items.filter((i) => i.status === "PASS").length;
   const initialFail = qr.items.filter((i) => i.status === "FAIL").length;
-  const initialTodo = qr.items.filter((i) => i.status === "TODO").length;
 
   widget?.update({
-    step: `${phase} qr-verify: 0/${verifyIds.length}`,
+    step: `${phase} qr-verify: 0/${groupEntries.length} groups (${totalTodoItems} items)`,
     activity: "",
     qrTotal: totalItems,
     qrDone: preservedPass,
     qrPass: preservedPass,
     qrFail: initialFail,
-    qrTodo: initialTodo,
+    qrTodo: totalTodoItems,
     subagentRole: "reviewer",
     subagentModel: null,
     subagentParallelCount: QR_POOL_CONCURRENCY,
-    subagentQueued: verifyIds.length,
+    subagentQueued: groupEntries.length,
     subagentActive: 0,
     subagentDone: 0,
+  });
+
+  log("QR verify: grouped items for dispatch", {
+    phase,
+    totalItems: totalTodoItems,
+    groups: groupEntries.length,
+    groupSizes: groupEntries.map(([gid, ids]) => `${gid}:${ids.length}`),
   });
 
   state.phase = "qr-verify-running";
@@ -571,7 +592,9 @@ async function runQRBlock(
   let verifyDone = 0;
   let failedReviewers: string[] = [];
 
-  if (verifyIds.length > 0) {
+  if (groupEntries.length > 0) {
+    const groupIds = groupEntries.map(([gid]) => gid);
+
     const verifyStatsPoll = setInterval(async () => {
       try {
         const raw = await fs.readFile(qrPath, "utf8");
@@ -591,20 +614,27 @@ async function runQRBlock(
       }
     }, 2000);
 
+    // Build a map from groupId -> itemIds for the pool worker.
+    const groupItemMap = new Map(groupEntries);
+
     try {
       let reviewerModel: string | null = null;
       const result = await pool(
-        verifyIds,
+        groupIds,
         QR_POOL_CONCURRENCY,
-        async (itemId) => {
-          const reviewerDir = await createSubagentDir(planDir, `qr-reviewer-${phase}-${itemId}`);
+        async (groupId) => {
+          const itemIds = groupItemMap.get(groupId)!;
+          const dirSuffix = itemIds.length === 1
+            ? `qr-reviewer-${phase}-${itemIds[0]}`
+            : `qr-reviewer-${phase}-group-${groupId}`;
+          const reviewerDir = await createSubagentDir(planDir, dirSuffix);
           const r = await spawnReviewerWithResolvedModel({
             planDir,
             subagentDir: reviewerDir,
             cwd,
             extensionPath,
             phase,
-            itemId,
+            itemIds,
             log,
           });
 
@@ -619,7 +649,7 @@ async function runQRBlock(
         (progress) => {
           verifyDone = progress.done;
           widget?.update({
-            step: `${phase} qr-verify: ${progress.done}/${progress.total}`,
+            step: `${phase} qr-verify: ${progress.done}/${progress.total} groups`,
             qrDone: preservedPass + progress.done,
             qrTotal: totalItems,
             subagentQueued: progress.queued,
@@ -646,7 +676,7 @@ async function runQRBlock(
   const pass = finalQR.items.filter((i) => i.status === "PASS").length;
   const fail = finalQR.items.filter((i) => i.status === "FAIL").length;
   const todo = finalQR.items.filter((i) => i.status === "TODO").length;
-  const summary = `${phase} QR complete: ${pass} PASS, ${fail} FAIL, ${todo} TODO (${failedReviewers.length} reviewers failed).`;
+  const summary = `${phase} QR complete: ${pass} PASS, ${fail} FAIL, ${todo} TODO (${failedReviewers.length} reviewer groups failed).`;
 
   const passed = fail === 0 && failedReviewers.length === 0;
   widget?.update({
@@ -659,7 +689,7 @@ async function runQRBlock(
     qrTodo: todo,
     subagentQueued: 0,
     subagentActive: 0,
-    subagentDone: verifyIds.length,
+    subagentDone: groupEntries.length,
   });
   return { summary, passed };
 }

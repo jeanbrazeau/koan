@@ -201,15 +201,21 @@ export async function dispatchPhase(
   }
 
   if (config.role === "reviewer" && qrWorkPhase) {
-    const itemId = pi.getFlag("koan-qr-item") as string;
-    if (!itemId) {
+    const rawItemFlag = pi.getFlag("koan-qr-item") as string;
+    if (!rawItemFlag) {
       logger("Reviewer missing --koan-qr-item flag");
+      return;
+    }
+
+    const itemIds = rawItemFlag.split(",").map((s) => s.trim()).filter(Boolean);
+    if (itemIds.length === 0) {
+      logger("Reviewer --koan-qr-item flag is empty after parsing");
       return;
     }
 
     const phase = new QRVerifyPhase(
       pi,
-      { planDir: config.planDir, itemId, workPhase: qrWorkPhase },
+      { planDir: config.planDir, itemIds, workPhase: qrWorkPhase },
       dispatch,
       planRef,
       logger,

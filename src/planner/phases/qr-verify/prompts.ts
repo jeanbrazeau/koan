@@ -1,5 +1,9 @@
-// Prompt guidance for the 3-step QR verify subagent workflow.
-// Each reviewer subagent verifies exactly 1 QRItem against the plan.
+// Prompt guidance for the dynamic-step QR verify subagent workflow.
+// Each reviewer subagent verifies 1..N QRItems (grouped by group_id).
+//
+// Dynamic step formula: totalSteps = 1 + (2 * numItems)
+//   Step 1: CONTEXT (once, lists all items)
+//   Steps 2..2N+1: ANALYZE/CONFIRM pairs per item
 
 import { promises as fs } from "node:fs";
 import * as os from "node:os";
@@ -13,8 +17,6 @@ import {
 } from "../../lib/conversation-trigger.js";
 
 type WorkPhaseKey = "plan-design" | "plan-code" | "plan-docs";
-
-export type VerifyStep = 1 | 2 | 3;
 
 function scopeGuidance(item: QRItem): string {
   const s = item.scope;
@@ -63,34 +65,64 @@ export async function loadQRVerifySystemPrompt(): Promise<string> {
   }
 }
 
-export function buildVerifySystemPrompt(basePrompt: string, phase: WorkPhaseKey): string {
+export function buildVerifySystemPrompt(basePrompt: string, phase: WorkPhaseKey, itemCount: number): string {
+  const itemLabel = itemCount === 1 ? "1 QR item" : `${itemCount} QR items`;
   return [
     basePrompt,
     "",
     "---",
     "",
-    `WORKFLOW: 3-STEP QR VERIFICATION (${phase})`,
+    `WORKFLOW: QR VERIFICATION (${phase}, ${itemLabel})`,
     "",
-    "You will verify exactly 1 QR item against the plan.",
+    `You will verify ${itemLabel} against the plan.`,
     "Step 1 instructions are in the user message below.",
     "Complete the work described, then call koan_complete_step.",
     "Put your findings in the `thoughts` parameter of koan_complete_step.",
     "",
-    "CRITICAL: Do NOT record a verdict until step 3 (CONFIRM).",
-    "Analyze thoroughly in step 2 before committing.",
+    "CRITICAL: Do NOT record a verdict until the CONFIRM step for each item.",
+    "Analyze thoroughly in the ANALYZE step before committing.",
+  ].join("\n");
+}
+
+function formatItemForContext(item: QRItem): string {
+  return [
+    `  ${item.id} [${item.severity}]: ${item.check}`,
+    `    scope: ${item.scope}`,
   ].join("\n");
 }
 
 export function buildContextStep(
-  item: QRItem,
+  items: QRItem[],
   phase: WorkPhaseKey,
   conversationPath?: string,
 ): StepGuidance {
+  const itemLabel = items.length === 1 ? "1 ITEM" : `${items.length} ITEMS`;
+  const itemSummary = items.map(formatItemForContext).join("\n");
+
   return {
-    title: "Step 1: CONTEXT",
+    title: `Step 1: CONTEXT`,
     instructions: [
       `PHASE: ${phase}`,
-      "ITEM TO VERIFY:",
+      `ITEMS TO VERIFY: ${itemLabel}`,
+      "",
+      itemSummary,
+      "",
+      ...phaseContextTrigger(phase, conversationPath),
+      ...(phase === "plan-code" ? [] : [""]),
+      "Understand the checks and required evidence before analyzing.",
+    ],
+  };
+}
+
+export function buildAnalyzeStep(item: QRItem, itemIndex: number, totalItems: number): StepGuidance {
+  const positionLabel = totalItems === 1
+    ? ""
+    : ` (item ${itemIndex + 1} of ${totalItems})`;
+
+  return {
+    title: `ANALYZE ${item.id}${positionLabel}`,
+    instructions: [
+      scopeGuidance(item),
       "",
       "<qr_item_to_verify>",
       `  <id>${item.id}</id>`,
@@ -98,19 +130,6 @@ export function buildContextStep(
       `  <check>${item.check}</check>`,
       `  <severity>${item.severity}</severity>`,
       "</qr_item_to_verify>",
-      "",
-      ...phaseContextTrigger(phase, conversationPath),
-      ...(phase === "plan-code" ? [] : [""]),
-      "Understand the check and required evidence before analyzing.",
-    ],
-  };
-}
-
-export function buildAnalyzeStep(item: QRItem): StepGuidance {
-  return {
-    title: "Step 2: ANALYZE",
-    instructions: [
-      scopeGuidance(item),
       "",
       "TASK:",
       "1. Read relevant entities based on scope",
@@ -123,9 +142,18 @@ export function buildAnalyzeStep(item: QRItem): StepGuidance {
   };
 }
 
-export function buildConfirmStep(item: QRItem, phase: WorkPhaseKey): StepGuidance {
+export function buildConfirmStep(
+  item: QRItem,
+  itemIndex: number,
+  totalItems: number,
+  phase: WorkPhaseKey,
+): StepGuidance {
+  const positionLabel = totalItems === 1
+    ? ""
+    : ` (item ${itemIndex + 1} of ${totalItems})`;
+
   return {
-    title: "Step 3: CONFIRM",
+    title: `CONFIRM ${item.id}${positionLabel}`,
     instructions: [
       `CONFIRMING: ${item.id}`,
       `SEVERITY: ${item.severity}`,

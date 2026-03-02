@@ -156,7 +156,7 @@ describe("QR spawn model threading", () => {
         cwd: "/cwd",
         extensionPath: "/ext/koan.ts",
         phase: "plan-code",
-        itemId: "QR-001",
+        itemIds: ["QR-001"],
       },
       {
         mapSpawnContextToPhaseModelKeyFn: (ctx, row) => {
@@ -188,7 +188,7 @@ describe("QR spawn model threading", () => {
         cwd: "/cwd",
         extensionPath: "/ext/koan.ts",
         phase: "plan-docs",
-        itemId: "QR-002",
+        itemIds: ["QR-002"],
       },
       {
         mapSpawnContextToPhaseModelKeyFn: () => "plan-docs-qr-verify" as PhaseModelKey,

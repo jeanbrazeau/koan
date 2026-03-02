@@ -48,7 +48,7 @@ export default function koan(pi: ExtensionAPI): void {
   });
 
   pi.registerFlag("koan-qr-item", {
-    description: "QR item ID for reviewer subagent",
+    description: "QR item ID(s) for reviewer subagent (comma-separated for groups)",
     type: "string",
     default: "",
   });
