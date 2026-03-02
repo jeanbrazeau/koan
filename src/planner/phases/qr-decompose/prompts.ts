@@ -6,8 +6,11 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import type { ContextData } from "../../types.js";
 import type { StepGuidance } from "../../lib/step.js";
+import {
+  buildPlanDesignContextTrigger,
+  buildPlanDocsContextTrigger,
+} from "../../lib/conversation-trigger.js";
 
 export type DecomposeStep = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 | 13;
 export type WorkPhaseKey = "plan-design" | "plan-code" | "plan-docs";
@@ -46,6 +49,19 @@ const PHASE_SCOPE_HINTS: Record<WorkPhaseKey, string[]> = {
   ],
 };
 
+function phaseContextTrigger(
+  phase: WorkPhaseKey,
+  conversationPath?: string,
+): string[] {
+  if (phase === "plan-design") {
+    return buildPlanDesignContextTrigger(conversationPath ?? "<planDir>/conversation.jsonl");
+  }
+  if (phase === "plan-docs") {
+    return buildPlanDocsContextTrigger(conversationPath ?? "<planDir>/conversation.jsonl");
+  }
+  return [];
+}
+
 export async function loadQRDecomposeSystemPrompt(): Promise<string> {
   const homeDir = os.homedir();
   const promptPath = path.join(homeDir, ".claude/agents/quality-reviewer.md");
@@ -77,21 +93,20 @@ export function buildDecomposeSystemPrompt(basePrompt: string, phase: WorkPhaseK
   ].join("\n");
 }
 
-export function formatContextForDecompose(ctx: ContextData): string {
-  return ["<planning_context>", JSON.stringify(ctx, null, 2), "</planning_context>"].join("\n");
-}
-
-export function decomposeStepGuidance(step: DecomposeStep, phase: WorkPhaseKey, context?: string): StepGuidance {
+export function decomposeStepGuidance(
+  step: DecomposeStep,
+  phase: WorkPhaseKey,
+  conversationPath?: string,
+): StepGuidance {
   switch (step) {
     case 1:
       return {
         title: "Step 1: Absorb Context",
         instructions: [
           `PHASE: ${phase}`,
-          "PLANNING CONTEXT (from session):",
           "",
-          context ?? "",
-          "",
+          ...phaseContextTrigger(phase, conversationPath),
+          ...(phase === "plan-code" ? [] : [""]),
           "Use koan_get_plan to read the full plan.",
           "Absorb the structures relevant to this phase and identify what needs verification.",
         ],

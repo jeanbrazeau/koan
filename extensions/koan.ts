@@ -1,8 +1,10 @@
 // Entry point for the koan pi extension. Serves dual roles: parent session
-// (registers /koan command) and subagent mode (dispatches to phase workflow
-// via CLI flags). All tools register unconditionally at init; phases restrict
-// access via tool_call blocking at runtime.
+// (registers koan_plan tool and /koan-execute, /koan-status, /koan commands)
+// and subagent mode (dispatches to phase workflow via CLI flags). All tools
+// register unconditionally at init; phases restrict access via tool_call
+// blocking at runtime.
 
+import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
 import { createSession } from "../src/planner/session.js";
@@ -10,6 +12,7 @@ import { detectSubagentMode, dispatchPhase } from "../src/planner/phases/dispatc
 import { registerAllTools, createDispatch, createPlanRef } from "../src/planner/tools/index.js";
 import { createLogger } from "../src/utils/logger.js";
 import { EventLog, extractToolEvent } from "../src/planner/lib/audit.js";
+import { openKoanConfig } from "../src/planner/ui/config/menu.js";
 
 function currentModelId(ctx: ExtensionContext): string | null {
   const model = ctx.model;
@@ -109,30 +112,50 @@ export default function koan(pi: ExtensionAPI): void {
   // Session: parent-mode workflow engine.
   const session = createSession(pi, dispatch, planRef);
 
-  pi.registerCommand("koan", {
-    description: "Koan planning workflow",
-    handler: async (args, ctx) => {
-      const [subcommand, ...rest] = args.trim().split(/\s+/);
-      const command = subcommand ?? "";
-      const remainingArgs = rest.join(" ");
+  pi.registerTool({
+    name: "koan_plan",
+    label: "Plan",
+    description: [
+      "Launch a structured planning pipeline for complex, multi-file tasks.",
+      "Invoke when the user asks to plan, use the planner, or when the task",
+      "is too large to implement directly.",
+      "",
+      "The current conversation is automatically captured — it becomes the",
+      "planning context. The pipeline spawns specialized agents (architect,",
+      "developer, writer) that read the conversation history to understand",
+      "the task, then produce a structured plan with milestones, code intents,",
+      "and quality review.",
+      "",
+      "This is a long-running operation (5-15 minutes). Do not invoke for",
+      "simple tasks that can be done in a single pass.",
+    ].join("\n"),
+    parameters: Type.Object({}),
+    async execute(toolCallId, params, signal, onUpdate, ctx) {
+      return await session.plan(ctx);
+    },
+  });
 
-      switch (command) {
-        case "plan":
-          await session.plan(remainingArgs, ctx);
-          break;
-        case "execute":
-          await session.execute(ctx);
-          break;
-        case "status":
-          await session.status(ctx);
-          break;
-        default:
-          ctx.ui.notify(
-            "Usage: /koan plan <task>, /koan execute, or /koan status",
-            "error",
-          );
-          break;
+  pi.registerCommand("koan", {
+    description: "Koan commands. Usage: /koan config",
+    handler: async (args, ctx) => {
+      const subcommand = args.trim();
+      if (subcommand === "config") {
+        await openKoanConfig(ctx);
+      } else if (subcommand === "") {
+        ctx.ui.notify("Usage: /koan config", "info");
+      } else {
+        ctx.ui.notify(`Unknown koan subcommand: "${subcommand}". Usage: /koan config`, "warning");
       }
     },
+  });
+
+  pi.registerCommand("koan-execute", {
+    description: "Execute a koan plan",
+    handler: async (_args, ctx) => { await session.execute(ctx); },
+  });
+
+  pi.registerCommand("koan-status", {
+    description: "Show koan workflow status",
+    handler: async (_args, ctx) => { await session.status(ctx); },
   });
 }

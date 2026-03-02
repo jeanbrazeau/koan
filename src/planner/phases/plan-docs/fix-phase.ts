@@ -1,5 +1,7 @@
 // Plan-docs fix phase -- dynamic targeted QR repair workflow.
 
+import * as path from "node:path";
+
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import { loadAndValidatePlanForPhase } from "../../plan/validate.js";
@@ -81,7 +83,8 @@ export class PlanDocsFixPhase {
       this.failures.length,
       totalSteps,
     );
-    this.state.step1Prompt = formatStep(fixStepGuidance(1, totalSteps, { allFailuresXml: failuresXml }));
+    const conversationPath = path.join(this.planDir, "conversation.jsonl");
+    this.state.step1Prompt = formatStep(fixStepGuidance(1, totalSteps, { allFailuresXml: failuresXml, conversationPath }));
     this.state.active = true;
     this.state.step = 1;
     this.planRef.dir = this.planDir;

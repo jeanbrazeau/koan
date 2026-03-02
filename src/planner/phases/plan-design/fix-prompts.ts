@@ -11,6 +11,7 @@
 
 import type { QRItem } from "../../qr/types.js";
 import type { StepGuidance } from "../../lib/step.js";
+import { buildPlanDesignContextTrigger } from "../../lib/conversation-trigger.js";
 
 // Serializes FAIL items as an XML block injected into the step 1 prompt.
 // XML structure mirrors how pi-native tools present structured data.
@@ -83,10 +84,10 @@ export function buildFixSystemPrompt(
 export function fixStepGuidance(
   step: number,
   totalSteps: number,
-  opts?: { item?: QRItem; allFailuresXml?: string },
+  opts?: { item?: QRItem; allFailuresXml?: string; conversationPath?: string },
 ): StepGuidance {
   if (step === 1)
-    return fixStep1Guidance(totalSteps, opts?.allFailuresXml ?? "");
+    return fixStep1Guidance(totalSteps, opts?.allFailuresXml ?? "", opts?.conversationPath);
   if (step === totalSteps) return fixFinalStepGuidance(totalSteps);
   return fixItemStepGuidance(step, totalSteps, opts?.item);
 }
@@ -98,6 +99,7 @@ export function fixStepGuidance(
 function fixStep1Guidance(
   totalSteps: number,
   failuresXml: string,
+  conversationPath?: string,
 ): StepGuidance {
   const itemCount = totalSteps - 2;
   return {
@@ -106,6 +108,8 @@ function fixStep1Guidance(
       "QR FAILURES TO FIX:",
       "",
       failuresXml,
+      "",
+      ...buildPlanDesignContextTrigger(conversationPath ?? "<planDir>/conversation.jsonl"),
       "",
       `There are ${itemCount} failure(s). You will fix them one at a time`,
       `in steps 2 through ${totalSteps - 1}. Each step presents a single item.`,

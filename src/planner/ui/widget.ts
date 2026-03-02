@@ -88,7 +88,6 @@ const LOG_LINES = 5;
 const BODY_INDENT = "    ";
 
 const PLANNING_PHASES: ReadonlyArray<{ key: string; label: string; detail: string }> = [
-  { key: "ctx", label: "Context gathering", detail: "Gathering initial context" },
   { key: "design", label: "Plan design", detail: "Designing plan" },
   { key: "code", label: "Plan code", detail: "Creating code plan" },
   { key: "docs", label: "Plan docs", detail: "Documenting plan" },
@@ -225,7 +224,6 @@ const HEADER_STATUS_SHORT: Record<string, string> = {
 };
 
 const HEADER_PHASE_SHORT: Record<string, string> = {
-  "Context gathering": "Ctx gather",
   "Plan design": "Design",
   "Plan code": "Code",
   "Plan docs": "Docs",
@@ -339,7 +337,7 @@ function shouldShowQR(state: WidgetState): boolean {
   if (state.qrIteration === null) return false;
   const active = activePhase(state);
   if (!active) return false;
-  return active.key !== "ctx";
+  return true;
 }
 
 type QRTier = "wide" | "medium" | "tight";

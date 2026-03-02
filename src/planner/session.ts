@@ -1,13 +1,13 @@
 // Parent session: orchestrates the koan planning workflow.
-// Flow: context capture -> plan-design(+QR) -> plan-code(+QR) -> plan-docs(+QR)
+// Flow: export conversation -> plan-design(+QR) -> plan-code(+QR) -> plan-docs(+QR)
 // -> mechanical plan.json->plan.md rendering for manual review.
 
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
 
-import { ContextCapturePhase } from "./phases/context-capture/phase.js";
+import { exportConversation } from "./conversation.js";
 import { createInitialState, initializePlanState, type WorkflowState } from "./state.js";
 import { createPlanInfo } from "../utils/plan.js";
 import {
@@ -19,6 +19,8 @@ import {
   spawnTechnicalWriterFix,
   spawnQRDecomposer,
   spawnReviewer,
+  type SpawnQRDecomposerOptions,
+  type SpawnReviewerOptions,
   type SubagentResult,
 } from "./subagent.js";
 import { createLogger, setLogDir, type Logger } from "../utils/logger.js";
@@ -30,11 +32,17 @@ import type { QRFile } from "./qr/types.js";
 import { MAX_FIX_ITERATIONS, qrPassesAtIteration } from "./qr/severity.js";
 import { WidgetController, type WidgetUpdate } from "./ui/widget.js";
 import { renderPlanMarkdownToFile } from "./plan/render.js";
+import {
+  mapSpawnContextToPhaseModelKey,
+  resolvePhaseModelOverride,
+  type SpawnContext,
+} from "./model-resolver.js";
+import type { PhaseRow } from "./model-phase.js";
 
 type WorkPhaseKey = "plan-design" | "plan-code" | "plan-docs";
 
 interface Session {
-  plan(args: string, ctx: ExtensionCommandContext): Promise<void>;
+  plan(ctx: ExtensionContext): Promise<AgentToolResult<unknown>>;
   execute(_ctx: ExtensionCommandContext): Promise<void>;
   status(ctx: ExtensionCommandContext): Promise<void>;
 }
@@ -59,6 +67,7 @@ interface SpawnWorkRunOptions {
   cwd: string;
   extensionPath: string;
   log: Logger;
+  modelOverride?: string;
 }
 
 interface SpawnFixRunOptions extends SpawnWorkRunOptions {}
@@ -101,133 +110,81 @@ function phaseCompleteState(phase: WorkPhaseKey): WorkflowState["phase"] {
   return "plan-docs-complete";
 }
 
+interface ModelResolutionDeps {
+  mapSpawnContextToPhaseModelKeyFn?: typeof mapSpawnContextToPhaseModelKey;
+  resolvePhaseModelOverrideFn?: typeof resolvePhaseModelOverride;
+}
+
+interface QRSpawnResolutionDeps extends ModelResolutionDeps {
+  spawnQRDecomposerFn?: typeof spawnQRDecomposer;
+  spawnReviewerFn?: typeof spawnReviewer;
+}
+
+export async function resolveSpawnModelOverride(
+  context: SpawnContext,
+  phaseRow: PhaseRow,
+  deps: ModelResolutionDeps = {},
+): Promise<string | undefined> {
+  const mapFn = deps.mapSpawnContextToPhaseModelKeyFn ?? mapSpawnContextToPhaseModelKey;
+  const resolveFn = deps.resolvePhaseModelOverrideFn ?? resolvePhaseModelOverride;
+  const key = mapFn(context, phaseRow);
+  return await resolveFn(key);
+}
+
+export async function spawnWorkWithResolvedModel(
+  phaseRow: PhaseRow,
+  spawnWorkFn: (opts: SpawnWorkRunOptions) => Promise<SubagentResult>,
+  opts: SpawnWorkRunOptions,
+  deps: ModelResolutionDeps = {},
+): Promise<SubagentResult> {
+  const modelOverride = await resolveSpawnModelOverride("work-debut", phaseRow, deps);
+  return await spawnWorkFn({ ...opts, modelOverride });
+}
+
+export async function spawnFixWithResolvedModel(
+  phaseRow: PhaseRow,
+  spawnFixFn: (opts: SpawnFixRunOptions) => Promise<SubagentResult>,
+  opts: SpawnFixRunOptions,
+  deps: ModelResolutionDeps = {},
+): Promise<SubagentResult> {
+  const modelOverride = await resolveSpawnModelOverride("fix", phaseRow, deps);
+  return await spawnFixFn({ ...opts, modelOverride });
+}
+
+export async function spawnQRDecomposerWithResolvedModel(
+  opts: SpawnQRDecomposerOptions,
+  deps: QRSpawnResolutionDeps = {},
+): Promise<SubagentResult> {
+  const modelOverride = await resolveSpawnModelOverride("qr-decompose", opts.phase as PhaseRow, deps);
+  const spawnFn = deps.spawnQRDecomposerFn ?? spawnQRDecomposer;
+  return await spawnFn({ ...opts, modelOverride });
+}
+
+export async function spawnReviewerWithResolvedModel(
+  opts: SpawnReviewerOptions,
+  deps: QRSpawnResolutionDeps = {},
+): Promise<SubagentResult> {
+  const modelOverride = await resolveSpawnModelOverride("qr-verify", opts.phase as PhaseRow, deps);
+  const spawnFn = deps.spawnReviewerFn ?? spawnReviewer;
+  return await spawnFn({ ...opts, modelOverride });
+}
+
 export function createSession(pi: ExtensionAPI, dispatch: WorkflowDispatch, planRef: PlanRef): Session {
   const state: WorkflowState = createInitialState();
   const log = createLogger("Session");
   let widget: WidgetController | null = null;
 
-  const onContextComplete = async (ctx: ExtensionContext): Promise<string> => {
-    if (!state.plan) {
-      return "Context captured but no plan state available.";
-    }
-
-    let outcome: "PASS" | "FAIL" = "FAIL";
-
-    try {
-      const planDir = state.plan.directory;
-      const extensionPath = path.resolve(import.meta.dirname, "../../extensions/koan.ts");
-
-      const phases: PhaseRunConfig[] = [
-        {
-          key: "plan-design",
-          label: "Plan design",
-          widgetIndex: 1,
-          role: "architect",
-          spawnWork: (opts) => spawnArchitect(opts),
-          spawnFix: (opts) => spawnArchitectFix({ ...opts, fixPhase: "plan-design" }),
-        },
-        {
-          key: "plan-code",
-          label: "Plan code",
-          widgetIndex: 2,
-          role: "developer",
-          spawnWork: (opts) => spawnDeveloper(opts),
-          spawnFix: (opts) => spawnDeveloperFix({ ...opts, fixPhase: "plan-code" }),
-        },
-        {
-          key: "plan-docs",
-          label: "Plan docs",
-          widgetIndex: 3,
-          role: "technical-writer",
-          spawnWork: (opts) => spawnTechnicalWriter(opts),
-          spawnFix: (opts) => spawnTechnicalWriterFix({ ...opts, fixPhase: "plan-docs" }),
-        },
-      ];
-
-      widget?.update({
-        phaseStatus: { index: 0, status: "completed" },
-        activeIndex: 1,
-        step: "context captured; starting planning phases...",
-        activity: "",
-      });
-
-      const phaseSummaries: string[] = [];
-      for (const phase of phases) {
-        const result = await runPlanningPhase(
-          phase,
-          planDir,
-          ctx.cwd,
-          extensionPath,
-          state,
-          log,
-          widget,
-        );
-
-        phaseSummaries.push(`${phase.label}: ${result.summary}`);
-        if (!result.passed) {
-          return `Context captured. ${phase.label} failed.\n\n${phaseSummaries.join("\n")}`;
-        }
-      }
-
-      let planMdPath: string;
-      try {
-        planMdPath = await renderPlanMarkdownToFile(planDir);
-      } catch (error) {
-        const message = error instanceof Error ? error.message : String(error);
-        log("Failed to render plan.md", { error: message, planDir });
-        return `Planning phases completed, but plan markdown rendering failed: ${message}`;
-      }
-
-      state.phase = "plan-docs-complete";
-      widget?.update({
-        activeIndex: -1,
-        step: "planning complete; awaiting manual review of plan.md",
-        activity: "",
-      });
-
-      outcome = "PASS";
-      return [
-        "Context captured. Planning complete.",
-        "",
-        ...phaseSummaries,
-        "",
-        `Plan markdown: ${planMdPath}`,
-        "PAUSE: Please review this file manually before /koan execute.",
-      ].join("\n");
-    } finally {
-      if (widget) {
-        widget.destroy();
-        widget = null;
-      }
-      ctx.ui.notify(outcome, outcome === "PASS" ? "info" : "error");
-    }
-  };
-
-  const contextPhase = new ContextCapturePhase(pi, state, dispatch, createLogger("Context"), onContextComplete);
-
   return {
-    async plan(args, ctx) {
-      const description = args.trim();
-      if (!description) {
-        ctx.ui.notify("Usage: /koan plan <task description>", "error");
-        return;
-      }
+    async plan(ctx: ExtensionContext): Promise<AgentToolResult<unknown>> {
+      const planInfo = await createPlanInfo("", ctx.cwd);
+      initializePlanState(state, planInfo, "");
 
-      if (state.phase === "context" && state.context?.active) {
-        ctx.ui.notify("Context capture already running. Use /koan status to check progress.", "warning");
-        return;
-      }
-
-      await ctx.waitForIdle();
-
-      const planInfo = await createPlanInfo(description, ctx.cwd);
-      initializePlanState(state, planInfo, description);
+      // Wire plan directory for subagent dispatch and logging.
       planRef.dir = planInfo.directory;
       setLogDir(planInfo.directory);
 
-      log("Plan command invoked", {
+      log("Plan tool invoked", {
         cwd: ctx.cwd,
-        description,
         planId: planInfo.id,
         planDirectory: planInfo.directory,
       });
@@ -241,7 +198,95 @@ export function createSession(pi: ExtensionAPI, dispatch: WorkflowDispatch, plan
         widget = new WidgetController(ctx.ui, planInfo.id);
       }
 
-      await contextPhase.begin(description, planInfo, ctx);
+      // Export conversation to plan directory.
+      // Agents that need session context can Read this file.
+      await exportConversation(ctx.sessionManager, planInfo.directory);
+      log("Conversation exported", { planDir: planInfo.directory });
+
+      let outcome: "PASS" | "FAIL" = "FAIL";
+      try {
+        const planDir = planInfo.directory;
+        const extensionPath = path.resolve(import.meta.dirname, "../../extensions/koan.ts");
+
+        // widgetIndex 0=design, 1=code, 2=docs
+        const phases: PhaseRunConfig[] = [
+          {
+            key: "plan-design",
+            label: "Plan design",
+            widgetIndex: 0,
+            role: "architect",
+            spawnWork: (opts) => spawnArchitect(opts),
+            spawnFix: (opts) => spawnArchitectFix({ ...opts, fixPhase: "plan-design" }),
+          },
+          {
+            key: "plan-code",
+            label: "Plan code",
+            widgetIndex: 1,
+            role: "developer",
+            spawnWork: (opts) => spawnDeveloper(opts),
+            spawnFix: (opts) => spawnDeveloperFix({ ...opts, fixPhase: "plan-code" }),
+          },
+          {
+            key: "plan-docs",
+            label: "Plan docs",
+            widgetIndex: 2,
+            role: "technical-writer",
+            spawnWork: (opts) => spawnTechnicalWriter(opts),
+            spawnFix: (opts) => spawnTechnicalWriterFix({ ...opts, fixPhase: "plan-docs" }),
+          },
+        ];
+
+        const phaseSummaries: string[] = [];
+        for (const phase of phases) {
+          const result = await runPlanningPhase(
+            phase,
+            planDir,
+            ctx.cwd,
+            extensionPath,
+            state,
+            log,
+            widget,
+          );
+
+          phaseSummaries.push(`${phase.label}: ${result.summary}`);
+          if (!result.passed) {
+            return {
+              content: [{ type: "text" as const, text: `Planning failed at ${phase.label}.\n\n${phaseSummaries.join("\n")}` }],
+              details: undefined,
+            };
+          }
+        }
+
+        try {
+          await renderPlanMarkdownToFile(planDir);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          log("Failed to render plan.md", { error: message, planDir });
+          return {
+            content: [{ type: "text" as const, text: `Planning phases completed, but plan markdown rendering failed: ${message}\n\n${phaseSummaries.join("\n")}` }],
+            details: undefined,
+          };
+        }
+
+        state.phase = "plan-docs-complete";
+        widget?.update({
+          activeIndex: -1,
+          step: "planning complete; awaiting manual review of plan.md",
+          activity: "",
+        });
+
+        outcome = "PASS";
+        return {
+          content: [{ type: "text" as const, text: `Planning complete.\n\n${phaseSummaries.join("\n")}` }],
+          details: undefined,
+        };
+      } finally {
+        if (widget) {
+          widget.destroy();
+          widget = null;
+        }
+        ctx.ui.notify(outcome, outcome === "PASS" ? "info" : "error");
+      }
     },
 
     async execute(ctx) {
@@ -297,13 +342,17 @@ async function runPlanningPhase(
     });
   }, 2000);
 
-  const workResult = await phase.spawnWork({
-    planDir,
-    subagentDir,
-    cwd,
-    extensionPath,
-    log,
-  });
+  const workResult = await spawnWorkWithResolvedModel(
+    phase.key as PhaseRow,
+    phase.spawnWork,
+    {
+      planDir,
+      subagentDir,
+      cwd,
+      extensionPath,
+      log,
+    },
+  );
 
   clearInterval(pollInterval);
 
@@ -420,7 +469,7 @@ async function runQRBlock(
     });
   }, 2000);
 
-  const decompose = await spawnQRDecomposer({
+  const decompose = await spawnQRDecomposerWithResolvedModel({
     planDir,
     subagentDir: decomposeDir,
     cwd,
@@ -547,7 +596,7 @@ async function runQRBlock(
         QR_POOL_CONCURRENCY,
         async (itemId) => {
           const reviewerDir = await createSubagentDir(planDir, `qr-reviewer-${phase}-${itemId}`);
-          const r = await spawnReviewer({
+          const r = await spawnReviewerWithResolvedModel({
             planDir,
             subagentDir: reviewerDir,
             cwd,
@@ -694,13 +743,17 @@ async function runPhaseWithQR(
       });
     }, 2000);
 
-    const fixResult = await phase.spawnFix({
-      planDir,
-      subagentDir: fixDir,
-      cwd,
-      extensionPath,
-      log,
-    });
+    const fixResult = await spawnFixWithResolvedModel(
+      phase.key as PhaseRow,
+      phase.spawnFix,
+      {
+        planDir,
+        subagentDir: fixDir,
+        cwd,
+        extensionPath,
+        log,
+      },
+    );
 
     clearInterval(fixPoll);
 

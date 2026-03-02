@@ -1,5 +1,6 @@
 import type { QRItem } from "../../qr/types.js";
 import type { StepGuidance } from "../../lib/step.js";
+import { buildPlanDocsContextTrigger } from "../../lib/conversation-trigger.js";
 
 export function formatFailuresXml(failures: ReadonlyArray<QRItem>): string {
   const items = failures
@@ -39,7 +40,7 @@ export function buildFixSystemPrompt(basePrompt: string, failureCount: number, t
   ].join("\n");
 }
 
-function step1(totalSteps: number, failuresXml: string): StepGuidance {
+function step1(totalSteps: number, failuresXml: string, conversationPath?: string): StepGuidance {
   const itemCount = totalSteps - 2;
   return {
     title: `Step 1/${totalSteps}: Understand QR Failures`,
@@ -47,6 +48,8 @@ function step1(totalSteps: number, failuresXml: string): StepGuidance {
       "QR FAILURES:",
       "",
       failuresXml,
+      "",
+      ...buildPlanDocsContextTrigger(conversationPath ?? "<planDir>/conversation.jsonl"),
       "",
       `There are ${itemCount} item(s). You will fix them one by one in steps 2-${totalSteps - 1}.`,
       "Inspect current docs state via koan_get_plan / koan_get_change.",
@@ -95,9 +98,9 @@ function finalStep(totalSteps: number): StepGuidance {
 export function fixStepGuidance(
   step: number,
   totalSteps: number,
-  opts?: { item?: QRItem; allFailuresXml?: string },
+  opts?: { item?: QRItem; allFailuresXml?: string; conversationPath?: string },
 ): StepGuidance {
-  if (step === 1) return step1(totalSteps, opts?.allFailuresXml ?? "");
+  if (step === 1) return step1(totalSteps, opts?.allFailuresXml ?? "", opts?.conversationPath);
   if (step === totalSteps) return finalStep(totalSteps);
   return itemStep(step, totalSteps, opts?.item);
 }

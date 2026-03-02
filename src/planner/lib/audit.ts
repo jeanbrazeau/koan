@@ -443,12 +443,6 @@ const KOAN_SHAPES: Record<string, ToolShape> = {
   koan_qr_get_item: { keys: ["phase", "id"], getter: true },
   koan_qr_list_items: { keys: ["phase", "status"], getter: true },
   koan_qr_summary: { keys: ["phase"], getter: true },
-
-  koan_store_context: {
-    keys: ["task_spec", "constraints", "entry_points", "rejected_alternatives", "current_understanding", "assumptions", "invisible_knowledge", "reference_docs"],
-    arrays: ["task_spec", "constraints", "entry_points", "rejected_alternatives", "current_understanding", "assumptions", "invisible_knowledge", "reference_docs"],
-    highValue: true,
-  },
 };
 
 // Reads the tail of events.jsonl and returns structured log entries.

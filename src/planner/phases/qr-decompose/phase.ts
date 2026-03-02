@@ -9,7 +9,6 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import {
   loadQRDecomposeSystemPrompt,
-  formatContextForDecompose,
   buildDecomposeSystemPrompt,
   decomposeStepGuidance,
   DECOMPOSE_STEP_NAMES,
@@ -17,7 +16,6 @@ import {
   type WorkPhaseKey,
 } from "./prompts.js";
 import { formatStep } from "../../lib/step.js";
-import type { ContextData } from "../../types.js";
 import { createLogger, type Logger } from "../../../utils/logger.js";
 import { EventLog } from "../../lib/audit.js";
 import { hookDispatch, unhookDispatch, type WorkflowDispatch, type PlanRef } from "../../lib/dispatch.js";
@@ -76,17 +74,6 @@ export class QRDecomposePhase {
   }
 
   async begin(): Promise<void> {
-    const contextPath = path.join(this.planDir, "context.json");
-    let contextData: ContextData;
-    try {
-      const raw = await fs.readFile(contextPath, "utf8");
-      contextData = JSON.parse(raw) as ContextData;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log("Failed to read context.json", { error: message });
-      return;
-    }
-
     let basePrompt: string;
     try {
       basePrompt = await loadQRDecomposeSystemPrompt();
@@ -96,9 +83,9 @@ export class QRDecomposePhase {
       return;
     }
 
-    const contextXml = formatContextForDecompose(contextData);
     this.state.systemPrompt = buildDecomposeSystemPrompt(basePrompt, this.workPhase);
-    this.state.step1Prompt = formatStep(decomposeStepGuidance(1, this.workPhase, contextXml));
+    const conversationPath = path.join(this.planDir, "conversation.jsonl");
+    this.state.step1Prompt = formatStep(decomposeStepGuidance(1, this.workPhase, conversationPath));
     this.state.active = true;
     this.state.step = 1;
     this.planRef.dir = this.planDir;

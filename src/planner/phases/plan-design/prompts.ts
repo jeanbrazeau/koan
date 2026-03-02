@@ -2,8 +2,8 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import type { ContextData } from "../../types.js";
 import type { StepGuidance } from "../../lib/step.js";
+import { buildPlanDesignContextTrigger } from "../../lib/conversation-trigger.js";
 
 export const STEP_NAMES: Record<1 | 2 | 3 | 4 | 5 | 6, string> = {
   1: "Task Analysis & Exploration Planning",
@@ -26,14 +26,6 @@ export async function loadPlanDesignSystemPrompt(): Promise<string> {
   }
 }
 
-export function formatContextForStep1(ctx: ContextData): string {
-  return [
-    "<planning_context>",
-    JSON.stringify(ctx, null, 2),
-    "</planning_context>",
-  ].join("\n");
-}
-
 export function buildPlanDesignSystemPrompt(basePrompt: string): string {
   return [
     basePrompt,
@@ -54,17 +46,18 @@ export function buildPlanDesignSystemPrompt(basePrompt: string): string {
   ].join("\n");
 }
 
-export function planDesignStepGuidance(step: 1 | 2 | 3 | 4 | 5 | 6, context?: string): StepGuidance {
+export function planDesignStepGuidance(
+  step: 1 | 2 | 3 | 4 | 5 | 6,
+  conversationPath?: string,
+): StepGuidance {
   switch (step) {
     case 1:
       return {
         title: "Step 1: Task Analysis & Exploration Planning",
         instructions: [
-          "PLANNING CONTEXT (from session):",
+          ...buildPlanDesignContextTrigger(conversationPath ?? "<planDir>/conversation.jsonl"),
           "",
-          context ?? "",
-          "",
-          "Parse the user's task description. Identify:",
+          "After absorbing the task intent, identify:",
           "  - What needs to change (files, modules, behavior)",
           "  - What exploration is needed (patterns, constraints, existing code)",
           "  - What directories/files are relevant",
@@ -72,12 +65,6 @@ export function planDesignStepGuidance(step: 1 | 2 | 3 | 4 | 5 | 6, context?: st
           "Read project context files to understand structure:",
           "  - Project root CLAUDE.md",
           "  - Subdirectory CLAUDE.md files in relevant areas",
-          "  - All paths in context.json reference_docs field (if any)",
-          "",
-          "CONTEXT.JSON CONTRACT: READ-ONLY.",
-          "  - context.json is owned by the session",
-          "  - You MUST NOT write, modify, or append to context.json",
-          "  - Your outputs go to plan.json (step 6) -- never context.json",
           "",
           "DO NOT write any files yet. Gather understanding for step 2.",
           "Record your analysis mentally for use in subsequent steps.",

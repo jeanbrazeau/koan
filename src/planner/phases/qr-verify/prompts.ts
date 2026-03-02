@@ -5,23 +5,16 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import type { ContextData } from "../../types.js";
 import type { QRItem } from "../../qr/types.js";
 import type { StepGuidance } from "../../lib/step.js";
+import {
+  buildPlanDesignContextTrigger,
+  buildPlanDocsContextTrigger,
+} from "../../lib/conversation-trigger.js";
 
 type WorkPhaseKey = "plan-design" | "plan-code" | "plan-docs";
 
 export type VerifyStep = 1 | 2 | 3;
-
-function formatContextXml(ctx: ContextData): string {
-  const fields = Object.entries(ctx)
-    .map(([key, values]) => {
-      const items = (values as string[]).map((v) => `    <item>${v}</item>`).join("\n");
-      return `  <${key}>\n${items}\n  </${key}>`;
-    })
-    .join("\n");
-  return `<planning_context>\n${fields}\n</planning_context>`;
-}
 
 function scopeGuidance(item: QRItem): string {
   const s = item.scope;
@@ -45,6 +38,19 @@ function scopeGuidance(item: QRItem): string {
     return `DECISION CHECK -- Use koan_get_decision(id='${decisionId}') to read the decision.`;
   }
   return "SCOPED CHECK -- Read the relevant section using plan getter tools.";
+}
+
+function phaseContextTrigger(
+  phase: WorkPhaseKey,
+  conversationPath?: string,
+): string[] {
+  if (phase === "plan-design") {
+    return buildPlanDesignContextTrigger(conversationPath ?? "<planDir>/conversation.jsonl");
+  }
+  if (phase === "plan-docs") {
+    return buildPlanDocsContextTrigger(conversationPath ?? "<planDir>/conversation.jsonl");
+  }
+  return [];
 }
 
 export async function loadQRVerifySystemPrompt(): Promise<string> {
@@ -75,7 +81,11 @@ export function buildVerifySystemPrompt(basePrompt: string, phase: WorkPhaseKey)
   ].join("\n");
 }
 
-export function buildContextStep(item: QRItem, contextData: ContextData, phase: WorkPhaseKey): StepGuidance {
+export function buildContextStep(
+  item: QRItem,
+  phase: WorkPhaseKey,
+  conversationPath?: string,
+): StepGuidance {
   return {
     title: "Step 1: CONTEXT",
     instructions: [
@@ -89,9 +99,8 @@ export function buildContextStep(item: QRItem, contextData: ContextData, phase: 
       `  <severity>${item.severity}</severity>`,
       "</qr_item_to_verify>",
       "",
-      "PLANNING CONTEXT (reference for semantic validation):",
-      formatContextXml(contextData),
-      "",
+      ...phaseContextTrigger(phase, conversationPath),
+      ...(phase === "plan-code" ? [] : [""]),
       "Understand the check and required evidence before analyzing.",
     ],
   };

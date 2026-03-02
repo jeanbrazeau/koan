@@ -1,11 +1,10 @@
-// Workflow tool registration: koan_complete_step and koan_store_context.
+// Workflow tool registration: koan_complete_step.
 // Tools register once at init; execute callbacks read from the mutable
 // dispatch at call time, decoupling static registration from phase routing.
 
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-import { ContextStoreSchema } from "./context-store.js";
 import { createLogger } from "../../utils/logger.js";
 import type { WorkflowDispatch } from "../lib/dispatch.js";
 
@@ -53,33 +52,6 @@ export function registerWorkflowTools(
       }
       return {
         content: [{ type: "text" as const, text: r.prompt ?? "Step complete." }],
-        details: undefined,
-      };
-    },
-  });
-
-  // -- koan_store_context --
-  pi.registerTool({
-    name: "koan_store_context",
-    label: "Store planning context",
-    description: [
-      "Store structured planning context.",
-      "DO NOT call this tool until the step instructions explicitly tell you to.",
-      "Each field is a string array -- encode structure within strings, not as nested objects.",
-    ].join(" "),
-    parameters: ContextStoreSchema,
-    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      if (!dispatch.onStoreContext) {
-        throw new Error("Context capture is not active.");
-      }
-      const r = await dispatch.onStoreContext(params, ctx);
-      if (!r.ok) {
-        log("Context store rejected", { errors: r.errors });
-        throw new Error(r.message);
-      }
-      log("Context stored");
-      return {
-        content: [{ type: "text" as const, text: r.message }],
         details: undefined,
       };
     },

@@ -2,7 +2,6 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import type { ContextData } from "../../types.js";
 import type { StepGuidance } from "../../lib/step.js";
 
 export const STEP_NAMES: Record<1 | 2 | 3 | 4, string> = {
@@ -20,10 +19,6 @@ export async function loadPlanCodeSystemPrompt(): Promise<string> {
   } catch {
     throw new Error(`Developer prompt not found at ${promptPath}`);
   }
-}
-
-export function formatContextForStep1(ctx: ContextData): string {
-  return ["<planning_context>", JSON.stringify(ctx, null, 2), "</planning_context>"].join("\n");
 }
 
 export function buildPlanCodeSystemPrompt(basePrompt: string): string {
@@ -47,16 +42,12 @@ export function buildPlanCodeSystemPrompt(basePrompt: string): string {
   ].join("\n");
 }
 
-export function planCodeStepGuidance(step: 1 | 2 | 3 | 4, context?: string): StepGuidance {
+export function planCodeStepGuidance(step: 1 | 2 | 3 | 4): StepGuidance {
   switch (step) {
     case 1:
       return {
         title: "Step 1: Intent Coverage Analysis",
         instructions: [
-          "PLANNING CONTEXT (from session):",
-          "",
-          context ?? "",
-          "",
           "Use koan_get_plan to inspect milestones and code_intents.",
           "Build a checklist of intents that need code_changes.",
           "Record target files and affected functions per intent.",

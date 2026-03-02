@@ -2,8 +2,8 @@ import { promises as fs } from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 
-import type { ContextData } from "../../types.js";
 import type { StepGuidance } from "../../lib/step.js";
+import { buildPlanDocsContextTrigger } from "../../lib/conversation-trigger.js";
 
 export const STEP_NAMES: Record<1 | 2 | 3 | 4 | 5 | 6, string> = {
   1: "Extract Documentation Context",
@@ -22,10 +22,6 @@ export async function loadPlanDocsSystemPrompt(): Promise<string> {
   } catch {
     throw new Error(`Technical-writer prompt not found at ${promptPath}`);
   }
-}
-
-export function formatContextForStep1(ctx: ContextData): string {
-  return ["<planning_context>", JSON.stringify(ctx, null, 2), "</planning_context>"].join("\n");
 }
 
 export function buildPlanDocsSystemPrompt(basePrompt: string): string {
@@ -50,18 +46,20 @@ export function buildPlanDocsSystemPrompt(basePrompt: string): string {
   ].join("\n");
 }
 
-export function planDocsStepGuidance(step: 1 | 2 | 3 | 4 | 5 | 6, context?: string): StepGuidance {
+export function planDocsStepGuidance(
+  step: 1 | 2 | 3 | 4 | 5 | 6,
+  conversationPath?: string,
+): StepGuidance {
   switch (step) {
     case 1:
       return {
         title: "Step 1: Extract Documentation Context",
         instructions: [
-          "PLANNING CONTEXT (from session):",
-          "",
-          context ?? "",
-          "",
           "Use koan_get_plan to review decisions, constraints, risks, and milestones.",
           "Capture decision IDs that should be reflected in documentation rationale.",
+          "",
+          ...buildPlanDocsContextTrigger(conversationPath ?? "<planDir>/conversation.jsonl"),
+          "",
           "This step is read-only.",
         ],
       };

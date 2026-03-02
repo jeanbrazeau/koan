@@ -1,21 +1,16 @@
 // Plan-code phase -- 4-step developer workflow converting code intents
 // to concrete code_changes diffs in plan.json.
 
-import { promises as fs } from "node:fs";
-import * as path from "node:path";
-
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import { loadAndValidatePlanForPhase } from "../../plan/validate.js";
 import {
   loadPlanCodeSystemPrompt,
-  formatContextForStep1,
   buildPlanCodeSystemPrompt,
   planCodeStepGuidance,
   STEP_NAMES,
 } from "./prompts.js";
 import { formatStep } from "../../lib/step.js";
-import type { ContextData } from "../../types.js";
 import { createLogger, type Logger } from "../../../utils/logger.js";
 import { EventLog } from "../../lib/audit.js";
 import { hookDispatch, unhookDispatch, type WorkflowDispatch, type PlanRef } from "../../lib/dispatch.js";
@@ -27,7 +22,6 @@ interface PlanCodeState {
   active: boolean;
   step: PlanCodeStep;
   step1Prompt: string | null;
-  contextData: ContextData | null;
   systemPrompt: string | null;
 }
 
@@ -62,7 +56,6 @@ export class PlanCodePhase {
       active: false,
       step: 1,
       step1Prompt: null,
-      contextData: null,
       systemPrompt: null,
     };
 
@@ -70,16 +63,6 @@ export class PlanCodePhase {
   }
 
   async begin(): Promise<void> {
-    const contextPath = path.join(this.planDir, "context.json");
-    try {
-      const raw = await fs.readFile(contextPath, "utf8");
-      this.state.contextData = JSON.parse(raw) as ContextData;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log("Failed to read context.json", { error: message });
-      return;
-    }
-
     let basePrompt: string;
     try {
       basePrompt = await loadPlanCodeSystemPrompt();
@@ -89,9 +72,8 @@ export class PlanCodePhase {
       return;
     }
 
-    const contextXml = formatContextForStep1(this.state.contextData);
     this.state.systemPrompt = buildPlanCodeSystemPrompt(basePrompt);
-    this.state.step1Prompt = formatStep(planCodeStepGuidance(1, contextXml));
+    this.state.step1Prompt = formatStep(planCodeStepGuidance(1));
     this.state.active = true;
     this.state.step = 1;
     this.planRef.dir = this.planDir;

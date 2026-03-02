@@ -7,7 +7,6 @@ import * as path from "node:path";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import { formatStep } from "../../lib/step.js";
-import type { ContextData } from "../../types.js";
 import { createLogger, type Logger } from "../../../utils/logger.js";
 import { EventLog } from "../../lib/audit.js";
 import { hookDispatch, unhookDispatch, type WorkflowDispatch, type PlanRef } from "../../lib/dispatch.js";
@@ -88,17 +87,6 @@ export class QRVerifyPhase {
       return;
     }
 
-    const contextPath = path.join(this.planDir, "context.json");
-    let contextData: ContextData;
-    try {
-      const raw = await fs.readFile(contextPath, "utf8");
-      contextData = JSON.parse(raw) as ContextData;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log("Failed to read context.json", { error: message });
-      return;
-    }
-
     const qrPath = path.join(this.planDir, `qr-${this.workPhase}.json`);
     let qrFile: QRFile;
     try {
@@ -127,7 +115,8 @@ export class QRVerifyPhase {
     }
 
     this.state.systemPrompt = buildVerifySystemPrompt(basePrompt, this.workPhase);
-    this.state.step1Prompt = formatStep(buildContextStep(item, contextData, this.workPhase));
+    const conversationPath = path.join(this.planDir, "conversation.jsonl");
+    this.state.step1Prompt = formatStep(buildContextStep(item, this.workPhase, conversationPath));
     this.state.active = true;
     this.state.step = 1;
     this.planRef.dir = this.planDir;

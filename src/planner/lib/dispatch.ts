@@ -2,10 +2,6 @@
 // Decouples static tool registration (init-time) from dynamic phase routing (runtime).
 // All mutable slots are null by default; phases hook/unhook on begin/end.
 
-import type { ExtensionContext } from "@mariozechner/pi-coding-agent";
-
-import type { ContextToolResult } from "../tools/context-store.js";
-
 // -- Result types --
 
 export interface StepResult {
@@ -18,13 +14,10 @@ export interface StepResult {
 
 export interface WorkflowDispatch {
   onCompleteStep: ((thoughts?: string) => StepResult | Promise<StepResult>) | null;
-  onStoreContext:
-    | ((payload: unknown, ctx: ExtensionContext) => Promise<ContextToolResult>)
-    | null;
 }
 
 export function createDispatch(): WorkflowDispatch {
-  return { onCompleteStep: null, onStoreContext: null };
+  return { onCompleteStep: null };
 }
 
 // Decouples tool registration (init-time, before _buildRuntime) from

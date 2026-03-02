@@ -23,6 +23,7 @@ export interface SpawnWorkOptions {
   cwd: string;
   extensionPath: string;
   initialPrompt?: string;
+  modelOverride?: string;
   log?: Logger;
 }
 
@@ -32,6 +33,7 @@ export interface SpawnFixOptions {
   cwd: string;
   extensionPath: string;
   fixPhase: WorkPhaseKey;
+  modelOverride?: string;
   log?: Logger;
 }
 
@@ -41,6 +43,7 @@ export interface SpawnQRDecomposerOptions {
   cwd: string;
   extensionPath: string;
   phase: WorkPhaseKey;
+  modelOverride?: string;
   log?: Logger;
 }
 
@@ -51,17 +54,26 @@ export interface SpawnReviewerOptions {
   extensionPath: string;
   phase: WorkPhaseKey;
   itemId: string;
+  modelOverride?: string;
   log?: Logger;
 }
 
-function spawnSubagent(
+interface SpawnSubagentOpts {
+  planDir: string;
+  subagentDir: string;
+  cwd: string;
+  extensionPath: string;
+  extraFlags?: string[];
+  modelOverride?: string;
+}
+
+export function buildSpawnArgs(
   role: string,
   phase: string,
   prompt: string,
-  opts: { planDir: string; subagentDir: string; cwd: string; extensionPath: string; extraFlags?: string[] },
-  log: Logger,
-): Promise<SubagentResult> {
-  const args = [
+  opts: SpawnSubagentOpts,
+): string[] {
+  return [
     "-p",
     "-e", opts.extensionPath,
     "--koan-role", role,
@@ -69,8 +81,19 @@ function spawnSubagent(
     "--koan-plan-dir", opts.planDir,
     "--koan-subagent-dir", opts.subagentDir,
     ...(opts.extraFlags ?? []),
+    ...(opts.modelOverride ? ["--model", opts.modelOverride] : []),
     prompt,
   ];
+}
+
+function spawnSubagent(
+  role: string,
+  phase: string,
+  prompt: string,
+  opts: SpawnSubagentOpts,
+  log: Logger,
+): Promise<SubagentResult> {
+  const args = buildSpawnArgs(role, phase, prompt, opts);
 
   log(`Spawning ${role} subagent`, { planDir: opts.planDir, subagentDir: opts.subagentDir, phase });
 

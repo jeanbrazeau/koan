@@ -16,6 +16,8 @@
 // orchestrator decides whether to re-run QR -- the fix phase does not
 // know about iterations or severity escalation.
 
+import * as path from "node:path";
+
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import { loadAndValidatePlan } from "../../plan/validate.js";
@@ -105,8 +107,9 @@ export class PlanDesignFixPhase {
       this.failures.length,
       totalSteps,
     );
+    const conversationPath = path.join(this.planDir, "conversation.jsonl");
     this.state.step1Prompt = formatStep(
-      fixStepGuidance(1, totalSteps, { allFailuresXml: failuresXml }),
+      fixStepGuidance(1, totalSteps, { allFailuresXml: failuresXml, conversationPath }),
     );
     this.state.active = true;
     this.state.step = 1;

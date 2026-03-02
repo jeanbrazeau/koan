@@ -99,7 +99,6 @@ export const PLAN_MUTATION_TOOLS: ReadonlySet<string> = new Set([
 // updating the permissions map.
 export const PHASE_PERMISSIONS: ReadonlyMap<string, ReadonlySet<string>> =
   new Map([
-    ["context-capture", new Set(["koan_store_context", "koan_complete_step"])],
     [
       "plan-design",
       new Set([

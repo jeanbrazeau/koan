@@ -1,7 +1,6 @@
 // Plan-docs phase -- 6-step technical writer workflow producing doc artifacts
 // (doc_diff/comments/diagram/readme) in plan.json.
 
-import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -9,13 +8,11 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { loadAndValidatePlanForPhase } from "../../plan/validate.js";
 import {
   loadPlanDocsSystemPrompt,
-  formatContextForStep1,
   buildPlanDocsSystemPrompt,
   planDocsStepGuidance,
   STEP_NAMES,
 } from "./prompts.js";
 import { formatStep } from "../../lib/step.js";
-import type { ContextData } from "../../types.js";
 import { createLogger, type Logger } from "../../../utils/logger.js";
 import { EventLog } from "../../lib/audit.js";
 import { hookDispatch, unhookDispatch, type WorkflowDispatch, type PlanRef } from "../../lib/dispatch.js";
@@ -27,7 +24,6 @@ interface PlanDocsState {
   active: boolean;
   step: PlanDocsStep;
   step1Prompt: string | null;
-  contextData: ContextData | null;
   systemPrompt: string | null;
 }
 
@@ -62,7 +58,6 @@ export class PlanDocsPhase {
       active: false,
       step: 1,
       step1Prompt: null,
-      contextData: null,
       systemPrompt: null,
     };
 
@@ -70,16 +65,6 @@ export class PlanDocsPhase {
   }
 
   async begin(): Promise<void> {
-    const contextPath = path.join(this.planDir, "context.json");
-    try {
-      const raw = await fs.readFile(contextPath, "utf8");
-      this.state.contextData = JSON.parse(raw) as ContextData;
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      this.log("Failed to read context.json", { error: message });
-      return;
-    }
-
     let basePrompt: string;
     try {
       basePrompt = await loadPlanDocsSystemPrompt();
@@ -89,9 +74,9 @@ export class PlanDocsPhase {
       return;
     }
 
-    const contextXml = formatContextForStep1(this.state.contextData);
     this.state.systemPrompt = buildPlanDocsSystemPrompt(basePrompt);
-    this.state.step1Prompt = formatStep(planDocsStepGuidance(1, contextXml));
+    const conversationPath = path.join(this.planDir, "conversation.jsonl");
+    this.state.step1Prompt = formatStep(planDocsStepGuidance(1, conversationPath));
     this.state.active = true;
     this.state.step = 1;
     this.planRef.dir = this.planDir;
