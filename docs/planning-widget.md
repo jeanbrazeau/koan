@@ -39,7 +39,7 @@ The goal is to keep a long-running (1-2h) planning session readable in real time
 
 ### 4) QR is a first-class workflow section
 - QR renders inline in detail pane with divider rule (no detached mini-card border).
-- Visible for Plan design (and contractually for Plan execution), hidden only for Context gathering.
+- Visible during Plan design, Plan code, and Plan docs (and contractually Plan execution).
 - QR starts directly in the **`execute`** stage for iteration 1 (non-fix mode); fix iterations reuse the same stage model.
 - QR block is normalized to a fixed structure: header, phase rail, counters, divider.
 - Metadata is budgeted to **64 visible chars max** and progressively compacted (`phase/iter/mode` -> `iN/M`, `d/p/f/t`) when width is constrained.
@@ -58,17 +58,17 @@ The goal is to keep a long-running (1-2h) planning session readable in real time
 ## Layout Overview
 ```
 ┌────────────────────────────────────────────────────────────────────────────────┐
-│ Planning · Context gathering · CURRENT                                  12m 22s │
+│ Planning · Plan design · CURRENT                                        12m 22s │
 │                                                                                │
-│ ● Context gathering            Current step                                    │
-│ │   DONE                       Step 2/6: Codebase Exploration                  │
+│ ● Plan design                 Current step                                    │
+│ │   CURRENT                    Step 2/6: Codebase Exploration                  │
 │ │                              read internal/rules/CLAUDE.md · 17L/1.2k       │
-│ ● Plan design                 QR | phase:execute · iter 1/6 initial            │
-│ │   CURRENT                    Execute → QR decompose → QR verify              │
-│ ○ Plan code                   done:0/- pass:0 fail:0 todo:-                    │
-│ │   UPCOMING                   Subagents queued:0 active:1 done:0              │
-│ ○ Plan docs                   Plan ID    : <plan-id>                           │
-│     UPCOMING                  Agent      : architect                            │
+│ ○ Plan code                   QR | phase:execute · iter 1/6 initial            │
+│ │   UPCOMING                   Execute → QR decompose → QR verify              │
+│ ○ Plan docs                   done:0/- pass:0 fail:0 todo:-                    │
+│     UPCOMING                  Subagents queued:0 active:1 done:0              │
+│                               Plan ID    : <plan-id>                           │
+│                               Agent      : architect                            │
 │                               Model      : openai-codex/gpt-5.3-codex          │
 │────────────────────────────────────────────────────────────────────────────────│
 │ Latest log                                                                     │
@@ -107,7 +107,7 @@ The goal is to keep a long-running (1-2h) planning session readable in real time
 Apply in order until it fits:
 1. `CURRENT` -> `CUR`, `UPCOMING` -> `UP`, `DONE` unchanged.
 2. Drop status chunk (keep `Planning · <active phase>`).
-3. Abbreviate known phases (`Context gathering` -> `Ctx gather`, `Plan design` -> `Design`, `Plan code` -> `Code`, `Plan docs` -> `Docs`).
+3. Abbreviate known phases (`Plan design` -> `Design`, `Plan code` -> `Code`, `Plan docs` -> `Docs`).
 4. Ellipsize active phase tail (`Planning · <phase…>`).
 
 ### Metadata table alignment

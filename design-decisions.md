@@ -46,20 +46,20 @@ from tools: always `throw new Error(msg)` -- never `return { isError: true }`.
 
 ### AD-1: Two LLM Interaction Levels
 
-- `sendUserMessage()` in parent session: ONLY for context capture. The
-  session LLM is the only entity with the conversational understanding.
-  A fresh LLM reading a serialized transcript loses implicit context.
 - `spawn()` subagent: for all substantial work (architect, developer,
   writer, QR decomposer, QR reviewer).
 - `complete()` from pi-ai: NOT used in koan. No direct LLM calls
   without agent loop.
+- `sendUserMessage()` in parent session: NOT used. Planning is triggered via
+  the `koan_plan` MCP tool; conversation context is captured via `exportConversation()`.
 
 ### AD-2: Self-Loading Extension Pattern
 
 Same extension file (extensions/koan.ts) serves both modes:
 
-- **Parent mode** (no --koan-role flag): registers /koan command, tools,
-  and dispatch. Zero overhead in normal pi sessions.
+- **Parent mode** (no --koan-role flag): registers the `koan_plan` MCP tool,
+  `/koan-execute`, `/koan-status` commands, and workflow dispatch. Zero overhead
+  in normal pi sessions.
 - **Subagent mode** (--koan-role present): activates role-specific event
   hooks (state machine, tool enforcement, step prompts).
 
@@ -78,8 +78,8 @@ to ensure one-shot dispatch.
 
 ALL step transitions use the koan_complete_step registered tool. The LLM
 calls koan_complete_step -> tool execute() returns next step's prompt.
-This works in both -p mode and interactive mode. sendUserMessage()
-is only used for the initial trigger (/koan plan).
+This works in both -p mode and interactive mode. `sendUserMessage()` is not
+used; planning is triggered by the LLM invoking the `koan_plan` MCP tool.
 
 **KEY CORRECTION**: Early design (Feb 10) considered turn_end +
 agent_end + sendUserMessage() chaining for step transitions. This was
@@ -110,8 +110,9 @@ koan_complete_step now" without emitting an actual tool_call block.
 Settled names (corrected from earlier iterations):
 
 - `koan_complete_step` (was koan_next_step -- renamed to accept `thoughts`)
-- `koan_store_context` (was koan_finalize_context)
-- `koan_store_plan` was later REMOVED entirely (see AD-14)
+- `koan_store_context` — REMOVED (was koan_finalize_context; removed with context-capture phase)
+- `koan_store_plan` — REMOVED (see AD-14)
+- `koan_plan` — MCP tool replacing the former `/koan plan` slash command
 - Prompts use "instructions" not "actions"
 
 ### AD-7: invoke_after Pattern Is Critical
@@ -132,11 +133,10 @@ have zero friction.
 
 ### AD-8: Store Tools Need "Not Yet" Guidance
 
-koan_store_context (and formerly koan_store_plan) are always registered
-and visible to the LLM even in steps where they should NOT be called.
-Their tool descriptions include "DO NOT call this tool until the step
-instructions explicitly tell you to." This creates a prohibition/activation
-pattern with step prompts.
+(koan_store_context was removed with the context-capture phase; koan_store_plan
+was removed earlier — see AD-14.) This pattern remains relevant for any
+future store-style tools: tool description should include "DO NOT call this tool
+until the step instructions explicitly tell you to."
 
 ### AD-9: Subagent Progress Tracking
 
@@ -158,18 +158,13 @@ with rich TypeBox descriptions are sufficient for the LLM to discover
 the schema through tool definitions. This is the "most elegant" approach
 per user preference.
 
-### AD-12: Context Capture Phases
+### AD-12: Context Capture Phases (REMOVED)
 
-Three sub-phases within context capture:
-
-1. **Drafting**: LLM reflects on conversation. MAY use tools for "high
-   value" targeted exploration (confirm API signature, check file existence).
-   DO NOT explore speculatively. Confidence tagging: HIGH (direct evidence)
-   vs LOW (extrapolating).
-2. **Verifying**: Self-check. Completeness, accuracy, phrasing for
-   downstream agents. No tools except koan_complete_step.
-3. **Refining**: Pure tool invocation (koan_store_context). Up to 3
-   attempts with validation feedback.
+The context-capture phase (draft/verify/refine sub-phases, koan_store_context
+tool, context.json artifact) was removed. The parent conversation is now
+exported as `conversation.jsonl` at `koan_plan` tool invocation. Phases that
+need session context read the file directly via the `Read` tool. See
+`src/planner/conversation.ts` for the export implementation.
 
 ### AD-13: Default-Deny Tool Permissions
 
@@ -198,10 +193,9 @@ needs evidence that each tool call produces results.
 
 ### AD-15: Module Ownership
 
-- Context-capture prompts belong to the "orchestrator" (session.ts /
-  context-capture.ts)
 - Plan-design prompts belong to the "architect" (plan-design.ts /
   prompts/plan-design.ts)
+- Conversation export belongs to session.ts / conversation.ts
 - These are organizational decisions about which module owns which prompts
 
 ### AD-16: 6-Step Architect Workflow (plan-design execute)
@@ -250,7 +244,7 @@ Step 6: plan mutation tools unlocked.
 - Chosen on Feb 25 2026 via follow-up deck (`Inline Integrated Section + Divider`).
 - Rationale: QR is the acceptance loop, not optional telemetry. Rendering it as an inline first-class section prevents the "detached widget" feel and matches how users reason about plan quality over time.
 - Contract:
-  - QR is visible during Plan design (and contractually Plan execution), hidden only for Context gathering.
+  - QR is visible during Plan design, Plan code, and Plan docs (and contractually Plan execution).
   - Iteration 1 enters `execute` immediately (same stage model as fix iterations); there is no separate `initializing` stage.
   - Section includes: phase + iter/mode metadata, phase rail, and counters (`done/total/pass/fail/todo`) in a compact metadata block.
   - Visual treatment uses inline sectioning + divider, not a nested bordered mini-card.
@@ -273,9 +267,9 @@ Step 6: plan mutation tools unlocked.
 
 ### WorkflowDispatch (dispatch pattern)
 
-Workflow tools (koan_complete_step, koan_store_context) are registered once
-at init. Their execute() callbacks read from a mutable dispatch object.
-Phases hook/unhook dispatch slots at activation/deactivation time.
+Workflow tools (koan_complete_step) are registered once at init. Their
+execute() callbacks read from a mutable dispatch object. Phases hook/unhook
+dispatch slots at activation/deactivation time.
 
 hookDispatch() throws if a slot is already occupied -- prevents silent
 misrouting when two phases try to claim the same tool.
@@ -283,7 +277,7 @@ misrouting when two phases try to claim the same tool.
 ### PlanRef (mutable reference)
 
 All plan mutation tools share a mutable `{ dir: string | null }` set
-when /koan plan creates a directory or when --koan-plan-dir is received.
+when koan_plan tool creates a directory or when --koan-plan-dir is received.
 Decouples tool registration (init-time) from directory creation (runtime).
 
 ### Pi Registers Tools at \_buildRuntime()
@@ -312,7 +306,7 @@ at init; phases restrict access via tool_call blocking at runtime.
 
 ### BUG-1: LLM Conflates Tool Instructions with Plan Content
 
-In context capture, the LLM captured tool usage instructions as
+In the former context-capture phase, the LLM captured tool usage instructions as
 constraints (e.g. "Use read tool before modifying files; edit for
 surgical changes"). These are irrelevant developer instructions, not
 task constraints. Solution: prompts explicitly state "Only include
@@ -383,13 +377,20 @@ koan_qr_get_item, koan_qr_list_items, koan_qr_summary.
 
 ---
 
-## Current Implementation State (Feb 13 2026)
+## Current Implementation State (Mar 1 2026)
 
 Implemented:
 
 - [x] Extension entry point with dual-mode detection
-- [x] Context capture (3-phase: draft/verify/refine)
+- [x] koan_plan MCP tool (replaces /koan plan slash command)
+- [x] Conversation export to conversation.jsonl (replaces context-capture phase)
 - [x] Plan-design architect subagent (6-step workflow)
+- [x] Developer role (plan-code phase)
+- [x] Technical writer role (plan-docs phase)
+- [x] QR decompose subagent
+- [x] QR verify subagent (parallel pool, concurrency 6)
+- [x] QR gate routing + fix loop (up to MAX_FIX_ITERATIONS)
+- [x] Fix mode (architect/developer/writer fix subagents)
 - [x] 44+ plan mutation/getter tools with TypeBox schemas
 - [x] Default-deny tool permissions (registry.ts)
 - [x] WorkflowDispatch + PlanRef patterns
@@ -399,12 +400,6 @@ Implemented:
 
 Not yet implemented:
 
-- [ ] Developer role (plan-code phase)
-- [ ] Technical writer role (plan-docs phase)
-- [ ] QR decompose subagent
-- [ ] QR verify subagent (parallel)
-- [ ] QR gate routing
-- [ ] Fix mode (re-spawn with QR failure report)
 - [ ] State persistence (appendEntry + session_start restore)
 - [ ] Plan execution workflow (milestone execution)
-- [ ] /koan execute command
+- [ ] /koan-execute command
