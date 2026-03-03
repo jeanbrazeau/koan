@@ -31,6 +31,17 @@ export function createPlanRef(): PlanRef {
   return { dir: null };
 }
 
+// Decouples tool registration (init-time) from subagent directory
+// resolution (runtime, after flags available). Same indirection
+// pattern as PlanRef.
+export interface SubagentRef {
+  dir: string | null;
+}
+
+export function createSubagentRef(): SubagentRef {
+  return { dir: null };
+}
+
 // Sets a dispatch slot. Throws if the slot is already occupied --
 // prevents silent misrouting when two phases attempt to claim
 // the same tool.

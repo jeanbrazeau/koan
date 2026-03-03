@@ -103,6 +103,7 @@ export const PHASE_PERMISSIONS: ReadonlyMap<string, ReadonlySet<string>> =
       "plan-design",
       new Set([
         "koan_complete_step",
+        "koan_ask_question",
         ...PLAN_GETTER_TOOLS_LIST,
         ...PLAN_SETTER_TOOLS_LIST,
         ...PLAN_DESIGN_ENTITY_TOOLS,
@@ -112,6 +113,7 @@ export const PHASE_PERMISSIONS: ReadonlyMap<string, ReadonlySet<string>> =
       "plan-code",
       new Set([
         "koan_complete_step",
+        "koan_ask_question",
         ...PLAN_GETTER_TOOLS_LIST,
         ...PLAN_CHANGE_TOOLS_LIST,
         "koan_set_intent",
@@ -121,6 +123,7 @@ export const PHASE_PERMISSIONS: ReadonlyMap<string, ReadonlySet<string>> =
       "plan-docs",
       new Set([
         "koan_complete_step",
+        "koan_ask_question",
         ...PLAN_GETTER_TOOLS_LIST,
         "koan_set_change_doc_diff",
         "koan_set_change_comments",

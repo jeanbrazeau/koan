@@ -5,7 +5,7 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
-import type { AgentToolResult, ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@mariozechner/pi-coding-agent";
+import type { AgentToolResult, ExtensionAPI, ExtensionCommandContext, ExtensionContext, ExtensionUIContext } from "@mariozechner/pi-coding-agent";
 
 import { exportConversation } from "./conversation.js";
 import { createInitialState, initializePlanState, type WorkflowState } from "./state.js";
@@ -25,7 +25,7 @@ import {
 } from "./subagent.js";
 import { createLogger, setLogDir, type Logger } from "../utils/logger.js";
 import { createSubagentDir } from "../utils/progress.js";
-import { readProjection, readRecentLogs, type Projection } from "./lib/audit.js";
+import { readProjection, readRecentLogs, type Projection, type LogLine } from "./lib/audit.js";
 import type { WorkflowDispatch, PlanRef } from "./lib/dispatch.js";
 import { pool } from "./lib/pool.js";
 import type { QRFile } from "./qr/types.js";
@@ -38,6 +38,17 @@ import {
   type SpawnContext,
 } from "./model-resolver.js";
 import type { PhaseRow } from "./model-phase.js";
+import {
+  readIpcFile,
+  writeIpcFile,
+  createAskResponse,
+  createCancelledResponse,
+  type IpcFile,
+  type IpcResponse,
+} from "./lib/ipc.js";
+import { askSingleQuestionWithInlineNote } from "./ui/ask/ask-inline-ui.js";
+import { askQuestionsWithTabs } from "./ui/ask/ask-tabs-ui.js";
+import type { AskQuestion } from "./ui/ask/ask-logic.js";
 
 type WorkPhaseKey = "plan-design" | "plan-code" | "plan-docs";
 
@@ -170,6 +181,107 @@ export async function spawnReviewerWithResolvedModel(
   return await spawnFn({ ...opts, modelOverride });
 }
 
+// Routes an IpcFile ask request to the appropriate UI component and returns
+// an IpcResponse. On any exception from the UI layer, the caller's catch
+// block writes a cancelled response so the subagent unblocks.
+async function handleAskRequest(
+  ui: ExtensionUIContext,
+  ipc: IpcFile,
+): Promise<IpcResponse> {
+  const { request } = ipc;
+  const { questions } = request.payload;
+  const questionsAsAsk = questions as AskQuestion[];
+
+  if (questions.length === 1 && !questions[0].multi) {
+    const selection = await askSingleQuestionWithInlineNote(ui, questionsAsAsk[0]);
+    if (selection.selectedOptions.length === 0 && !selection.customInput) {
+      return createCancelledResponse(request.id);
+    }
+    const answer: { id: string; selectedOptions: string[]; customInput?: string } = {
+      id: questions[0].id,
+      selectedOptions: selection.selectedOptions,
+    };
+    if (selection.customInput !== undefined) {
+      answer.customInput = selection.customInput;
+    }
+    return createAskResponse(request.id, { answers: [answer] });
+  }
+
+  const tabResult = await askQuestionsWithTabs(ui, questionsAsAsk);
+  if (tabResult.cancelled) {
+    return createCancelledResponse(request.id);
+  }
+
+  const answers = questions.map((q, i) => {
+    const sel = tabResult.selections[i] ?? { selectedOptions: [] };
+    const answer: { id: string; selectedOptions: string[]; customInput?: string } = {
+      id: q.id,
+      selectedOptions: sel.selectedOptions,
+    };
+    if (sel.customInput !== undefined) {
+      answer.customInput = sel.customInput;
+    }
+    return answer;
+  });
+
+  return createAskResponse(request.id, { answers });
+}
+
+// Encapsulates the poll-with-request-detection pattern used by both
+// the work poll loop and the fix poll loop. Returns a setInterval ID.
+function pollWithIpcDetection(
+  subagentDir: string,
+  widget: WidgetController | null,
+  ui: ExtensionUIContext | null,
+  stepPrefix: string,
+  updateFromProjection: (p: Projection, logs: LogLine[]) => void,
+): ReturnType<typeof setInterval> {
+  let pendingRequestId: string | null = null;
+
+  return setInterval(async () => {
+    const [projection, logs] = await Promise.all([
+      readProjection(subagentDir),
+      readRecentLogs(subagentDir),
+    ]);
+    if (projection) {
+      updateFromProjection(projection, logs);
+    }
+
+    // IPC request detection — skip if already handling a request or no UI
+    if (pendingRequestId || !ui) return;
+
+    const ipc = await readIpcFile(subagentDir);
+    if (!ipc || !ipc.request || ipc.response !== null) return;
+
+    pendingRequestId = ipc.request.id;
+    try {
+      widget?.update({
+        step: `${stepPrefix}: waiting for user input...`,
+        activity: ipc.request.payload.questions[0]?.question ?? "",
+      });
+
+      const response = await handleAskRequest(ui, ipc);
+      const updated: IpcFile = { request: ipc.request, response };
+      await writeIpcFile(subagentDir, updated);
+    } catch {
+      // On error, write cancelled response so subagent unblocks.
+      // The inner try-catch guards against I/O failures during error
+      // recovery — an unguarded throw here would propagate as an
+      // unhandled async rejection in the setInterval callback,
+      // crashing the parent process (Node.js ≥15 default behavior).
+      try {
+        const cancelled = createCancelledResponse(ipc.request.id);
+        await writeIpcFile(subagentDir, { request: ipc.request, response: cancelled });
+      } catch {
+        // I/O failed during error recovery; subagent remains blocked
+        // until parent terminates. No further action possible.
+      }
+    } finally {
+      pendingRequestId = null;
+    }
+  }, 2000);
+}
+
 export function createSession(pi: ExtensionAPI, dispatch: WorkflowDispatch, planRef: PlanRef): Session {
   const state: WorkflowState = createInitialState();
   const log = createLogger("Session");
@@ -208,6 +320,7 @@ export function createSession(pi: ExtensionAPI, dispatch: WorkflowDispatch, plan
       try {
         const planDir = planInfo.directory;
         const extensionPath = path.resolve(import.meta.dirname, "../../extensions/koan.ts");
+        const ui = ctx.hasUI ? ctx.ui : null;
 
         // widgetIndex 0=design, 1=code, 2=docs
         const phases: PhaseRunConfig[] = [
@@ -247,6 +360,7 @@ export function createSession(pi: ExtensionAPI, dispatch: WorkflowDispatch, plan
             state,
             log,
             widget,
+            ui,
           );
 
           phaseSummaries.push(`${phase.label}: ${result.summary}`);
@@ -310,6 +424,7 @@ async function runPlanningPhase(
   state: WorkflowState,
   log: Logger,
   widget: WidgetController | null,
+  ui: ExtensionUIContext | null,
 ): Promise<QRBlockResult> {
   state.phase = phaseRunningState(phase.key);
 
@@ -332,16 +447,20 @@ async function runPlanningPhase(
 
   const subagentDir = await createSubagentDir(planDir, `${phase.role}-${phase.key}`);
 
-  const pollInterval = setInterval(async () => {
-    const [projection, logs] = await Promise.all([readProjection(subagentDir), readRecentLogs(subagentDir)]);
-    if (!projection) return;
-    widget?.update({
-      step: `${phase.key}: ${projection.stepName}`,
-      activity: projection.lastAction ?? "",
-      logLines: logs,
-      ...singleSubagentFromProjection(projection),
-    });
-  }, 2000);
+  const pollInterval = pollWithIpcDetection(
+    subagentDir,
+    widget,
+    ui,
+    phase.key,
+    (projection, logs) => {
+      widget?.update({
+        step: `${phase.key}: ${projection.stepName}`,
+        activity: projection.lastAction ?? "",
+        logLines: logs,
+        ...singleSubagentFromProjection(projection),
+      });
+    },
+  );
 
   const workResult = await spawnWorkWithResolvedModel(
     phase.key as PhaseRow,
@@ -409,6 +528,7 @@ async function runPlanningPhase(
     state,
     log,
     widget,
+    ui,
   );
 
   if (qr.passed) {
@@ -702,6 +822,7 @@ async function runPhaseWithQR(
   state: WorkflowState,
   log: Logger,
   widget: WidgetController | null,
+  ui: ExtensionUIContext | null,
 ): Promise<QRBlockResult> {
   const qrPath = qrFilePath(planDir, phase.key);
 
@@ -764,16 +885,20 @@ async function runPhaseWithQR(
 
     const fixDir = await createSubagentDir(planDir, `${phase.role}-fix-${phase.key}-${fixIndex}`);
 
-    const fixPoll = setInterval(async () => {
-      const [projection, logs] = await Promise.all([readProjection(fixDir), readRecentLogs(fixDir)]);
-      if (!projection) return;
-      widget?.update({
-        step: `${phase.key} fix ${fixIndex}/${MAX_FIX_ITERATIONS}: ${projection.stepName}`,
-        activity: projection.lastAction ?? "",
-        logLines: logs,
-        ...singleSubagentFromProjection(projection),
-      });
-    }, 2000);
+    const fixPoll = pollWithIpcDetection(
+      fixDir,
+      widget,
+      ui,
+      `${phase.key} fix ${fixIndex}/${MAX_FIX_ITERATIONS}`,
+      (projection, logs) => {
+        widget?.update({
+          step: `${phase.key} fix ${fixIndex}/${MAX_FIX_ITERATIONS}: ${projection.stepName}`,
+          activity: projection.lastAction ?? "",
+          logLines: logs,
+          ...singleSubagentFromProjection(projection),
+        });
+      },
+    );
 
     const fixResult = await spawnFixWithResolvedModel(
       phase.key as PhaseRow,

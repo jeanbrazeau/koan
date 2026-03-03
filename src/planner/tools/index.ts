@@ -3,7 +3,7 @@
 // tool registration and workflow infrastructure.
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { WorkflowDispatch, PlanRef } from "../lib/dispatch.js";
+import type { WorkflowDispatch, PlanRef, SubagentRef } from "../lib/dispatch.js";
 
 import { registerWorkflowTools } from "./workflow.js";
 import { registerPlanGetterTools } from "./getters.js";
@@ -12,11 +12,13 @@ import { registerPlanDesignEntityTools } from "./entity-design.js";
 import { registerPlanCodeEntityTools } from "./entity-code.js";
 import { registerPlanStructureEntityTools } from "./entity-structure.js";
 import { registerQRTools } from "./qr.js";
+import { registerAskTools } from "./ask.js";
 
-export type { WorkflowDispatch, PlanRef, StepResult } from "../lib/dispatch.js";
+export type { WorkflowDispatch, PlanRef, SubagentRef, StepResult } from "../lib/dispatch.js";
 export {
   createDispatch,
   createPlanRef,
+  createSubagentRef,
   hookDispatch,
   unhookDispatch,
 } from "../lib/dispatch.js";
@@ -25,6 +27,7 @@ export function registerAllTools(
   pi: ExtensionAPI,
   planRef: PlanRef,
   dispatch: WorkflowDispatch,
+  subagentRef: SubagentRef,
 ): void {
   registerWorkflowTools(pi, dispatch);
   registerPlanGetterTools(pi, planRef);
@@ -33,4 +36,5 @@ export function registerAllTools(
   registerPlanCodeEntityTools(pi, planRef);
   registerPlanStructureEntityTools(pi, planRef);
   registerQRTools(pi, planRef);
+  registerAskTools(pi, subagentRef);
 }

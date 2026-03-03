@@ -9,7 +9,7 @@ import type { ExtensionAPI, ExtensionContext } from "@mariozechner/pi-coding-age
 
 import { createSession } from "../src/planner/session.js";
 import { detectSubagentMode, dispatchPhase } from "../src/planner/phases/dispatch.js";
-import { registerAllTools, createDispatch, createPlanRef } from "../src/planner/tools/index.js";
+import { registerAllTools, createDispatch, createPlanRef, createSubagentRef } from "../src/planner/tools/index.js";
 import { createLogger } from "../src/utils/logger.js";
 import { EventLog, extractToolEvent } from "../src/planner/lib/audit.js";
 import { openKoanConfig } from "../src/planner/ui/config/menu.js";
@@ -64,8 +64,9 @@ export default function koan(pi: ExtensionAPI): void {
   // blocking at runtime.
   const dispatch = createDispatch();
   const planRef = createPlanRef();
+  const subagentRef = createSubagentRef();
 
-  registerAllTools(pi, planRef, dispatch);
+  registerAllTools(pi, planRef, dispatch, subagentRef);
 
   // Subagent detection runs at before_agent_start (flags
   // are unavailable during init).
@@ -87,6 +88,7 @@ export default function koan(pi: ExtensionAPI): void {
       if (config.subagentDir) {
         eventLog = new EventLog(config.subagentDir, config.role, config.phase, currentModelId(ctx));
         await eventLog.open();
+        subagentRef.dir = config.subagentDir;
 
         // Capture all tool results for the audit trail. Graduated detail:
         // file paths for read/edit/write, binary name for bash, full
