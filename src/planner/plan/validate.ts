@@ -7,6 +7,56 @@ import type { Plan } from "./types.js";
 export interface ValidationResult {
   ok: boolean;
   errors: string[];
+  warnings?: string[];
+}
+
+// -- Decision source provenance --
+
+// Canonical source types for the type:ref format.
+// "code" and "docs" carry a path ref; others stand alone.
+const VALID_SOURCE_TYPES = [
+  "code", "docs", "user:ask", "user:conversation", "inference",
+] as const;
+
+export type DecisionSourceType = (typeof VALID_SOURCE_TYPES)[number];
+
+const SOURCE_TYPE_SET: ReadonlySet<string> = new Set(VALID_SOURCE_TYPES);
+
+// Parses "code:src/foo.ts" -> { type: "code", ref: "src/foo.ts" }
+// Parses "inference" -> { type: "inference", ref: null }
+// Returns null for unrecognized formats.
+export function parseDecisionSource(
+  s: string,
+): { type: DecisionSourceType; ref: string | null } | null {
+  const colon = s.indexOf(":");
+  if (colon === -1) {
+    return SOURCE_TYPE_SET.has(s) ? { type: s as DecisionSourceType, ref: null } : null;
+  }
+  const prefix = s.substring(0, colon);
+  const rest = s.substring(colon + 1);
+  // "user:ask" and "user:conversation" are complete types, not type:ref pairs
+  const full = `${prefix}:${rest}`;
+  if (SOURCE_TYPE_SET.has(full)) return { type: full as DecisionSourceType, ref: null };
+  // "code:<path>" and "docs:<path>" are type:ref pairs
+  if (SOURCE_TYPE_SET.has(prefix)) return { type: prefix as DecisionSourceType, ref: rest };
+  return null;
+}
+
+// Produces warnings (not errors) for decisions with missing or invalid sources.
+// Soft validation: legacy plans have source: null; hard failures cause death loops.
+export function validateDecisionSources(p: Plan): string[] {
+  const warnings: string[] = [];
+  for (const d of p.planning_context.decision_log) {
+    if (!d.source) {
+      warnings.push(`${d.id}: missing source -- expected code:<path>, docs:<path>, user:ask, user:conversation, or inference`);
+      continue;
+    }
+    const parsed = parseDecisionSource(d.source);
+    if (!parsed) {
+      warnings.push(`${d.id}: unrecognized source "${d.source}" -- expected code:<path>, docs:<path>, user:ask, user:conversation, or inference`);
+    }
+  }
+  return warnings;
 }
 
 export function validatePlanDesign(p: Plan): ValidationResult {
@@ -26,7 +76,8 @@ export function validatePlanDesign(p: Plan): ValidationResult {
     }
   }
 
-  return { ok: errors.length === 0, errors };
+  const warnings = validateDecisionSources(p);
+  return { ok: errors.length === 0, errors, warnings };
 }
 
 export function validateRefs(p: Plan): ValidationResult {

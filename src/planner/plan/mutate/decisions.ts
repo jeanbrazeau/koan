@@ -12,13 +12,14 @@ import {
 
 export function addDecision(
   p: Plan,
-  data: { decision: string; reasoning: string },
+  data: { decision: string; reasoning: string; source?: string },
 ): { plan: Plan; id: string } {
   const id = nextDecisionId(p);
   const decision: Decision = {
     id,
     decision: data.decision,
     reasoning_chain: data.reasoning,
+    source: data.source ?? null,
   };
   return {
     plan: {
@@ -35,7 +36,7 @@ export function addDecision(
 export function setDecision(
   p: Plan,
   id: string,
-  data: { decision?: string; reasoning?: string },
+  data: { decision?: string; reasoning?: string; source?: string },
 ): Plan {
   const idx = p.planning_context.decision_log.findIndex((d) => d.id === id);
   if (idx === -1) throw new Error(`decision ${id} not found`);
@@ -45,6 +46,7 @@ export function setDecision(
     ...d,
     decision: data.decision ?? d.decision,
     reasoning_chain: data.reasoning ?? d.reasoning_chain,
+    source: data.source ?? d.source,
   };
 
   const log = [...p.planning_context.decision_log];

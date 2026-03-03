@@ -66,16 +66,17 @@ export function registerPlanDesignEntityTools(
   planTool(pi, planRef, {
     name: "koan_add_decision",
     label: "Add decision",
-    description: "Add decision to decision log.",
+    description: "Add decision to decision log. Source identifies where authority came from (e.g. code:src/foo.ts, docs:CLAUDE.md, user:ask, user:conversation, inference).",
     parameters: Type.Object({
       decision: Type.String(),
       reasoning: Type.String(),
+      source: Type.String({ description: "Provenance: code:<path>, docs:<path>, user:ask, user:conversation, or inference" }),
     }),
     execute: (p, params) => {
       const r = addDecision(p, params);
       return {
         plan: r.plan,
-        message: `Added decision ${r.id}: "${params.decision}"`,
+        message: `Added decision ${r.id}: "${params.decision}" [source: ${params.source}]`,
       };
     },
   });
@@ -83,11 +84,12 @@ export function registerPlanDesignEntityTools(
   planTool(pi, planRef, {
     name: "koan_set_decision",
     label: "Update decision",
-    description: "Update existing decision by ID.",
+    description: "Update existing decision by ID. Omitting source preserves the existing value.",
     parameters: Type.Object({
       id: Type.String(),
       decision: Type.Optional(Type.String()),
       reasoning: Type.Optional(Type.String()),
+      source: Type.Optional(Type.String({ description: "Provenance: code:<path>, docs:<path>, user:ask, user:conversation, or inference" })),
     }),
     execute: (p, params) => {
       const updated = setDecision(p, params.id, params);

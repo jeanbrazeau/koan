@@ -75,6 +75,11 @@ export function buildFixSystemPrompt(
     "  - Each per-item step targets exactly ONE failure -- do not fix other items",
     "  - Prefer updating existing entities over adding new ones",
     "  - Do not restructure the plan beyond what failures require",
+    "",
+    "DECISION SOURCE FIXES:",
+    "If a failure is about a missing or weak decision source, use",
+    "koan_ask_question to get user input. Then update the decision with",
+    "source='user:ask' via koan_set_decision.",
   ].join("\n");
 }
 

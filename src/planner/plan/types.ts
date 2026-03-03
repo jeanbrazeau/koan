@@ -2,6 +2,7 @@ export interface Decision {
   id: string;
   decision: string;
   reasoning_chain: string;
+  source: string | null;
 }
 
 export interface RejectedAlternative {

@@ -138,7 +138,10 @@ function formatPlanSummary(p: Plan): string {
     ...p.milestones.map((m) => `  ${m.id}: ${m.name}`),
     "",
     `Decisions (${p.planning_context.decision_log.length}):`,
-    ...p.planning_context.decision_log.map((d) => `  ${d.id}: ${d.decision}`),
+    ...p.planning_context.decision_log.map((d) => {
+      const src = d.source ? ` [${d.source}]` : " [no source]";
+      return `  ${d.id}: ${d.decision}${src}`;
+    }),
     "",
     `Waves (${p.waves.length}):`,
     ...p.waves.map((w) => `  ${w.id}: [${w.milestones.join(", ")}]`),

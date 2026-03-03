@@ -39,6 +39,11 @@ export function buildPlanCodeSystemPrompt(basePrompt: string): string {
     "- NEVER use edit/write tools during plan-code.",
     "- Convert every code_intent into at least one code_change with intent_ref.",
     "- Use unified diffs in code_change.diff.",
+    "",
+    "CLARIFICATION:",
+    "If an intent is ambiguous about implementation (e.g. the behavior is clear",
+    "but multiple valid code patterns exist), use koan_ask_question to resolve",
+    "before writing the diff. Ask only when the choice materially affects code.",
   ].join("\n");
 }
 

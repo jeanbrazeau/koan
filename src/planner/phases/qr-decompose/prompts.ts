@@ -33,7 +33,7 @@ export const DECOMPOSE_STEP_NAMES: Record<DecomposeStep, string> = {
 
 const PHASE_SCOPE_HINTS: Record<WorkPhaseKey, string[]> = {
   "plan-design": [
-    "decision:DL-001 -- decision reasoning quality",
+    "decision:DL-001 -- decision reasoning quality and source provenance",
     "milestone:M-001 -- milestone structure",
     "code_intent:CI-M-001-001 -- intent clarity",
   ],
@@ -46,6 +46,7 @@ const PHASE_SCOPE_HINTS: Record<WorkPhaseKey, string[]> = {
     "milestone:M-001 -- docs completeness",
     "change:CC-M-001-001 -- doc_diff/comments quality",
     "diagram:DIAG-001 -- architecture docs fidelity",
+    "decision:DL-001 -- user-sourced decision docs coverage",
   ],
 };
 
@@ -93,6 +94,32 @@ export function buildDecomposeSystemPrompt(basePrompt: string, phase: WorkPhaseK
   ].join("\n");
 }
 
+// Phase-specific holistic concerns injected into step 2.
+// plan-design adds decision source provenance checks;
+// plan-docs adds user-sourced decision documentation coverage.
+function holisticConcernAdditions(phase: WorkPhaseKey): string[] {
+  if (phase === "plan-design") {
+    return [
+      "",
+      "Include decision provenance as a concern:",
+      "  - Every decision must have a non-null source",
+      "  - Sources must be verifiable (code/docs paths should exist)",
+      "  - Decisions sourced as inference need strong reasoning_chain",
+      "  - No systematic inference labeling (if >50% of decisions are",
+      "    inference, flag as umbrella concern)",
+    ];
+  }
+  if (phase === "plan-docs") {
+    return [
+      "",
+      "Include user-sourced decision documentation as a concern:",
+      "  - Decisions with source user:ask or user:conversation must be",
+      "    referenced in at least one comment, doc_diff, or README entry",
+    ];
+  }
+  return [];
+}
+
 export function decomposeStepGuidance(
   step: DecomposeStep,
   phase: WorkPhaseKey,
@@ -119,6 +146,7 @@ export function decomposeStepGuidance(
           `List phase-wide concerns for ${phase}.`,
           "Focus on quality/completeness/consistency concerns, not implementation details.",
           "These become umbrella items (scope='*').",
+          ...holisticConcernAdditions(phase),
         ],
       };
 

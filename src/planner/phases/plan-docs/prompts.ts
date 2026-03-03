@@ -43,6 +43,12 @@ export function buildPlanDocsSystemPrompt(basePrompt: string): string {
     "- Populate code_change.doc_diff for code changes.",
     "- Keep comments and docs timeless (no temporal contamination).",
     "- Keep architecture diagrams and README entries aligned with plan intent.",
+    "",
+    "USER-DECIDED DECISIONS:",
+    "Decisions with source user:ask or user:conversation have NO existing",
+    "reference in the codebase. These MUST be documented in code comments,",
+    "doc_diff, or README entries so future readers understand the rationale",
+    "without needing to ask the same question again.",
   ].join("\n");
 }
 
@@ -57,6 +63,11 @@ export function planDocsStepGuidance(
         instructions: [
           "Use koan_get_plan to review decisions, constraints, risks, and milestones.",
           "Capture decision IDs that should be reflected in documentation rationale.",
+          "",
+          "PRIORITY: Identify all decisions with source user:ask or user:conversation.",
+          "These have NO existing reference in code or docs -- the user provided",
+          "the authority. They MUST be documented. Track these IDs; steps 3-4",
+          "must cover every one.",
           "",
           ...buildPlanDocsContextTrigger(conversationPath ?? "<planDir>/conversation.jsonl"),
           "",
@@ -90,6 +101,12 @@ export function planDocsStepGuidance(
           "  - Every code change with diff should have doc_diff",
           "  - comments explain WHY (reference decisions where applicable)",
           "  - Avoid temporal language (no 'added', 'changed from', 'now')",
+          "",
+          "USER-SOURCED DECISIONS (source user:ask / user:conversation):",
+          "  These have no existing codebase reference. For each one that affects",
+          "  a code change, the comment or doc_diff MUST capture the rationale so",
+          "  future readers do not need to re-ask the same question.",
+          "  Reference the decision ID (e.g. 'See DL-003') in the comment.",
         ],
       };
 
@@ -128,6 +145,8 @@ export function planDocsStepGuidance(
           "  - all code changes with diff have doc_diff",
           "  - comments/doc diffs are coherent and timeless",
           "  - readme/diagram updates are present when needed",
+          "  - every user-sourced decision (source user:*) is referenced",
+          "    in at least one comment, doc_diff, or README entry",
           "",
           "Fix remaining issues before completing.",
         ],
