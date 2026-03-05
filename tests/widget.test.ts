@@ -84,6 +84,64 @@ describe("WidgetController rendering", () => {
     }
   });
 
+  it("renders merged runtime section with stage + quality + workers", () => {
+    const harness = createWidgetHarness();
+    try {
+      harness.controller.update({
+        qrIteration: 2,
+        qrIterationsMax: 6,
+        qrMode: "fix",
+        qrPhase: "verify",
+        qrDone: 9,
+        qrTotal: 14,
+        qrPass: 8,
+        qrFail: 1,
+        qrTodo: 5,
+        subagentQueued: 2,
+        subagentActive: 3,
+        subagentDone: 7,
+        subagentParallelCount: 4,
+      });
+
+      const text = harness.render(140).join("\n");
+      assert.match(text, /Runtime/);
+      assert.match(text, /stage\s+: Verifying \(cycle 2\/6 · fix\)/);
+      assert.match(text, /quality\s+: checked 9\/14\s+pass 8\s+FAIL 1\s+remaining 5/);
+      assert.match(text, /workers\s+: queued 2\s+active 3\s+done 7\s+pool ×4/);
+
+      assert.doesNotMatch(text, /\bQR\b\s+\|/);
+      assert.doesNotMatch(text, /\bSubagents\b\s+\|/);
+      assert.doesNotMatch(text, /\bCurrent step\b/);
+    } finally {
+      harness.destroy();
+    }
+  });
+
+  it("uses Writing for execute debut and Fixing for execute fix", () => {
+    const harness = createWidgetHarness();
+    try {
+      harness.controller.update({
+        qrIteration: 1,
+        qrIterationsMax: 6,
+        qrMode: "initial",
+        qrPhase: "execute",
+      });
+
+      let text = harness.render(140).join("\n");
+      assert.match(text, /stage\s+: Writing \(cycle 1\/6 · initial\)/);
+
+      harness.controller.update({
+        qrMode: "fix",
+        qrPhase: "execute",
+      });
+
+      text = harness.render(140).join("\n");
+      assert.match(text, /stage\s+: Fixing \(cycle 1\/6 · fix\)/);
+    } finally {
+      harness.destroy();
+    }
+  });
+
   it("aligns identity table separator using dynamic key width", () => {
     const harness = createWidgetHarness();
     try {

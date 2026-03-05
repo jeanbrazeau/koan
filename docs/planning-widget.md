@@ -7,7 +7,7 @@ The planning widget now follows the design-deck contract selected on Feb 25 2026
 - **Navigation direction:** Vertical Timeline Rail
 - **Header strategy:** Full-width top border + metadata header row (active phase in header, no tabs strip)
 - **Log strategy:** Declarative shape-table serialization + dense two-column layout
-- **QR strategy:** Inline integrated section (not a detached sub-card)
+- **Runtime strategy:** Unified runtime section (stage + quality + workers) integrated into the detail pane
 
 The goal is to keep a long-running (1-2h) planning session readable in real time while preserving high-signal audit telemetry.
 
@@ -37,15 +37,14 @@ The goal is to keep a long-running (1-2h) planning session readable in real time
 
 **Rationale:** Preserves temporal fidelity while increasing information density and keeping the "what just happened" answer immediate, even under constrained widths.
 
-### 4) QR is a first-class workflow section
-- QR renders inline in detail pane with divider rule (no detached mini-card border).
+### 4) Runtime is a first-class workflow section
+- Runtime renders inline in the detail pane (no detached mini-card border).
 - Visible during Plan design, Plan code, and Plan docs (and contractually Plan execution).
-- QR starts directly in the **`execute`** stage for iteration 1 (non-fix mode); fix iterations reuse the same stage model.
-- QR block is normalized to a fixed structure: header, phase rail, counters, divider.
-- Metadata is budgeted to **64 visible chars max** and progressively compacted (`phase/iter/mode` -> `iN/M`, `d/p/f/t`) when width is constrained.
-- Counter line emphasizes severity: `fail` is error-colored; `pass` is accent; others remain muted/dim.
+- Runtime unifies stage + quality counters + worker counters in one block.
+- Stage follows the QR lifecycle (`execute`, `decompose`, `verify`, `done`) but uses user-facing labels (`Writing`, `Fixing`, `Analyzing`, `Verifying`, `Complete`).
+- Quality counters emphasize severity: `FAIL` is error-colored; `pass` is accent; others remain muted/dim.
 
-**Rationale:** QR is not optional side telemetry; it is the acceptance loop for the plan. The UI should communicate that structural importance while remaining legible and shape-stable at smaller widths.
+**Rationale:** Review quality and worker throughput are part of one runtime story. Unifying them removes competing mini-status bars while keeping the left timeline as the primary progress signal.
 
 ### 5) Header-first metadata, tabs removed
 - Keep a full top border and put active workflow context directly in the header row.
@@ -60,13 +59,13 @@ The goal is to keep a long-running (1-2h) planning session readable in real time
 ┌────────────────────────────────────────────────────────────────────────────────┐
 │ Planning · Plan design · CURRENT                                        12m 22s │
 │                                                                                │
-│ ● Plan design                 Current step                                    │
-│ │   CURRENT                    Step 2/6: Codebase Exploration                  │
-│ │                              read internal/rules/CLAUDE.md · 17L/1.2k       │
-│ ○ Plan code                   QR | phase:execute · iter 1/6 initial            │
-│ │   UPCOMING                   Execute → QR decompose → QR verify              │
-│ ○ Plan docs                   done:0/- pass:0 fail:0 todo:-                    │
-│     UPCOMING                  Subagents queued:0 active:1 done:0              │
+│ ● Plan design                 Runtime                                            │
+│ │   CURRENT                    stage   : Writing (cycle 1/6 · initial)          │
+│ │                              quality : checked -/-   pass -   FAIL -   remaining - │
+│ ○ Plan code                   workers : queued 0   active 1   done 0   pool ×1  │
+│ │   UPCOMING                                                                    │
+│ ○ Plan docs                                                                      │
+│     UPCOMING                                                                     │
 │                               Plan ID    : <plan-id>                           │
 │                               Agent      : architect                            │
 │                               Model      : openai-codex/gpt-5.3-codex          │
@@ -87,12 +86,13 @@ The goal is to keep a long-running (1-2h) planning session readable in real time
 4. **No tabs strip** – Do not render a separate phase-tabs row under the header. Active phase context now lives in header metadata.
 5. **Timeline rail** – Maintain status icon/color semantics (`active=accent`, `done=dim`, `failed=error`).
 6. **Detail pane** – Render in this order:
-   - a dim section label (`Current step`) to create hierarchy
-   - step title + optional activity
-   - QR integrated section (if visible)
-   - subagent counters (`queued/active/done`) when available
+   - Runtime section (if stage/quality/workers are active)
    - identity table (`Plan ID`, `Agent`/`Agent pool`, `Model`) pinned low in pane
-7. **QR section** – Use inline header + phase rail + metadata line + divider. Avoid nested border style to keep it visually native to the right pane. Keep line geometry stable (fixed 3-line payload + divider) and enforce a 64-char metadata budget before clamping to pane width.
+7. **Runtime section** – Use inline `Runtime` header plus key/value rows:
+   - `stage` + cycle metadata
+   - `quality` counters (`checked/pass/FAIL/remaining`)
+   - `workers` counters (`queued/active/done`) + pool capacity
+   Keep this as one cohesive block to avoid competing status bars.
 8. **Latest log section** – Keep it inside the same outer card, separated by a horizontal divider. Reuse the same left/right column split (`timelineWidth` / `detailWidth`) and gap as the planning body so vertical alignment stays consistent.
 
 ## Header + Alignment Contract
@@ -133,19 +133,21 @@ Apply in order until it fits:
   - `qrDone`, `qrTotal`, `qrPass`, `qrFail`, `qrTodo`
 
 ## Future Work (contracted, not yet implemented)
-- Plan execution phase should reuse the same QR integrated section semantics.
+- Plan execution phase should reuse the same Runtime section semantics.
 - Optional compact mode for very narrow terminals can reduce metadata verbosity while preserving deterministic ordering.
 
-## Update: Runtime Domains + Subagent Identity (2026-02-26)
+## Update: Unified Runtime Section + Subagent Identity (2026-03-04)
 
-This update captures follow-up decisions for showing subagent model information
-and clarifying QR vs. parallel subagent semantics.
+This update replaces the split QR/subagent status blocks with a single runtime
+status section in the right pane.
 
-### Domain split (do not merge)
-- **QR section** tracks quality state: `todo`, `pass`, `fail`.
-- **Subagents section** tracks execution state: `queued`, `active`, `done`.
-- These are sibling runtime views. They are related in workflow, but not
-  collapsed into one metric family.
+### Runtime merge (stage + quality + workers)
+- The detail pane now has one **Runtime** section.
+- Runtime includes:
+  - `stage` (`Writing` / `Fixing` / `Analyzing` / `Verifying` / `Complete`) with cycle metadata.
+  - `quality` counters (`checked`, `pass`, `FAIL`, `remaining`).
+  - `workers` counters (`queued`, `active`, `done`) plus pool capacity.
+- The left timeline remains the primary progress signal.
 
 ### `x<N>` meaning in parallel mode
 - `x<N>` means configured pool capacity (target parallelism), not active count.
@@ -171,10 +173,5 @@ Label/value rule:
 - otherwise -> `Agent : <role>`
 
 ### View-composition pattern
-Use section-level selectors/renderers (React-view-like composition without
-React) so QR, subagent status, and identity/footer blocks are independently
-composable and testable.
-
-### Decision hygiene
-A separate "layout pattern" decision was deemed redundant once the domain split
-was chosen; track it as derived behavior, not as a distinct product decision.
+Use section-level selectors/renderers so `runtime-status` and `identity` remain
+independently composable and testable.

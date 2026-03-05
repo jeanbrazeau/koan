@@ -340,79 +340,6 @@ function shouldShowQR(state: WidgetState): boolean {
   return true;
 }
 
-type QRTier = "wide" | "medium" | "tight";
-
-const QR_TIER_MEDIUM_WIDTH = 68;
-const QR_TIER_TIGHT_WIDTH = 52;
-const QR_META_MAX_CHARS = 64;
-
-function qrTier(width: number): QRTier {
-  if (width < QR_TIER_TIGHT_WIDTH) return "tight";
-  if (width < QR_TIER_MEDIUM_WIDTH) return "medium";
-  return "wide";
-}
-
-function qrPhaseLabel(phase: QRPhase): string {
-  switch (phase) {
-    case "idle":
-      return "execute";
-    case "execute":
-      return "execute";
-    case "decompose":
-      return "decompose";
-    case "verify":
-      return "verify";
-    case "done":
-      return "done";
-  }
-}
-
-function qrPhaseShortLabel(phase: QRPhase): string {
-  switch (phase) {
-    case "idle":
-      return "exec";
-    case "execute":
-      return "exec";
-    case "decompose":
-      return "decomp";
-    case "verify":
-      return "vfy";
-    case "done":
-      return "done";
-  }
-}
-
-function firstBudgeted(candidates: string[], budget: number): string {
-  for (const c of candidates) {
-    if (visibleWidth(c) <= budget) return c;
-  }
-  const fallback = candidates[candidates.length - 1] ?? "";
-  return truncateToWidth(fallback, budget, "…", false);
-}
-
-function qrMetaText(state: WidgetState, tier: QRTier, budget: number): string {
-  const phase = qrPhaseLabel(state.qrPhase);
-  const short = qrPhaseShortLabel(state.qrPhase);
-  const modeFull = state.qrMode === "fix" ? "fix" : "initial";
-  const modeShort = state.qrMode === "fix" ? "fx" : "in";
-  const iter = state.qrIteration ?? 0;
-  const iterMax = state.qrIterationsMax ? `/${state.qrIterationsMax}` : "";
-  const iterFull = `${iter}${iterMax}`;
-
-  const wide = `phase:${phase} · iter ${iterFull} ${modeFull}`;
-  const medium = `${phase} · iter ${iterFull} ${modeFull}`;
-  const compact = `${short} · i${iterFull} ${modeFull}`;
-  const tight = `${short} i${iterFull} ${modeShort}`;
-
-  const candidates = tier === "wide"
-    ? [wide, medium, compact, tight]
-    : tier === "medium"
-      ? [medium, compact, tight]
-      : [compact, tight];
-
-  return firstBudgeted(candidates, budget);
-}
-
 interface QRCounterValues {
   done: string;
   pass: string;
@@ -434,82 +361,82 @@ function qrCounterValues(state: WidgetState): QRCounterValues {
   };
 }
 
-function renderQRCounterLine(state: WidgetState, theme: Theme, tier: QRTier, width: number, budget: number): string {
-  const values = qrCounterValues(state);
-
-  const labelSets = tier === "wide"
-    ? [
-      { done: "done", pass: "pass", fail: "fail", todo: "todo" },
-      { done: "d", pass: "p", fail: "f", todo: "t" },
-    ]
-    : [{ done: "d", pass: "p", fail: "f", todo: "t" }];
-
-  const render = (labels: { done: string; pass: string; fail: string; todo: string }) => [
-    `${theme.fg("muted", `${labels.done}:`)}${theme.fg("dim", values.done)}`,
-    `${theme.fg("muted", `${labels.pass}:`)}${theme.fg("accent", values.pass)}`,
-    `${theme.fg("muted", `${labels.fail}:`)}${theme.bold(theme.fg("error", values.fail))}`,
-    `${theme.fg("muted", `${labels.todo}:`)}${theme.fg("muted", values.todo)}`,
-  ].join(" ");
-
-  const candidates = labelSets.map(render);
-  const selected = firstBudgeted(candidates, budget);
-  return clampToWidth(selected, width, "…");
+function runtimeStageLabel(state: WidgetState): string {
+  switch (state.qrPhase) {
+    case "idle":
+    case "execute":
+      return state.qrMode === "fix" ? "Fixing" : "Writing";
+    case "decompose":
+      return "Analyzing";
+    case "verify":
+      return "Verifying";
+    case "done":
+      return "Complete";
+  }
 }
 
-function renderQRStatusSection(state: WidgetState, theme: Theme, width: number): string[] {
-  if (!shouldShowQR(state)) {
+function stageCycleText(state: WidgetState): string {
+  const iter = state.qrIteration ?? 0;
+  const iterMax = state.qrIterationsMax ? `/${state.qrIterationsMax}` : "";
+  const mode = state.qrMode === "fix" ? "fix" : "initial";
+  return `cycle ${iter}${iterMax} · ${mode}`;
+}
+
+function shouldShowRuntimeSection(state: WidgetState): boolean {
+  return shouldShowQR(state) || shouldShowSubagentSection(state);
+}
+
+function renderRuntimeRow(theme: Theme, width: number, keyWidth: number, key: string, value: string): string {
+  const padded = key.padEnd(keyWidth, " ");
+  return clampToWidth(`${theme.fg("muted", padded)} : ${value}`, width, "…");
+}
+
+function renderRuntimeStatusSection(state: WidgetState, theme: Theme, width: number): string[] {
+  if (!shouldShowRuntimeSection(state)) {
     return [];
   }
 
-  const tier = qrTier(width);
-  const budget = Math.min(width, QR_META_MAX_CHARS);
+  const rows: Array<{ key: string; value: string }> = [];
 
-  const headerMeta = qrMetaText(state, tier, budget);
-  const header = clampToWidth(
-    `${theme.bold(theme.fg("accent", "QR"))} ${theme.fg("muted", "|")} ${theme.fg("dim", headerMeta)}`,
-    width,
-    "…",
-  );
+  if (shouldShowQR(state)) {
+    const stageValue = `${theme.bold(theme.fg("accent", runtimeStageLabel(state)))} ${theme.fg("dim", `(${stageCycleText(state)})`)}`;
+    const values = qrCounterValues(state);
+    const qualityValue = [
+      `${theme.fg("muted", "checked")} ${theme.fg("dim", values.done)}`,
+      `${theme.fg("muted", "pass")} ${theme.fg("accent", values.pass)}`,
+      `${theme.bold(theme.fg("error", "FAIL"))} ${theme.bold(theme.fg("error", values.fail))}`,
+      `${theme.fg("muted", "remaining")} ${theme.fg("muted", values.todo)}`,
+    ].join("   ");
 
-  const phaseEntries: Array<{ key: Exclude<QRPhase, "idle" | "done">; label: string }> = tier === "wide"
-    ? [
-      { key: "execute", label: state.qrMode === "fix" ? "Execute (fix)" : "Execute" },
-      { key: "decompose", label: "QR decompose" },
-      { key: "verify", label: "QR verify" },
-    ]
-    : tier === "medium"
-      ? [
-        { key: "execute", label: state.qrMode === "fix" ? "Exec(fix)" : "Exec" },
-        { key: "decompose", label: "Decomp" },
-        { key: "verify", label: "Verify" },
-      ]
-      : [
-        { key: "execute", label: "X" },
-        { key: "decompose", label: "D" },
-        { key: "verify", label: "V" },
-      ];
-
-  const effectivePhase: Exclude<QRPhase, "idle"> = state.qrPhase === "idle" ? "execute" : state.qrPhase;
-  let currentIndex = phaseEntries.findIndex((entry) => entry.key === effectivePhase);
-  if (effectivePhase === "done") {
-    currentIndex = phaseEntries.length;
+    rows.push({ key: "stage", value: stageValue });
+    rows.push({ key: "quality", value: qualityValue });
   }
 
-  const segments = phaseEntries.map((entry, index) => {
-    if (index < currentIndex) {
-      return theme.bold(theme.fg("dim", `${entry.label} ✓`));
-    }
-    if (index === currentIndex) {
-      return theme.bold(theme.fg("accent", entry.label));
-    }
-    return theme.fg("muted", entry.label);
-  });
+  if (shouldShowSubagentSection(state)) {
+    const parallel = state.subagentParallelCount ?? 1;
+    const pool = parallel > 1 ? `pool ×${parallel}` : "single";
+    const workersValue = [
+      `${theme.fg("muted", "queued")} ${theme.fg("muted", subagentCount(state.subagentQueued))}`,
+      `${theme.fg("muted", "active")} ${theme.bold(theme.fg("accent", subagentCount(state.subagentActive)))}`,
+      `${theme.fg("muted", "done")} ${theme.fg("dim", subagentCount(state.subagentDone))}`,
+      `${theme.fg("dim", pool)}`,
+    ].join("   ");
 
-  const rail = clampToWidth(segments.join(theme.fg("muted", " → ")), width, "…");
-  const counters = renderQRCounterLine(state, theme, tier, width, budget);
-  const divider = clampToWidth(theme.fg("muted", "─".repeat(width)), width);
+    rows.push({ key: "workers", value: workersValue });
+  }
 
-  return [header, rail, counters, divider];
+  if (rows.length === 0) {
+    return [];
+  }
+
+  const keyWidth = Math.max(...rows.map((row) => visibleWidth(row.key)));
+  const lines = [clampToWidth(theme.fg("dim", "Runtime"), width)];
+
+  for (const row of rows) {
+    lines.push(renderRuntimeRow(theme, width, keyWidth, row.key, row.value));
+  }
+
+  return lines;
 }
 
 interface DetailSections {
@@ -522,11 +449,6 @@ interface DetailSectionDefinition<ViewModel> {
   placement: "core" | "footer";
   select: (state: WidgetState) => ViewModel | null;
   render: (view: ViewModel, theme: Theme, width: number) => string[];
-}
-
-interface CurrentStepView {
-  title: string;
-  activity: string;
 }
 
 interface IdentityView {
@@ -543,30 +465,6 @@ function shouldShowSubagentSection(state: WidgetState): boolean {
 
 function subagentCount(value: number | null): string {
   return value === null ? "-" : String(value);
-}
-
-function renderSubagentStatusSection(state: WidgetState, theme: Theme, width: number): string[] {
-  if (!shouldShowSubagentSection(state)) {
-    return [];
-  }
-
-  const parallel = state.subagentParallelCount ?? 1;
-  const mode = parallel > 1 ? `pool x${parallel}` : "single";
-
-  const header = clampToWidth(
-    `${theme.bold(theme.fg("accent", "Subagents"))} ${theme.fg("muted", "|")} ${theme.fg("dim", mode)}`,
-    width,
-    "…",
-  );
-
-  const counters = [
-    `${theme.fg("muted", "queued:")}${theme.fg("muted", subagentCount(state.subagentQueued))}`,
-    `${theme.fg("muted", "active:")}${theme.bold(theme.fg("accent", subagentCount(state.subagentActive)))}`,
-    `${theme.fg("muted", "done:")}${theme.fg("dim", subagentCount(state.subagentDone))}`,
-  ].join(" ");
-
-  const divider = clampToWidth(theme.fg("muted", "─".repeat(width)), width);
-  return [header, clampToWidth(counters, width, "…"), divider];
 }
 
 function identityView(state: WidgetState): IdentityView {
@@ -607,41 +505,10 @@ function renderIdentitySection(view: IdentityView, theme: Theme, width: number):
 
 const DETAIL_SECTION_REGISTRY: Array<DetailSectionDefinition<any>> = [
   {
-    id: "current-step",
+    id: "runtime-status",
     placement: "core",
-    select: (state: WidgetState): CurrentStepView => {
-      const active = activePhase(state);
-      return {
-        title: state.step || active?.detail || active?.label || "Awaiting step",
-        activity: state.activity,
-      };
-    },
-    render: (view: CurrentStepView, theme: Theme, width: number): string[] => {
-      const lines = [
-        clampToWidth(theme.fg("dim", "Current step"), width),
-        clampToWidth(theme.bold(theme.fg("accent", view.title)), width, "…"),
-      ];
-
-      if (view.activity) {
-        for (const line of wrapTextWithAnsi(theme.fg("muted", view.activity), width)) {
-          lines.push(clampToWidth(line, width));
-        }
-      }
-
-      return lines;
-    },
-  },
-  {
-    id: "qr-status",
-    placement: "core",
-    select: (state: WidgetState): WidgetState | null => (shouldShowQR(state) ? state : null),
-    render: (view: WidgetState, theme: Theme, width: number): string[] => renderQRStatusSection(view, theme, width),
-  },
-  {
-    id: "subagent-status",
-    placement: "core",
-    select: (state: WidgetState): WidgetState | null => (shouldShowSubagentSection(state) ? state : null),
-    render: (view: WidgetState, theme: Theme, width: number): string[] => renderSubagentStatusSection(view, theme, width),
+    select: (state: WidgetState): WidgetState | null => (shouldShowRuntimeSection(state) ? state : null),
+    render: (view: WidgetState, theme: Theme, width: number): string[] => renderRuntimeStatusSection(view, theme, width),
   },
   {
     id: "identity",
@@ -753,16 +620,9 @@ function renderPlanningCard(state: WidgetState, theme: Theme, width: number): st
       "",
       formatStepLine(state, theme),
     ];
-    const detail = formatDetail(state, theme, contentWidth);
-    if (detail) fallbackContent.push(detail);
-    const qrCompact = formatQRCompact(state, theme, contentWidth);
-    if (qrCompact.length > 0) {
-      fallbackContent.push(...qrCompact);
-    }
-    const subagentCompact = formatSubagentCompact(state, theme, contentWidth);
-    if (subagentCompact.length > 0) {
-      if (qrCompact.length > 0) fallbackContent.push("");
-      fallbackContent.push(...subagentCompact);
+    const runtimeCompact = formatRuntimeCompact(state, theme, contentWidth);
+    if (runtimeCompact.length > 0) {
+      fallbackContent.push(...runtimeCompact);
     }
 
     fallbackContent.push("");
@@ -912,37 +772,9 @@ function renderLogCard(state: WidgetState, theme: Theme, width: number, forcedCo
   );
 }
 
-function formatDetail(state: WidgetState, theme: Theme, width: number): string {
-  const step = state.step ? theme.fg("muted", state.step) : "";
-  const activity = state.activity ? theme.fg("dim", ` · ${state.activity}`) : "";
-  const detail = `${step}${activity}`;
-  if (!detail) return "";
-  return clampToWidth(detail, width, "…");
-}
-
-function formatQRCompact(state: WidgetState, theme: Theme, width: number): string[] {
-  if (!shouldShowQR(state)) return [];
-
-  const tier = qrTier(width);
-  const budget = Math.min(width, QR_META_MAX_CHARS);
-  const meta = qrMetaText(state, tier, budget);
-  const line1 = clampToWidth(`${theme.fg("muted", "QR")} ${theme.fg("muted", "|")} ${theme.fg("dim", meta)}`, width, "…");
-  const line2 = renderQRCounterLine(state, theme, tier, width, budget);
-  return [line1, line2];
-}
-
-function formatSubagentCompact(state: WidgetState, theme: Theme, width: number): string[] {
-  if (!shouldShowSubagentSection(state)) return [];
-
-  const parallel = state.subagentParallelCount ?? 1;
-  const mode = parallel > 1 ? `pool x${parallel}` : "single";
-  const line1 = clampToWidth(`${theme.fg("muted", "Subagents")} ${theme.fg("muted", "|")} ${theme.fg("dim", mode)}`, width, "…");
-  const line2 = clampToWidth(
-    `${theme.fg("muted", `queued:${subagentCount(state.subagentQueued)}`)} ${theme.fg("accent", `active:${subagentCount(state.subagentActive)}`)} ${theme.fg("dim", `done:${subagentCount(state.subagentDone)}`)}`,
-    width,
-    "…",
-  );
-  return [line1, line2];
+function formatRuntimeCompact(state: WidgetState, theme: Theme, width: number): string[] {
+  if (!shouldShowRuntimeSection(state)) return [];
+  return renderRuntimeStatusSection(state, theme, width);
 }
 
 function formatIdentityCompact(state: WidgetState, theme: Theme, width: number): string[] {
