@@ -1,0 +1,12 @@
+# Koan project worktree hooks
+# Docs: https://worktrunk.dev/hook/
+
+[post-create]
+deps = "npm ci"
+
+[post-start]
+copy = "wt step copy-ignored"
+
+[pre-merge]
+check = "npm run check"
+test = "npm test"
