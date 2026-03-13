@@ -1,233 +1,124 @@
 // Phase dispatch: detects subagent mode from CLI flags and routes to the
-// appropriate phase constructor. Flags are unavailable at extension init
-// (getFlag returns undefined before _buildRuntime), so detection is
+// appropriate phase class based on role. Flags are unavailable at extension
+// init (getFlag returns undefined before _buildRuntime), so detection is
 // deferred to before_agent_start.
-
-import { promises as fs } from "node:fs";
-import * as path from "node:path";
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
-import { PlanDesignPhase } from "./plan-design/phase.js";
-import { PlanDesignFixPhase } from "./plan-design/fix-phase.js";
-import { PlanCodePhase } from "./plan-code/phase.js";
-import { PlanCodeFixPhase } from "./plan-code/fix-phase.js";
-import { PlanDocsPhase } from "./plan-docs/phase.js";
-import { PlanDocsFixPhase } from "./plan-docs/fix-phase.js";
-import { QRDecomposePhase } from "./qr-decompose/phase.js";
-import { QRVerifyPhase } from "./qr-verify/phase.js";
 import { createLogger, type Logger } from "../../utils/logger.js";
-import type { WorkflowDispatch, PlanRef } from "../lib/dispatch.js";
+import type { RuntimeContext } from "../lib/runtime-context.js";
 import type { EventLog } from "../lib/audit.js";
-import type { QRFile } from "../qr/types.js";
+import type { SubagentRole, StepSequence } from "../types.js";
+import { IntakePhase } from "./intake/phase.js";
+import { ScoutPhase } from "./scout/phase.js";
+import { DecomposerPhase } from "./decomposer/phase.js";
+import { OrchestratorPhase } from "./orchestrator/phase.js";
+import { PlannerPhase } from "./planner/phase.js";
+import { ExecutorPhase } from "./executor/phase.js";
+
+// -- Config --
 
 export interface SubagentConfig {
-  role: string;
-  phase: string;
-  planDir: string;
+  role: SubagentRole;
+  epicDir: string;
   subagentDir: string;
-  fix: string | null;
+  storyId: string | null;
+  stepSequence: StepSequence | null;
 }
 
-type WorkPhaseKey = "plan-design" | "plan-code" | "plan-docs";
+// -- Detection --
 
-function parseWorkPhase(value: string | null): WorkPhaseKey | null {
-  if (value === "plan-design" || value === "plan-code" || value === "plan-docs") {
-    return value;
-  }
-  return null;
-}
-
-function parseQRPhase(value: string): WorkPhaseKey | null {
-  if (!value.startsWith("qr-")) return null;
-  return parseWorkPhase(value.slice(3));
-}
-
-async function loadFixFailures(planDir: string, phase: WorkPhaseKey): Promise<QRFile | null> {
-  const qrPath = path.join(planDir, `qr-${phase}.json`);
-  try {
-    const raw = await fs.readFile(qrPath, "utf8");
-    return JSON.parse(raw) as QRFile;
-  } catch {
-    return null;
-  }
-}
-
-// Detects subagent mode by checking flags set via CLI (pi -p --koan-role
-// architect --koan-phase plan-design ...). Flags are unavailable during
-// init (getFlag() returns undefined before _buildRuntime()), so this
-// must be called from before_agent_start or later.
+// Detects subagent mode by reading flags set via CLI
+// (pi -p --koan-role intake --koan-epic-dir /path ...).
+// Must be called from before_agent_start or later; flags are
+// undefined before _buildRuntime() runs.
 export function detectSubagentMode(pi: ExtensionAPI): SubagentConfig | null {
   const role = pi.getFlag("koan-role");
   if (!role || typeof role !== "string" || role.trim().length === 0) {
     return null;
   }
 
-  const phase = pi.getFlag("koan-phase");
-  const planDir = pi.getFlag("koan-plan-dir");
+  const epicDir = pi.getFlag("koan-epic-dir");
   const subagentDir = pi.getFlag("koan-subagent-dir");
-  const fix = pi.getFlag("koan-fix");
+  const storyId = pi.getFlag("koan-story-id");
+  const stepSequence = pi.getFlag("koan-step-sequence");
 
   return {
-    role: role.trim(),
-    phase: typeof phase === "string" ? phase.trim() : "",
-    planDir: typeof planDir === "string" ? planDir.trim() : "",
+    role: role.trim() as SubagentRole,
+    epicDir: typeof epicDir === "string" ? epicDir.trim() : "",
     subagentDir: typeof subagentDir === "string" ? subagentDir.trim() : "",
-    fix: typeof fix === "string" && fix.trim().length > 0 ? fix.trim() : null,
+    storyId: typeof storyId === "string" && storyId.trim().length > 0 ? storyId.trim() : null,
+    stepSequence: typeof stepSequence === "string" && stepSequence.trim().length > 0
+      ? stepSequence.trim() as StepSequence
+      : null,
   };
 }
+
+// -- Dispatch --
 
 export async function dispatchPhase(
   pi: ExtensionAPI,
   config: SubagentConfig,
-  dispatch: WorkflowDispatch,
-  planRef: PlanRef,
+  ctx: RuntimeContext,
   log?: Logger,
   eventLog?: EventLog,
 ): Promise<void> {
   const logger = log ?? createLogger("Dispatch");
 
-  // -- Fix modes --
-
-  const fixPhase = parseWorkPhase(config.fix);
-  if (fixPhase) {
-    const qrFile = await loadFixFailures(config.planDir, fixPhase);
-    if (!qrFile) {
-      logger("Fix dispatch: failed to read QR file", { phase: fixPhase });
-      return;
+  switch (config.role) {
+    case "intake": {
+      const phase = new IntakePhase(pi, { epicDir: config.epicDir }, ctx, logger, eventLog);
+      await phase.begin();
+      break;
     }
-
-    const failures = qrFile.items.filter((i) => i.status === "FAIL");
-    if (failures.length === 0) {
-      logger("Fix dispatch: no FAIL items in QR file, skipping fix phase", { phase: fixPhase });
-      return;
+    case "scout": {
+      const phase = new ScoutPhase(pi, { epicDir: config.epicDir }, ctx, logger, eventLog);
+      await phase.begin();
+      break;
     }
-
-    if (config.role === "architect" && fixPhase === "plan-design") {
-      const phase = new PlanDesignFixPhase(
+    case "decomposer": {
+      const phase = new DecomposerPhase(pi, { epicDir: config.epicDir }, ctx, logger, eventLog);
+      await phase.begin();
+      break;
+    }
+    case "orchestrator": {
+      const stepSequence = config.stepSequence ?? "pre-execution";
+      const phase = new OrchestratorPhase(
         pi,
-        { planDir: config.planDir, failures },
-        dispatch,
-        planRef,
-        logger,
-        eventLog,
+        { epicDir: config.epicDir, stepSequence, storyId: config.storyId ?? undefined },
+        ctx, logger, eventLog,
       );
       await phase.begin();
-      return;
+      break;
     }
-
-    if (config.role === "developer" && fixPhase === "plan-code") {
-      const phase = new PlanCodeFixPhase(
+    case "planner": {
+      // Fail-fast: missing storyId produces malformed paths like stories//plan/plan.md (§12.4.3).
+      if (!config.storyId) throw new Error("planner phase requires --koan-story-id flag");
+      const phase = new PlannerPhase(
         pi,
-        { planDir: config.planDir, failures },
-        dispatch,
-        planRef,
-        logger,
-        eventLog,
+        { epicDir: config.epicDir, storyId: config.storyId },
+        ctx, logger, eventLog,
       );
       await phase.begin();
-      return;
+      break;
     }
-
-    if (config.role === "technical-writer" && fixPhase === "plan-docs") {
-      const phase = new PlanDocsFixPhase(
+    case "executor": {
+      // Fail-fast: missing storyId produces malformed paths like stories//plan/plan.md (§12.4.3).
+      if (!config.storyId) throw new Error("executor phase requires --koan-story-id flag");
+      const retryContext = pi.getFlag("koan-retry-context");
+      const phase = new ExecutorPhase(
         pi,
-        { planDir: config.planDir, failures },
-        dispatch,
-        planRef,
-        logger,
-        eventLog,
+        {
+          epicDir: config.epicDir,
+          storyId: config.storyId,
+          retryContext: typeof retryContext === "string" && retryContext.length > 0 ? retryContext : undefined,
+        },
+        ctx, logger, eventLog,
       );
       await phase.begin();
-      return;
+      break;
     }
+    default:
+      logger("Unknown role", { role: config.role });
   }
-
-  // -- Work phases --
-
-  if (config.role === "architect" && config.phase === "plan-design") {
-    const phase = new PlanDesignPhase(
-      pi,
-      { planDir: config.planDir },
-      dispatch,
-      planRef,
-      logger,
-      eventLog,
-    );
-    await phase.begin();
-    return;
-  }
-
-  if (config.role === "developer" && config.phase === "plan-code") {
-    const phase = new PlanCodePhase(
-      pi,
-      { planDir: config.planDir },
-      dispatch,
-      planRef,
-      logger,
-      eventLog,
-    );
-    await phase.begin();
-    return;
-  }
-
-  if (config.role === "technical-writer" && config.phase === "plan-docs") {
-    const phase = new PlanDocsPhase(
-      pi,
-      { planDir: config.planDir },
-      dispatch,
-      planRef,
-      logger,
-      eventLog,
-    );
-    await phase.begin();
-    return;
-  }
-
-  // -- QR phases --
-
-  const qrWorkPhase = parseQRPhase(config.phase);
-  if (config.role === "qr-decomposer" && qrWorkPhase) {
-    const phase = new QRDecomposePhase(
-      pi,
-      { planDir: config.planDir, workPhase: qrWorkPhase },
-      dispatch,
-      planRef,
-      logger,
-      eventLog,
-    );
-    await phase.begin();
-    return;
-  }
-
-  if (config.role === "reviewer" && qrWorkPhase) {
-    const rawItemFlag = pi.getFlag("koan-qr-item") as string;
-    if (!rawItemFlag) {
-      logger("Reviewer missing --koan-qr-item flag");
-      return;
-    }
-
-    const itemIds = rawItemFlag.split(",").map((s) => s.trim()).filter(Boolean);
-    if (itemIds.length === 0) {
-      logger("Reviewer --koan-qr-item flag is empty after parsing");
-      return;
-    }
-
-    const phase = new QRVerifyPhase(
-      pi,
-      { planDir: config.planDir, itemIds, workPhase: qrWorkPhase },
-      dispatch,
-      planRef,
-      logger,
-      eventLog,
-    );
-    await phase.begin();
-    return;
-  }
-
-  logger("Unknown role/phase combination", {
-    role: config.role,
-    phase: config.phase,
-    fix: config.fix,
-  });
 }

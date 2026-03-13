@@ -1,40 +1,19 @@
 // Tool registration aggregator. Single entry point for koan.ts.
-// Re-exports dispatch primitives so koan.ts needs one import for both
-// tool registration and workflow infrastructure.
+// All tools registered here; RuntimeContext replaces the three separate
+// mutable refs (PlanRef, SubagentRef, WorkflowDispatch) from the old design.
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
-import type { WorkflowDispatch, PlanRef, SubagentRef } from "../lib/dispatch.js";
+import type { RuntimeContext } from "../lib/runtime-context.js";
 
 import { registerWorkflowTools } from "./workflow.js";
-import { registerPlanGetterTools } from "./getters.js";
-import { registerPlanSetterTools } from "./setters.js";
-import { registerPlanDesignEntityTools } from "./entity-design.js";
-import { registerPlanCodeEntityTools } from "./entity-code.js";
-import { registerPlanStructureEntityTools } from "./entity-structure.js";
-import { registerQRTools } from "./qr.js";
+import { registerOrchestratorTools } from "./orchestrator.js";
 import { registerAskTools } from "./ask.js";
 
-export type { WorkflowDispatch, PlanRef, SubagentRef, StepResult } from "../lib/dispatch.js";
-export {
-  createDispatch,
-  createPlanRef,
-  createSubagentRef,
-  hookDispatch,
-  unhookDispatch,
-} from "../lib/dispatch.js";
+export type { RuntimeContext } from "../lib/runtime-context.js";
+export { createRuntimeContext } from "../lib/runtime-context.js";
 
-export function registerAllTools(
-  pi: ExtensionAPI,
-  planRef: PlanRef,
-  dispatch: WorkflowDispatch,
-  subagentRef: SubagentRef,
-): void {
-  registerWorkflowTools(pi, dispatch);
-  registerPlanGetterTools(pi, planRef);
-  registerPlanSetterTools(pi, planRef);
-  registerPlanDesignEntityTools(pi, planRef);
-  registerPlanCodeEntityTools(pi, planRef);
-  registerPlanStructureEntityTools(pi, planRef);
-  registerQRTools(pi, planRef);
-  registerAskTools(pi, subagentRef);
+export function registerAllTools(pi: ExtensionAPI, ctx: RuntimeContext): void {
+  registerWorkflowTools(pi, ctx);
+  registerOrchestratorTools(pi, ctx);
+  registerAskTools(pi, ctx);
 }
