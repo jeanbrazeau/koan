@@ -1,7 +1,66 @@
-# Koan Architecture Invariant
+# Koan Architecture Invariants
 
-LLMs write **markdown files only**. LLMs communicate with the driver through **tool calls only**.
-The driver maintains `.json` state files internally — no LLM ever reads or writes a `.json` file.
+Full architecture documentation: **[docs/architecture.md](docs/architecture.md)**
 
-Example: orchestrator calls `koan_complete_story(story_id)` → tool code writes `state.json` + `status.md` →
-driver reads `state.json` to route next action. The orchestrator never touches `state.json` directly.
+Spoke documents:
+- [docs/subagents.md](docs/subagents.md) — spawn lifecycle, task manifest, step-first workflow, permissions
+- [docs/ipc.md](docs/ipc.md) — file-based IPC protocol, scout spawning, question routing
+- [docs/state.md](docs/state.md) — driver/LLM boundary, epic and story state, routing rules
+
+---
+
+The six core invariants (see architecture.md for full detail + pitfalls):
+
+## 1. File Boundary
+
+LLMs write **markdown files only**. The driver maintains **JSON state files**
+internally — no LLM ever reads or writes a `.json` file. Tool code bridges
+both worlds.
+
+## 2. Step-First Workflow Pattern (critical)
+
+Every subagent is a `pi -p` process. Once the LLM produces text without a tool
+call, the process exits — there is no stdin to recover.
+
+**The first thing any subagent does is call `koan_complete_step`.** The spawn
+prompt contains *only* this directive. The tool returns step 1 instructions.
+This establishes the calling pattern before the LLM sees complex instructions.
+
+```
+Boot prompt:  "You are a koan {role} agent. Call koan_complete_step to receive your instructions."
+     ↓ LLM calls koan_complete_step (step 0 → 1 transition)
+Tool returns:  Step 1 instructions (rich context, task details, guidance)
+     ↓ LLM does work...
+     ↓ LLM calls koan_complete_step
+Tool returns:  Step 2 instructions (or "Phase complete.")
+```
+
+## 3. Driver Determinism
+
+The driver reads JSON state files and exit codes, applies routing rules, and
+spawns the next subagent. It never makes judgment calls or parses free-text.
+
+## 4. Default-Deny Permissions
+
+Every tool call passes through a role-based permission fence. Unknown roles
+and tools are blocked. Planning roles can only write inside the epic directory.
+
+## 5. Need-to-Know Prompts
+
+Boot prompt is one sentence. System prompt has role identity, no task details.
+Task details arrive via step 1 guidance after the tool-calling pattern is
+established.
+
+## 6. Directory-as-Contract
+
+The subagent directory is the sole interface between parent and child.
+Three well-known JSON files:
+
+| File | Writer | Reader | Purpose |
+|------|--------|--------|---------|
+| `task.json` | Parent (before spawn) | Child (once, at startup) | What to do |
+| `state.json` | Child (continuously) | Parent (polling) | What has been done |
+| `ipc.json` | Both (request/response) | Both (polling) | What is needed right now |
+
+No structured configuration flows through CLI flags. The spawn command carries
+only the directory path.
