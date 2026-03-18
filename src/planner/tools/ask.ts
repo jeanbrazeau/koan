@@ -5,6 +5,9 @@
 // koan_ask_question  — ask the user a question, get answers
 // koan_request_scouts — request parallel codebase scouts, get findings paths
 
+import { promises as fs } from "node:fs";
+import * as path from "node:path";
+
 import { Type, type Static } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
@@ -322,19 +325,27 @@ export function registerAskTools(pi: ExtensionAPI, ctx: RuntimeContext): void {
 
       switch (pollResult) {
         case "completed": {
-          const lines: string[] = [
+          const sections: string[] = [
             `Scout findings: ${findings.length} completed, ${failures.length} failed.`,
             "",
           ];
-          if (findings.length > 0) {
-            lines.push("Findings files (read these for codebase context):");
-            for (const f of findings) lines.push(`  ${f}`);
+          // Read each findings file and include contents verbatim.
+          for (const f of findings) {
+            try {
+              const content = await fs.readFile(f, "utf8");
+              sections.push(`--- scout: ${path.basename(path.dirname(f))} ---`);
+              sections.push(content.trim());
+              sections.push("");
+            } catch {
+              sections.push(`--- scout: ${path.basename(path.dirname(f))} --- (could not read findings)`);
+              sections.push("");
+            }
           }
           if (failures.length > 0) {
-            lines.push(`Failed scouts (non-fatal, proceed without them): ${failures.join(", ")}`);
+            sections.push(`Failed scouts (non-fatal, proceed without them): ${failures.join(", ")}`);
           }
           return {
-            content: [{ type: "text" as const, text: lines.join("\n") }],
+            content: [{ type: "text" as const, text: sections.join("\n") }],
             details: undefined,
           };
         }
