@@ -1,8 +1,14 @@
 // Epic pipeline driver — deterministic coordinator for the full epic lifecycle.
 // Reads JSON state and exit codes; applies routing rules. Never parses markdown.
 // Per AGENTS.md: driver owns .json state; LLMs own .md files.
+//
+// Spawn pattern used throughout: spawnSubagent(task, subagentDir, opts).
+// epicDir is part of the task (written to task.json) rather than SpawnOptions
+// because it is subagent configuration, not process infrastructure. SpawnOptions
+// holds only what the OS-level spawn needs: cwd, extensionPath, model, webServer.
 
-import type { ExtensionUIContext } from "@mariozechner/pi-coding-agent";
+import { promises as fs } from "node:fs";
+import * as path from "node:path";
 
 import {
   loadEpicState,
@@ -14,18 +20,29 @@ import {
   ensureStoryDirectory,
   discoverStoryIds,
 } from "./epic/state.js";
-import {
-  spawnIntake,
-  spawnDecomposer,
-  spawnOrchestrator,
-  spawnPlanner,
-  spawnExecutor,
-} from "./subagent.js";
+import { spawnSubagent, type SpawnOptions } from "./subagent.js";
 import type { Logger } from "../utils/logger.js";
 import type { StoryState } from "./epic/types.js";
-import { readRecentLogs, readProjection } from "./lib/audit.js";
-import { EpicWidgetController } from "./ui/epic-widget.js";
-import { reviewStorySketches } from "./ui/spec-review.js";
+import type { WebServerHandle, ReviewStory } from "./web/server-types.js";
+
+// ---------------------------------------------------------------------------
+// readStoryTitle
+// ---------------------------------------------------------------------------
+
+async function readStoryTitle(epicDir: string, storyId: string): Promise<string> {
+  try {
+    const raw = await fs.readFile(path.join(epicDir, "stories", storyId, "story.md"), "utf8");
+    for (const rawLine of raw.split("\n")) {
+      const l = rawLine.trim();
+      if (!l) continue;
+      const text = l.replace(/^#+\s*/, "").trim();
+      if (text) return text.slice(0, 80);
+    }
+    return storyId;
+  } catch {
+    return storyId;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Routing
@@ -37,15 +54,9 @@ interface RoutingDecision {
   error?: string;
 }
 
-// Simplified routing — no escalation path per §11.3.1 and §11.6.3.
-// Retry budget exhaustion is handled inside the retry case (skip + notify).
 function routeFromState(stories: StoryState[], log: Logger): RoutingDecision {
-  // Priority order:
-  // 1. Any story with status 'retry'? → check budget, then re-execute or skip
-  // 2. Any story with status 'selected'? → execute it
-  // 3. All stories terminal? → complete
-  // 4. None of the above → error
-
+  // retry is checked before selected — a story queued for retry takes
+  // precedence over a newly selected story.
   const retry = stories.find((s) => s.status === "retry");
   if (retry) {
     log("Routing: retry", { storyId: retry.storyId });
@@ -58,6 +69,7 @@ function routeFromState(stories: StoryState[], log: Logger): RoutingDecision {
     return { action: "execute", storyId: selected.storyId };
   }
 
+  // Terminal states are exactly "done" and "skipped".
   const terminal = new Set(["done", "skipped"]);
   const allTerminal = stories.every((s) => terminal.has(s.status));
   if (allTerminal && stories.length > 0) {
@@ -72,47 +84,6 @@ function routeFromState(stories: StoryState[], log: Logger): RoutingDecision {
 }
 
 // ---------------------------------------------------------------------------
-// Active widget polling (§11.6.1)
-// ---------------------------------------------------------------------------
-
-// Starts a 2s polling interval that reads the active subagent's projection
-// and log tail, then updates the widget. Interval is unref'd so it does not
-// prevent process exit.
-function startActivePolling(
-  activeSubagentDir: string,
-  widget: EpicWidgetController,
-  startedAt: number,
-  role: string,
-  storyId?: string,
-): () => void {
-  const timer = setInterval(async () => {
-    try {
-      const [projection, logs] = await Promise.all([
-        readProjection(activeSubagentDir),
-        readRecentLogs(activeSubagentDir),
-      ]);
-      widget.update({ logLines: logs });
-      if (projection) {
-        widget.update({
-          activeSubagent: {
-            role,
-            storyId,
-            step: projection.step,
-            totalSteps: projection.totalSteps,
-            stepName: projection.stepName,
-            startedAt,
-          },
-        });
-      }
-    } catch {
-      // Non-fatal — polling is best-effort.
-    }
-  }, 2000);
-  timer.unref();
-  return () => clearInterval(timer);
-}
-
-// ---------------------------------------------------------------------------
 // Phase A helpers
 // ---------------------------------------------------------------------------
 
@@ -121,22 +92,20 @@ async function runIntake(
   cwd: string,
   extensionPath: string,
   log: Logger,
-  ui: ExtensionUIContext | null,
-  widget: EpicWidgetController | null,
+  webServer: WebServerHandle | null,
 ): Promise<boolean> {
   const subagentDir = await ensureSubagentDirectory(epicDir, "intake");
-  const startedAt = Date.now();
-  let stopPolling: (() => void) | undefined;
-  if (widget) {
-    widget.update({ activeSubagent: { role: "intake", step: 0, totalSteps: 3, stepName: "", startedAt } });
-    stopPolling = startActivePolling(subagentDir, widget, startedAt, "intake");
-  }
-  const result = await spawnIntake({ epicDir, subagentDir, cwd, extensionPath, log, ui: ui ?? undefined });
-  stopPolling?.();
-  if (widget) {
-    const logs = await readRecentLogs(subagentDir);
-    widget.update({ logLines: logs, activeSubagent: null });
-  }
+  webServer?.registerAgent({ id: "intake", name: "intake", dir: subagentDir, role: "intake", model: null, parent: null });
+  webServer?.trackSubagent(subagentDir, "intake");
+
+  const result = await spawnSubagent(
+    { role: "intake", epicDir },
+    subagentDir,
+    { cwd, extensionPath, log, webServer: webServer ?? undefined },
+  );
+
+  webServer?.clearSubagent();
+  webServer?.completeAgent("intake");
   if (result.exitCode !== 0) {
     log("Intake failed", { exitCode: result.exitCode });
     return false;
@@ -149,22 +118,20 @@ async function runDecomposer(
   cwd: string,
   extensionPath: string,
   log: Logger,
-  ui: ExtensionUIContext | null,
-  widget: EpicWidgetController | null,
+  webServer: WebServerHandle | null,
 ): Promise<boolean> {
   const subagentDir = await ensureSubagentDirectory(epicDir, "decomposer");
-  const startedAt = Date.now();
-  let stopPolling: (() => void) | undefined;
-  if (widget) {
-    widget.update({ activeSubagent: { role: "decomposer", step: 0, totalSteps: 2, stepName: "", startedAt } });
-    stopPolling = startActivePolling(subagentDir, widget, startedAt, "decomposer");
-  }
-  const result = await spawnDecomposer({ epicDir, subagentDir, cwd, extensionPath, log, ui: ui ?? undefined });
-  stopPolling?.();
-  if (widget) {
-    const logs = await readRecentLogs(subagentDir);
-    widget.update({ logLines: logs, activeSubagent: null });
-  }
+  webServer?.registerAgent({ id: "decomposer", name: "decomposer", dir: subagentDir, role: "decomposer", model: null, parent: null });
+  webServer?.trackSubagent(subagentDir, "decomposer");
+
+  const result = await spawnSubagent(
+    { role: "decomposer", epicDir },
+    subagentDir,
+    { cwd, extensionPath, log, webServer: webServer ?? undefined },
+  );
+
+  webServer?.clearSubagent();
+  webServer?.completeAgent("decomposer");
   if (result.exitCode !== 0) {
     log("Decomposer failed", { exitCode: result.exitCode });
     return false;
@@ -182,88 +149,61 @@ async function runStoryExecution(
   extensionPath: string,
   storyId: string,
   log: Logger,
-  ui: ExtensionUIContext | null,
-  widget: EpicWidgetController | null,
+  webServer: WebServerHandle | null,
 ): Promise<void> {
+  const opts: SpawnOptions = { cwd, extensionPath, log, webServer: webServer ?? undefined };
+
   // 1. Set status to 'planning'.
   const story = await loadStoryState(epicDir, storyId);
-  await saveStoryState(epicDir, storyId, {
-    ...story,
-    status: "planning",
-    updatedAt: new Date().toISOString(),
-  });
+  await saveStoryState(epicDir, storyId, { ...story, status: "planning", updatedAt: new Date().toISOString() });
 
   // 2. Spawn planner.
   const plannerDir = await ensureSubagentDirectory(epicDir, `planner-${storyId}`);
-  const plannerStarted = Date.now();
-  let stopPolling: (() => void) | undefined;
-  if (widget) {
-    widget.update({
-      activeSubagent: { role: "planner", storyId, step: 0, totalSteps: 3, stepName: "", startedAt: plannerStarted },
-    });
-    stopPolling = startActivePolling(plannerDir, widget, plannerStarted, "planner", storyId);
-  }
+  const plannerId = `planner-${storyId}`;
+  webServer?.registerAgent({ id: plannerId, name: `planner-${storyId}`, dir: plannerDir, role: "planner", model: null, parent: null });
+  webServer?.trackSubagent(plannerDir, "planner", storyId);
 
-  const planResult = await spawnPlanner({ epicDir, subagentDir: plannerDir, cwd, extensionPath, storyId, log, ui: ui ?? undefined });
-  stopPolling?.();
+  const planResult = await spawnSubagent({ role: "planner", epicDir, storyId }, plannerDir, opts);
 
-  if (widget) {
-    const logs = await readRecentLogs(plannerDir);
-    widget.update({ logLines: logs });
-  }
+  webServer?.clearSubagent();
+  webServer?.completeAgent(plannerId);
 
   if (planResult.exitCode !== 0) {
+    // Planner failed — skip executor, proceed directly to post-execution
+    // orchestrator so it can make a routing decision (retry or skip).
     log("Planner failed — skipping executor, proceeding to post-execution orchestrator", {
       storyId, exitCode: planResult.exitCode,
     });
 
     const s2 = await loadStoryState(epicDir, storyId);
-    await saveStoryState(epicDir, storyId, {
-      ...s2,
-      status: "verifying",
-      updatedAt: new Date().toISOString(),
-    });
+    await saveStoryState(epicDir, storyId, { ...s2, status: "verifying", updatedAt: new Date().toISOString() });
 
     const postDir = await ensureSubagentDirectory(epicDir, `orchestrator-post-${storyId}`);
-    const orchStarted = Date.now();
-    if (widget) {
-      widget.update({ activeSubagent: { role: "orchestrator", storyId, step: 0, totalSteps: 4, stepName: "", startedAt: orchStarted } });
-      stopPolling = startActivePolling(postDir, widget, orchStarted, "orchestrator", storyId);
-    }
+    const postId = `orchestrator-post-${storyId}`;
+    webServer?.registerAgent({ id: postId, name: `orchestrator-post-${storyId}`, dir: postDir, role: "orchestrator", model: null, parent: null });
+    webServer?.trackSubagent(postDir, "orchestrator", storyId);
 
-    await spawnOrchestrator({ epicDir, subagentDir: postDir, cwd, extensionPath, stepSequence: "post-execution", storyId, log, ui: ui ?? undefined });
-    stopPolling?.();
+    await spawnSubagent({ role: "orchestrator", epicDir, stepSequence: "post-execution", storyId }, postDir, opts);
 
-    if (widget) {
-      const logs = await readRecentLogs(postDir);
-      widget.update({ logLines: logs });
-    }
+    webServer?.clearSubagent();
+    webServer?.completeAgent(postId);
     return;
   }
 
   // 3. Set status to 'executing'.
   const s3 = await loadStoryState(epicDir, storyId);
-  await saveStoryState(epicDir, storyId, {
-    ...s3,
-    status: "executing",
-    updatedAt: new Date().toISOString(),
-  });
+  await saveStoryState(epicDir, storyId, { ...s3, status: "executing", updatedAt: new Date().toISOString() });
 
   // 4. Spawn executor.
   const execDir = await ensureSubagentDirectory(epicDir, `executor-${storyId}`);
-  const execStarted = Date.now();
-  if (widget) {
-    widget.update({ activeSubagent: { role: "executor", storyId, step: 0, totalSteps: 2, stepName: "", startedAt: execStarted } });
-    stopPolling = startActivePolling(execDir, widget, execStarted, "executor", storyId);
-  }
+  const execId = `executor-${storyId}`;
+  webServer?.registerAgent({ id: execId, name: `executor-${storyId}`, dir: execDir, role: "executor", model: null, parent: null });
+  webServer?.trackSubagent(execDir, "executor", storyId);
 
-  const execResult = await spawnExecutor({ epicDir, subagentDir: execDir, cwd, extensionPath, storyId, log, ui: ui ?? undefined });
-  stopPolling?.();
+  const execResult = await spawnSubagent({ role: "executor", epicDir, storyId }, execDir, opts);
 
-  if (widget) {
-    const logs = await readRecentLogs(execDir);
-    widget.update({ logLines: logs });
-  }
+  webServer?.clearSubagent();
+  webServer?.completeAgent(execId);
 
   if (execResult.exitCode !== 0) {
     log("Executor failed", { storyId, exitCode: execResult.exitCode });
@@ -271,33 +211,20 @@ async function runStoryExecution(
 
   // 5. Set status to 'verifying'.
   const s4 = await loadStoryState(epicDir, storyId);
-  await saveStoryState(epicDir, storyId, {
-    ...s4,
-    status: "verifying",
-    updatedAt: new Date().toISOString(),
-  });
+  await saveStoryState(epicDir, storyId, { ...s4, status: "verifying", updatedAt: new Date().toISOString() });
 
-  // 6. Spawn orchestrator (post-execution) — writes verdict to story state.
+  // 6. Spawn orchestrator (post-execution).
   const postDir = await ensureSubagentDirectory(epicDir, `orchestrator-post-${storyId}`);
-  const orchStarted = Date.now();
-  if (widget) {
-    widget.update({ activeSubagent: { role: "orchestrator", storyId, step: 0, totalSteps: 4, stepName: "", startedAt: orchStarted } });
-    stopPolling = startActivePolling(postDir, widget, orchStarted, "orchestrator", storyId);
-  }
+  const postId = `orchestrator-post-${storyId}`;
+  webServer?.registerAgent({ id: postId, name: `orchestrator-post-${storyId}`, dir: postDir, role: "orchestrator", model: null, parent: null });
+  webServer?.trackSubagent(postDir, "orchestrator", storyId);
 
-  await spawnOrchestrator({ epicDir, subagentDir: postDir, cwd, extensionPath, stepSequence: "post-execution", storyId, log, ui: ui ?? undefined });
-  stopPolling?.();
+  await spawnSubagent({ role: "orchestrator", epicDir, stepSequence: "post-execution", storyId }, postDir, opts);
 
-  if (widget) {
-    const logs = await readRecentLogs(postDir);
-    widget.update({ logLines: logs });
-  }
+  webServer?.clearSubagent();
+  webServer?.completeAgent(postId);
 }
 
-// retryCount is the 1-based retry attempt number (1 for first retry, 2 for
-// second, etc.). It is included in directory names so each retry gets its own
-// isolated stdout.log and events.jsonl, preventing directory collision when
-// DEFAULT_MAX_RETRIES > 1.
 async function runStoryReexecution(
   epicDir: string,
   cwd: string,
@@ -306,54 +233,42 @@ async function runStoryReexecution(
   retryCount: number,
   failureContext: string | undefined,
   log: Logger,
-  ui: ExtensionUIContext | null,
-  widget: EpicWidgetController | null,
+  webServer: WebServerHandle | null,
 ): Promise<void> {
+  const opts: SpawnOptions = { cwd, extensionPath, log, webServer: webServer ?? undefined };
+
   const execDir = await ensureSubagentDirectory(epicDir, `executor-${storyId}-retry-${retryCount}`);
-  const execStarted = Date.now();
-  let stopPolling: (() => void) | undefined;
-  if (widget) {
-    widget.update({ activeSubagent: { role: "executor", storyId, step: 0, totalSteps: 2, stepName: "retry", startedAt: execStarted } });
-    stopPolling = startActivePolling(execDir, widget, execStarted, "executor", storyId);
-  }
+  const execId = `executor-${storyId}-retry-${retryCount}`;
+  webServer?.registerAgent({ id: execId, name: `executor-${storyId}-retry-${retryCount}`, dir: execDir, role: "executor", model: null, parent: null });
+  webServer?.trackSubagent(execDir, "executor", storyId);
 
-  await spawnExecutor({ epicDir, subagentDir: execDir, cwd, extensionPath, storyId, retryContext: failureContext, log, ui: ui ?? undefined });
-  stopPolling?.();
+  // retryContext flows from koan_retry_story's failure_summary into the task
+  // manifest, where the executor reads it from step 1 guidance.
+  await spawnSubagent({ role: "executor", epicDir, storyId, retryContext: failureContext }, execDir, opts);
 
-  if (widget) {
-    const logs = await readRecentLogs(execDir);
-    widget.update({ logLines: logs });
-  }
+  webServer?.clearSubagent();
+  webServer?.completeAgent(execId);
 
   const story = await loadStoryState(epicDir, storyId);
-  await saveStoryState(epicDir, storyId, {
-    ...story,
-    status: "verifying",
-    updatedAt: new Date().toISOString(),
-  });
+  await saveStoryState(epicDir, storyId, { ...story, status: "verifying", updatedAt: new Date().toISOString() });
 
   const postDir = await ensureSubagentDirectory(epicDir, `orchestrator-post-${storyId}-retry-${retryCount}`);
-  const orchStarted = Date.now();
-  if (widget) {
-    widget.update({ activeSubagent: { role: "orchestrator", storyId, step: 0, totalSteps: 4, stepName: "", startedAt: orchStarted } });
-    stopPolling = startActivePolling(postDir, widget, orchStarted, "orchestrator", storyId);
-  }
+  const postId = `orchestrator-post-${storyId}-retry-${retryCount}`;
+  webServer?.registerAgent({ id: postId, name: `orchestrator-post-${storyId}-retry-${retryCount}`, dir: postDir, role: "orchestrator", model: null, parent: null });
+  webServer?.trackSubagent(postDir, "orchestrator", storyId);
 
-  await spawnOrchestrator({ epicDir, subagentDir: postDir, cwd, extensionPath, stepSequence: "post-execution", storyId, log, ui: ui ?? undefined });
-  stopPolling?.();
+  await spawnSubagent({ role: "orchestrator", epicDir, stepSequence: "post-execution", storyId }, postDir, opts);
 
-  if (widget) {
-    const logs = await readRecentLogs(postDir);
-    widget.update({ logLines: logs });
-  }
+  webServer?.clearSubagent();
+  webServer?.completeAgent(postId);
 }
 
-async function refreshWidgetStories(epicDir: string, widget: EpicWidgetController): Promise<void> {
+async function refreshWebServerStories(epicDir: string, webServer: WebServerHandle): Promise<void> {
   try {
     const stories = await loadAllStoryStates(epicDir);
-    widget.update({ stories: stories.map((s) => ({ storyId: s.storyId, status: s.status })) });
+    webServer.pushStories(stories.map((s) => ({ storyId: s.storyId, status: s.status })));
   } catch {
-    // Non-fatal — widget update is best-effort.
+    // Non-fatal
   }
 }
 
@@ -362,43 +277,42 @@ async function runStoryLoop(
   cwd: string,
   extensionPath: string,
   log: Logger,
-  ui: ExtensionUIContext | null,
-  widget: EpicWidgetController | null,
+  webServer: WebServerHandle | null,
 ): Promise<{ success: boolean; summary: string }> {
   {
-
-    // 2. Spawn orchestrator (pre-execution) — selects first story.
+    // 1. Spawn orchestrator (pre-execution) — selects first story.
     const preDir = await ensureSubagentDirectory(epicDir, "orchestrator-pre");
-    const preStarted = Date.now();
-    let stopPolling: (() => void) | undefined;
-    if (widget) {
-      widget.update({ activeSubagent: { role: "orchestrator", step: 0, totalSteps: 2, stepName: "pre-execution", startedAt: preStarted } });
-      stopPolling = startActivePolling(preDir, widget, preStarted, "orchestrator");
-    }
+    const preId = "orchestrator-pre";
+    webServer?.registerAgent({ id: preId, name: "orchestrator-pre", dir: preDir, role: "orchestrator", model: null, parent: null });
+    webServer?.trackSubagent(preDir, "orchestrator");
 
-    const preResult = await spawnOrchestrator({ epicDir, subagentDir: preDir, cwd, extensionPath, stepSequence: "pre-execution", log, ui: ui ?? undefined });
-    stopPolling?.();
+    const preResult = await spawnSubagent(
+      { role: "orchestrator", epicDir, stepSequence: "pre-execution" },
+      preDir,
+      { cwd, extensionPath, log, webServer: webServer ?? undefined },
+    );
+
+    webServer?.clearSubagent();
+    webServer?.completeAgent(preId);
 
     if (preResult.exitCode !== 0) {
       return { success: false, summary: "Pre-execution orchestrator failed" };
     }
 
-    if (widget) await refreshWidgetStories(epicDir, widget);
+    if (webServer) await refreshWebServerStories(epicDir, webServer);
 
-    // 3. Story execution loop — route until terminal state.
+    // 2. Story execution loop — route until terminal state.
     while (true) {
       const stories = await loadAllStoryStates(epicDir);
-      if (widget) {
-        widget.update({ stories: stories.map((s) => ({ storyId: s.storyId, status: s.status })) });
-      }
+      webServer?.pushStories(stories.map((s) => ({ storyId: s.storyId, status: s.status })));
 
       const routing = routeFromState(stories, log);
 
       switch (routing.action) {
         case "execute": {
           const storyId = routing.storyId as string;
-          await runStoryExecution(epicDir, cwd, extensionPath, storyId, log, ui, widget);
-          if (widget) await refreshWidgetStories(epicDir, widget);
+          await runStoryExecution(epicDir, cwd, extensionPath, storyId, log, webServer);
+          if (webServer) await refreshWebServerStories(epicDir, webServer);
           break;
         }
 
@@ -406,7 +320,6 @@ async function runStoryLoop(
           const storyId = routing.storyId as string;
           const story = stories.find((s) => s.storyId === storyId) as StoryState;
 
-          // Retry budget exhaustion: skip + notify per §11.6.3.
           if (story.retryCount >= story.maxRetries) {
             log("Retry budget exhausted, skipping story", { storyId, retryCount: story.retryCount });
             await saveStoryState(epicDir, storyId, {
@@ -415,9 +328,11 @@ async function runStoryLoop(
               skipReason: `Retry budget exhausted after ${story.retryCount} attempt(s). Last failure: ${story.failureSummary ?? "(none recorded)"}`,
               updatedAt: new Date().toISOString(),
             });
-            ui?.notify(`Story ${storyId} skipped after ${story.retryCount} failed attempt(s).`, "warning");
-            if (widget) await refreshWidgetStories(epicDir, widget);
-            // Continue loop — other stories may still be runnable.
+            webServer?.pushNotification(
+              `Story ${storyId} skipped after ${story.retryCount} failed attempt(s).`,
+              "warning",
+            );
+            if (webServer) await refreshWebServerStories(epicDir, webServer);
             continue;
           }
 
@@ -427,15 +342,14 @@ async function runStoryLoop(
             retryCount: story.retryCount + 1,
             updatedAt: new Date().toISOString(),
           });
-          await runStoryReexecution(epicDir, cwd, extensionPath, storyId, story.retryCount + 1, story.failureSummary, log, ui, widget);
-          if (widget) await refreshWidgetStories(epicDir, widget);
+          await runStoryReexecution(epicDir, cwd, extensionPath, storyId, story.retryCount + 1, story.failureSummary, log, webServer);
+          if (webServer) await refreshWebServerStories(epicDir, webServer);
           break;
         }
 
         case "complete": {
           const done = stories.filter((s) => s.status === "done").length;
           const skipped = stories.filter((s) => s.status === "skipped").length;
-          if (widget) widget.update({ activeSubagent: null });
           return { success: true, summary: `Epic complete: ${done} done, ${skipped} skipped` };
         }
 
@@ -450,90 +364,96 @@ async function runStoryLoop(
 // Public API
 // ---------------------------------------------------------------------------
 
-export async function runEpicPipeline(
+export async function runPipeline(
   epicDir: string,
   cwd: string,
   extensionPath: string,
   log: Logger,
-  ui: ExtensionUIContext | null,
+  webServer: WebServerHandle | null,
 ): Promise<{ success: boolean; summary: string }> {
-  // Widget created at pipeline start — spans the full epic lifecycle (Phase A + B).
-  // Widget is an observation layer: receives one-way update() calls, never
-  // influences routing decisions.
   const epicState = await loadEpicState(epicDir);
-  const widget = ui ? new EpicWidgetController(ui, epicState.epicId) : null;
 
-  try {
-    // Phase A: Epic Creation.
-    ui?.notify("Starting intake...", "info");
-    await saveEpicState(epicDir, { ...epicState, phase: "intake" });
-    if (widget) widget.update({ epicPhase: "intake" });
-
-    const intakeOk = await runIntake(epicDir, cwd, extensionPath, log, ui, widget);
-    if (!intakeOk) return { success: false, summary: "Intake phase failed" };
-
-    const afterIntake = await loadEpicState(epicDir);
-    await saveEpicState(epicDir, { ...afterIntake, phase: "decomposition" });
-    if (widget) widget.update({ epicPhase: "decomposition" });
-
-    const decompOk = await runDecomposer(epicDir, cwd, extensionPath, log, ui, widget);
-    if (!decompOk) return { success: false, summary: "Decomposition phase failed" };
-
-    // Discover stories by scanning the filesystem — per AGENTS.md invariant,
-    // LLMs write markdown files only. The decomposer wrote stories/{id}/story.md
-    // files; the driver scans to discover IDs and populates epic-state.json.
-    const storyIds = await discoverStoryIds(epicDir);
-    log("Discovered story IDs", { count: storyIds.length, ids: storyIds });
-
-    for (const storyId of storyIds) {
-      await ensureStoryDirectory(epicDir, storyId);
-    }
-
-    const afterDecomp = await loadEpicState(epicDir);
-    await saveEpicState(epicDir, { ...afterDecomp, stories: storyIds, phase: "review" });
-    if (widget) {
-      widget.update({ epicPhase: "review" });
-      const initialStories = await loadAllStoryStates(epicDir);
-      widget.update({ stories: initialStories.map((s) => ({ storyId: s.storyId, status: s.status })) });
-    }
-
-    // Spec review gate — present story sketches for human approval if UI is available.
-    if (ui && storyIds.length > 0) {
-      ui.notify("Decomposition complete. Review story sketches...", "info");
-      const reviewResult = await reviewStorySketches(epicDir, storyIds, ui);
-      log("Spec review complete", { approved: reviewResult.approved.length, skipped: reviewResult.skipped.length });
-
-      for (const skippedId of reviewResult.skipped) {
-        const skippedStory = await loadStoryState(epicDir, skippedId);
-        await saveStoryState(epicDir, skippedId, {
-          ...skippedStory,
-          status: "skipped",
-          skipReason: "Removed during spec review",
-          updatedAt: new Date().toISOString(),
-        });
-      }
-
-      const reviewedState = await loadEpicState(epicDir);
-      await saveEpicState(epicDir, { ...reviewedState, stories: storyIds });
-    } else {
-      log("Spec review gate: auto-approving (no UI or no stories)");
-    }
-
-    // Phase B: Execution.
-    const beforeExec = await loadEpicState(epicDir);
-    await saveEpicState(epicDir, { ...beforeExec, phase: "executing" });
-    if (widget) widget.update({ epicPhase: "executing" });
-
-    const result = await runStoryLoop(epicDir, cwd, extensionPath, log, ui, widget);
-
-    if (result.success) {
-      const afterExec = await loadEpicState(epicDir);
-      await saveEpicState(epicDir, { ...afterExec, phase: "completed" });
-      if (widget) widget.update({ epicPhase: "completed" });
-    }
-
-    return result;
-  } finally {
-    widget?.destroy();
+  // Model config gate — blocks until user confirms model selection in the web UI.
+  if (webServer) {
+    await webServer.requestModelConfig();
   }
+
+  // Phase A: Epic Creation.
+  webServer?.pushNotification("Starting intake...", "info");
+  await saveEpicState(epicDir, { ...epicState, phase: "intake" });
+  webServer?.pushPhase("intake");
+
+  const intakeOk = await runIntake(epicDir, cwd, extensionPath, log, webServer);
+  if (!intakeOk) return { success: false, summary: "Intake phase failed" };
+
+  const afterIntake = await loadEpicState(epicDir);
+  await saveEpicState(epicDir, { ...afterIntake, phase: "decomposition" });
+  webServer?.pushPhase("decomposition");
+
+  const decompOk = await runDecomposer(epicDir, cwd, extensionPath, log, webServer);
+  if (!decompOk) return { success: false, summary: "Decomposition phase failed" };
+
+  // Discover stories by scanning the filesystem — the decomposer LLM wrote
+  // story.md files using the write tool; the driver discovers them here and
+  // populates the JSON story list (never asks the LLM to update JSON directly).
+  const storyIds = await discoverStoryIds(epicDir);
+  log("Discovered story IDs", { count: storyIds.length, ids: storyIds });
+
+  for (const storyId of storyIds) {
+    await ensureStoryDirectory(epicDir, storyId);
+  }
+
+  const afterDecomp = await loadEpicState(epicDir);
+  await saveEpicState(epicDir, { ...afterDecomp, stories: storyIds, phase: "review" });
+  webServer?.pushPhase("review");
+
+  if (webServer) {
+    const initialStories = await loadAllStoryStates(epicDir);
+    webServer.pushStories(initialStories.map((s) => ({ storyId: s.storyId, status: s.status })));
+  }
+
+  // Spec review gate — present story sketches for human approval.
+  // Auto-approves when no web server is running (CI/headless mode).
+  if (webServer && storyIds.length > 0) {
+    webServer.pushNotification("Decomposition complete. Review story sketches...", "info");
+
+    const titles = await Promise.all(storyIds.map((id) => readStoryTitle(epicDir, id)));
+    const reviewStories: ReviewStory[] = storyIds.map((storyId, i) => ({
+      storyId,
+      title: titles[i] ?? storyId,
+    }));
+
+    const reviewResult = await webServer.requestReview(reviewStories);
+    log("Spec review complete", { approved: reviewResult.approved.length, skipped: reviewResult.skipped.length });
+
+    for (const skippedId of reviewResult.skipped) {
+      const skippedStory = await loadStoryState(epicDir, skippedId);
+      await saveStoryState(epicDir, skippedId, {
+        ...skippedStory,
+        status: "skipped",
+        skipReason: "Removed during spec review",
+        updatedAt: new Date().toISOString(),
+      });
+    }
+
+    const reviewedState = await loadEpicState(epicDir);
+    await saveEpicState(epicDir, { ...reviewedState, stories: storyIds });
+  } else {
+    log("Spec review gate: auto-approving (no web server or no stories)");
+  }
+
+  // Phase B: Execution.
+  const beforeExec = await loadEpicState(epicDir);
+  await saveEpicState(epicDir, { ...beforeExec, phase: "executing" });
+  webServer?.pushPhase("executing");
+
+  const result = await runStoryLoop(epicDir, cwd, extensionPath, log, webServer);
+
+  if (result.success) {
+    const afterExec = await loadEpicState(epicDir);
+    await saveEpicState(epicDir, { ...afterExec, phase: "completed" });
+    webServer?.pushPhase("completed");
+  }
+
+  return result;
 }
