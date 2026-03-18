@@ -24,7 +24,8 @@
   ],
   "scripts": {
     "check": "tsc --noEmit",
-    "build": "tsc --project tsconfig.build.json",
+    "build:web": "esbuild src/planner/web/js/app.jsx --bundle --format=esm --jsx=automatic --jsx-import-source=preact --alias:react=preact/compat --alias:react-dom=preact/compat --outfile=src/planner/web/dist/app.js --minify",
+    "build": "npm run build:web && tsc --project tsconfig.build.json",
     "pretest": "npm run build",
     "test": "node --test --test-concurrency=1 build/tests"
   },
@@ -33,6 +34,9 @@
   },
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "^0.52.10",
-    "typescript": "^5.9.3"
+    "esbuild": "^0.25.1",
+    "preact": "^10.26.2",
+    "typescript": "^5.9.3",
+    "zustand": "^4.5.7"
   }
 }
