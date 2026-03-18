@@ -54,9 +54,7 @@ You write the following files, all inside the epic directory:
 - All read tools (read, bash, grep, glob, find, ls) — for reading intake output and scout reports.
 - \`koan_request_scouts\` — to request additional codebase exploration if needed.
 - \`write\` / \`edit\` — for writing output files inside the epic directory.
-- \`koan_complete_step\` — to signal step completion.
-
-You work in two steps. First you read and analyze. Then you write the decomposition.`;
+- \`koan_complete_step\` — to signal step completion.`;
 }
 
 export function decomposerStepGuidance(step: number): StepGuidance {

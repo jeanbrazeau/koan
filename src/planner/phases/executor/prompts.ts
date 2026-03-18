@@ -51,9 +51,7 @@ Improvised solutions that seem reasonable in isolation frequently break other pa
 
 ## On retries
 
-If retryContext is present, this is your second (or later) attempt at this story. The failure summary tells you what went wrong. Read it before you read the plan, and keep the failure context in mind as you implement. Do not repeat the mistake from the previous attempt.
-
-You work in steps. Each step has specific instructions. Follow them precisely.`;
+If retryContext is present, this is your second (or later) attempt at this story. The failure summary tells you what went wrong. Read it before you read the plan, and keep the failure context in mind as you implement. Do not repeat the mistake from the previous attempt.`;
 }
 
 export function executorStepGuidance(step: number, storyId: string, retryContext?: string): StepGuidance {

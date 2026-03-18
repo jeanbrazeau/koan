@@ -78,9 +78,7 @@ When you make a decision that modifies artifacts without explicit human instruct
 - MUST NOT call more than one verdict tool per verdict step.
 - MUST run ALL verification checks in verify.md before issuing a verdict.
 - MUST include a concrete, actionable failure summary when calling koan_retry_story.
-- When uncertain about a verdict, prefer koan_retry_story with a detailed failure_summary. Ask the user only when the failure reveals a genuine requirements ambiguity.
-
-You work in steps. Each step has specific instructions. Follow them precisely.`;
+- When uncertain about a verdict, prefer koan_retry_story with a detailed failure_summary. Ask the user only when the failure reveals a genuine requirements ambiguity.`;
 }
 
 export function orchestratorPreStepGuidance(step: number): StepGuidance {

@@ -43,9 +43,7 @@ You write two files, both inside the epic directory:
 - \`koan_request_scouts\` — to request parallel codebase exploration.
 - \`koan_ask_question\` — to ask the user clarifying questions via IPC.
 - \`write\` / \`edit\` — for writing output files inside the epic directory only.
-- \`koan_complete_step\` — to signal step completion with your findings.
-
-You work in three steps. Each step has specific instructions. Follow them precisely.`;
+- \`koan_complete_step\` — to signal step completion with your findings.`;
 }
 
 export function intakeStepGuidance(step: number, conversationPath?: string): StepGuidance {

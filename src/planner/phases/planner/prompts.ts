@@ -56,9 +56,7 @@ Each check entry must include:
 - MUST NOT plan beyond the current story's scope. If a step would touch something not in the story, flag it as out-of-scope.
 - MUST NOT make architectural decisions. If a decision is needed that is outside the planner's scope, note it in plan.md as: \`BLOCKER: [description]. The orchestrator will ask the user via koan_ask_question during verification.\`
 - MUST include enough detail that the executor can implement the plan in one pass without guessing.
-- MUST scope plan/context.md to only what the executor needs — context files that include too much code obscure the relevant parts.
-
-You work in steps. Each step has specific instructions. Follow them precisely.`;
+- MUST scope plan/context.md to only what the executor needs — context files that include too much code obscure the relevant parts.`;
 }
 
 export function plannerStepGuidance(step: number, storyId: string): StepGuidance {

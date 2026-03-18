@@ -1,4 +1,14 @@
 // Workflow tool registration: koan_complete_step.
+//
+// This is the single most critical tool in koan. Every subagent workflow depends
+// on it being called — it is the mechanism that keeps a pi -p process alive across
+// multiple steps. Without it, the LLM would do one turn of work and exit, because
+// pi -p processes terminate as soon as the LLM finishes a turn without a tool call.
+//
+// The workflow pattern: boot prompt → LLM calls koan_complete_step → receives step 1
+// instructions → does work → calls koan_complete_step → receives step 2 (or "Phase
+// complete.") → repeat. The tool name itself is a call to action: "complete the step."
+//
 // Tools register once at init; execute callbacks read from the mutable
 // RuntimeContext at call time, decoupling static registration from phase routing.
 
@@ -24,21 +34,27 @@ export function registerWorkflowTools(
   ctx: RuntimeContext,
 ): void {
   // -- koan_complete_step --
-  // The `thoughts` parameter captures the model's work output (analysis,
-  // review, findings) as a tool parameter instead of as text output.
-  // This ensures models that cannot mix text + tool_call in one response
-  // (e.g. GPT-5-codex) still advance the workflow reliably.
+  // INVARIANT: `thoughts` is internal chain-of-thought reasoning only.
+  // It is NOT captured as task output and must NOT be treated as such.
+  // Its purpose: models that cannot mix text output + tool_call in one
+  // response (e.g. GPT-5-codex) still express reasoning via this param.
+  // Task output is written to files in the subagent directory:
+  //   - scouts:  {subagentDir}/findings.md
+  //   - intake:  {subagentDir}/context.md
+  //   - others:  as defined by step instructions
+  // The driver/parent reads those files after the subagent exits.
   pi.registerTool({
     name: "koan_complete_step",
     label: "Complete current workflow step",
     description: [
       "Signal completion of the current workflow step.",
-      "Put your analysis, findings, or work output in the `thoughts` parameter.",
+      "The `thoughts` parameter is for internal chain-of-thought reasoning only — it is NOT captured as task output.",
+      "Task output must be written to files in your subagent directory (e.g., findings.md for scouts).",
       "DO NOT call this tool until the step instructions explicitly tell you to.",
     ].join(" "),
     parameters: Type.Object({
       thoughts: Type.Optional(Type.String({
-        description: "Your analysis, findings, or work output for this step.",
+        description: "Internal chain-of-thought reasoning only. NOT task output. Write task output to files in your subagent directory.",
       })),
     }),
     async execute(_toolCallId, params) {
