@@ -1,5 +1,7 @@
 // Scout phase: answers one narrow codebase question and writes findings.
-// Single-step, cheap model, no user interaction.
+// Four-step workflow (orient → investigate → verify → report), cheap model, no user interaction.
+// Task context (question, outputFile, role) is received via CLI flags and
+// delivered to the LLM through step guidance (returned by koan_complete_step).
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
@@ -12,17 +14,24 @@ import type { StepGuidance } from "../../lib/step.js";
 
 export class ScoutPhase extends BasePhase {
   protected readonly role = "scout";
-  protected readonly totalSteps = 1;
+  protected readonly totalSteps = 4;
+
+  private readonly question: string;
+  private readonly outputFile: string;
+  private readonly investigatorRole: string;
 
   constructor(
     pi: ExtensionAPI,
-    config: { epicDir: string },
+    config: { epicDir: string; question: string; outputFile: string; investigatorRole: string },
     ctx: RuntimeContext,
     log?: Logger,
     eventLog?: EventLog,
   ) {
     super(pi, ctx, log ?? createLogger("ScoutPhase"), eventLog);
-    void config; // epicDir used via ctx.epicDir for permission scoping
+    void config.epicDir; // used via ctx.epicDir for permission scoping
+    this.question = config.question;
+    this.outputFile = config.outputFile;
+    this.investigatorRole = config.investigatorRole;
   }
 
   protected getSystemPrompt(): string {
@@ -33,7 +42,7 @@ export class ScoutPhase extends BasePhase {
     return SCOUT_STEP_NAMES[step] ?? `Step ${step}`;
   }
 
-  protected getStepGuidance(_step: number): StepGuidance {
-    return scoutStepGuidance();
+  protected getStepGuidance(step: number): StepGuidance {
+    return scoutStepGuidance(step, this.question, this.outputFile, this.investigatorRole);
   }
 }
