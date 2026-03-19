@@ -96,6 +96,7 @@ export function buildMultiSelectionResult(
 export interface ReviewStory {
   storyId: string;
   title: string;
+  content: string;
 }
 
 export interface ReviewResult {

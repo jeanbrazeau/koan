@@ -417,10 +417,18 @@ export async function runPipeline(
   if (webServer && storyIds.length > 0) {
     webServer.pushNotification("Decomposition complete. Review story sketches...", "info");
 
-    const titles = await Promise.all(storyIds.map((id) => readStoryTitle(epicDir, id)));
+    const storyData = await Promise.all(storyIds.map(async (id) => {
+      const storyPath = path.join(epicDir, "stories", id, "story.md");
+      try {
+        const raw = await fs.readFile(storyPath, "utf8");
+        const title = readStoryTitle(epicDir, id);
+        return { raw, title: await title };
+      } catch { return { raw: "", title: id }; }
+    }));
     const reviewStories: ReviewStory[] = storyIds.map((storyId, i) => ({
       storyId,
-      title: titles[i] ?? storyId,
+      title: storyData[i].title ?? storyId,
+      content: storyData[i].raw,
     }));
 
     const reviewResult = await webServer.requestReview(reviewStories);

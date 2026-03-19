@@ -1,6 +1,58 @@
-import { useState } from 'preact/hooks'
+import { useState, useRef, useEffect } from 'preact/hooks'
 import { useStore } from '../../store.js'
 import { submitReview } from '../../lib/api.js'
+
+function StoryCard({ story, isApproved, onToggle }) {
+  const [expanded, setExpanded] = useState(false)
+  const bodyRef = useRef(null)
+  const [isClamped, setIsClamped] = useState(false)
+
+  useEffect(() => {
+    const el = bodyRef.current
+    if (el) setIsClamped(el.scrollHeight > el.clientHeight + 2)
+  }, [story.content, expanded])
+
+  function handleCheckbox(e) {
+    e.stopPropagation()
+    onToggle()
+  }
+
+  function handleExpand() {
+    if (story.content) setExpanded(v => !v)
+  }
+
+  return (
+    <div class={`review-card ${isApproved ? 'review-card-approved' : ''}`}>
+      <div class="review-card-header" onClick={handleExpand}>
+        <div class="review-card-checkbox" onClick={handleCheckbox}>
+          <div class={`review-checkbox ${isApproved ? 'checked' : ''}`} />
+        </div>
+        <div class="review-card-title">
+          <span class="review-card-id">{story.storyId}</span>
+          <span class="review-card-desc">{story.title}</span>
+        </div>
+        {story.content && (
+          <span class="review-card-chevron">{expanded ? '▾' : '▸'}</span>
+        )}
+      </div>
+      {story.content && (
+        <>
+          <div
+            ref={bodyRef}
+            class={`review-card-body${expanded ? ' expanded' : ''}`}
+          >
+            {story.content}
+          </div>
+          {!expanded && isClamped && (
+            <div class="review-card-more" onClick={handleExpand}>
+              show spec ▸
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
 
 export function ReviewForm({ token }) {
   const { requestId, payload: stories } = useStore(s => s.pendingInput)
@@ -28,18 +80,17 @@ export function ReviewForm({ token }) {
   return (
     <div class="phase-inner">
       <h2 class="phase-heading">Review story sketches</h2>
-      <p class="phase-status">Review stories before execution begins.</p>
+      <p class="phase-status">
+        Review stories before execution begins. Click a story to inspect its specification.
+      </p>
 
       {stories.map(story => (
-        <div
+        <StoryCard
           key={story.storyId}
-          class={`review-story ${approved.has(story.storyId) ? 'checked' : ''}`}
-          onClick={() => toggle(story.storyId)}
-        >
-          <div class="review-story-checkbox" />
-          <span class="review-story-id">{story.storyId}</span>
-          <span class="review-story-title"> — {story.title}</span>
-        </div>
+          story={story}
+          isApproved={approved.has(story.storyId)}
+          onToggle={() => toggle(story.storyId)}
+        />
       ))}
 
       <div class="form-actions">
