@@ -6,6 +6,7 @@ Spoke documents:
 - [docs/subagents.md](docs/subagents.md) — spawn lifecycle, task manifest, step-first workflow, permissions
 - [docs/ipc.md](docs/ipc.md) — file-based IPC protocol, scout spawning, question routing
 - [docs/state.md](docs/state.md) — driver/LLM boundary, epic and story state, routing rules
+- [docs/intake-loop.md](docs/intake-loop.md) — confidence-gated loop, non-linear step progression, prompt engineering
 
 ---
 
@@ -35,6 +36,10 @@ Tool returns:  Step 1 instructions (rich context, task details, guidance)
 Tool returns:  Step 2 instructions (or "Phase complete.")
 ```
 
+Step progression is normally linear, but subclasses may override `getNextStep()`
+to implement non-linear flows. The intake phase loops steps 2–4 until a
+confidence gate is satisfied. See [docs/intake-loop.md](docs/intake-loop.md).
+
 ## 3. Driver Determinism
 
 The driver reads JSON state files and exit codes, applies routing rules, and
@@ -44,6 +49,9 @@ spawns the next subagent. It never makes judgment calls or parses free-text.
 
 Every tool call passes through a role-based permission fence. Unknown roles
 and tools are blocked. Planning roles can only write inside the epic directory.
+
+The fence also supports step-level gating for individual roles: the intake
+phase blocks side-effecting tools during its read-only Extract step (step 1).
 
 ## 5. Need-to-Know Prompts
 
