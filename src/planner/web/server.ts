@@ -13,7 +13,7 @@ import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 import { AuthStorage, ModelRegistry } from "@mariozechner/pi-coding-agent";
 
 import { readProjection, readRecentLogs } from "../lib/audit.js";
-import { loadModelTierConfig, saveModelTierConfig, type ModelTierConfig } from "../model-config.js";
+import { loadModelTierConfig, saveModelTierConfig, loadScoutConcurrency, saveScoutConcurrency, type ModelTierConfig } from "../model-config.js";
 import type {
   WebServerHandle,
   AskQuestion,
@@ -22,6 +22,7 @@ import type {
   AnswerResult,
   AnswerElement,
   LogLine,
+  IntakeProgressEvent,
 } from "./server-types.js";
 import type { EpicPhase, StoryStatus } from "../types.js";
 
@@ -187,10 +188,10 @@ interface AgentInfoInternal {
   role: string;
   model: string | null;
   parent: string | null;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | null;
   tokensSent: number;
   tokensReceived: number;
-  recentActions: Array<{ tool: string; summary: string; inFlight: boolean }>;
+  recentActions: Array<{ tool: string; summary: string; inFlight: boolean; ts?: string }>;
   spawnOrder: number;
   completionOrder?: number;
   pollingTimer?: ReturnType<typeof setInterval>;
@@ -198,6 +199,9 @@ interface AgentInfoInternal {
   subPhase: string | null;
   eventCount: number;
   completionSummary: string | null;
+  // Cached most-recent projection from pollAgent(), used by the polling timer
+  // to read confidence/iteration without issuing a second readProjection call.
+  lastProjection?: import("../lib/audit.js").Projection;
 }
 
 // ---------------------------------------------------------------------------
@@ -233,10 +237,14 @@ export async function startWebServer(epicDir: string): Promise<WebServerHandle> 
   let lastLogs: LogLine[] = [];
   let pipelineEnd: { success: boolean; summary: string } | null = null;
 
-  // Denormalized intake progress buffer
-  let currentIntakeProgress: { subPhase: string | null; intakeDone: boolean } = {
+  // Denormalized intake progress buffer. Includes confidence and iteration from
+  // the intake agent's projection so the UI can visualize loop progress.
+  // Typed as IntakeProgressEvent so the SSE payload is compile-time verified.
+  let currentIntakeProgress: IntakeProgressEvent = {
     subPhase: null,
     intakeDone: false,
+    confidence: null,
+    iteration: 0,
   };
 
   // SSE clients
@@ -294,7 +302,7 @@ export async function startWebServer(epicDir: string): Promise<WebServerHandle> 
     const scoutArray = buildScoutsArray();
     if (scoutArray.length > 0) write("scouts", { scouts: scoutArray });
 
-    if (currentIntakeProgress.subPhase !== null || currentIntakeProgress.intakeDone) {
+    if (currentIntakeProgress.subPhase !== null || currentIntakeProgress.intakeDone || currentIntakeProgress.confidence !== null) {
       write("intake-progress", currentIntakeProgress);
     }
 
@@ -320,18 +328,10 @@ export async function startWebServer(epicDir: string): Promise<WebServerHandle> 
 
   function buildAgentsArray(): Array<{
     id: string; name: string; role: string; model: string | null;
-    parent: string | null; status: string; tokensSent: number;
-    tokensReceived: number; recentActions: Array<{ tool: string; summary: string; inFlight: boolean }>; subPhase: string | null;
+    parent: string | null; status: string | null; tokensSent: number;
+    tokensReceived: number; recentActions: Array<{ tool: string; summary: string; inFlight: boolean; ts?: string }>; subPhase: string | null;
   }> {
-    const sorted = Array.from(agents.values()).sort((a, b) => {
-      if (a.status === "running" && b.status !== "running") return -1;
-      if (b.status === "running" && a.status !== "running") return 1;
-      if (a.status !== "failed" && b.status === "failed") return -1;
-      if (b.status !== "failed" && a.status === "failed") return 1;
-      const aOrder = a.status === "running" ? a.spawnOrder : (a.completionOrder ?? a.spawnOrder);
-      const bOrder = b.status === "running" ? b.spawnOrder : (b.completionOrder ?? b.spawnOrder);
-      return aOrder - bOrder;
-    });
+    const sorted = Array.from(agents.values()).sort((a, b) => a.spawnOrder - b.spawnOrder);
     return sorted.map((a) => ({
       id: a.id,
       name: a.name,
@@ -347,7 +347,7 @@ export async function startWebServer(epicDir: string): Promise<WebServerHandle> 
   }
 
   function buildScoutsArray(): Array<{
-    id: string; role: string; status: string; lastAction: string | null;
+    id: string; role: string; status: string | null; lastAction: string | null;
     eventCount: number; model: string | null; completionSummary: string | null;
     tokensSent: number; tokensReceived: number;
   }> {
@@ -381,17 +381,31 @@ export async function startWebServer(epicDir: string): Promise<WebServerHandle> 
         agent.tokensSent = projection.tokensSent;
         agent.tokensReceived = projection.tokensReceived;
         agent.eventCount = projection.eventCount;
+        // Cache the latest projection so polling timers can read confidence/iteration
+        // without issuing a second readProjection call for the same agent.
+        agent.lastProjection = projection;
         if (projection.status !== "running") {
           agent.status = projection.status;
         }
         if (agent.role === "intake") {
           const hasPendingAsk = Array.from(pendingInputs.values()).some((p) => p.type === "ask");
-          const STEP_PHASE: Record<number, string> = { 0: "context", 1: "context", 2: "explore", 3: "spec" };
-          agent.subPhase = hasPendingAsk ? "questions" : (STEP_PHASE[projection.step] ?? "spec");
+          // Map intake step numbers to display sub-phase names.
+          // Steps 2-4 repeat across iterations; show "questions" when user input is pending.
+          const STEP_PHASE: Record<number, string> = {
+            0: "extract", 1: "extract",
+            2: "scout", 3: "deliberate", 4: "reflect",
+            5: "synthesize",
+          };
+          agent.subPhase = hasPendingAsk ? "questions" : (STEP_PHASE[projection.step] ?? "reflect");
         }
       }
       if (logs.length > 0) {
-        agent.recentActions = logs.slice(-5).map((l) => ({ tool: l.tool, summary: l.summary || '', inFlight: l.inFlight }));
+        agent.recentActions = logs.slice(-5).map((l) => ({
+          tool: l.tool,
+          summary: l.summary || '',
+          inFlight: l.inFlight,
+          ...(l.ts ? { ts: l.ts } : {}),
+        }));
       }
       if (agent.role === "scout" && projection?.completionSummary && !agent.completionSummary) {
         agent.completionSummary = projection.completionSummary;
@@ -413,8 +427,21 @@ export async function startWebServer(epicDir: string): Promise<WebServerHandle> 
       // Push intake-progress event if the intake agent's sub-phase changed
       const intake = Array.from(agents.values()).find(a => a.role === "intake");
       if (intake) {
-        const next = { subPhase: intake.subPhase, intakeDone: currentPhase !== "intake" && currentPhase !== null };
-        if (next.subPhase !== currentIntakeProgress.subPhase || next.intakeDone !== currentIntakeProgress.intakeDone) {
+        // Use the projection already read by pollAgent (cached on agent.lastProjection)
+        // to avoid a redundant readProjection call for the same file in the same tick.
+        const intakeProjection = intake.lastProjection ?? null;
+        const next: IntakeProgressEvent = {
+          subPhase: intake.subPhase,
+          intakeDone: currentPhase !== "intake" && currentPhase !== null,
+          confidence: intakeProjection?.intakeConfidence ?? null,
+          iteration: intakeProjection?.intakeIteration ?? 0,
+        };
+        const changed =
+          next.subPhase !== currentIntakeProgress.subPhase ||
+          next.intakeDone !== currentIntakeProgress.intakeDone ||
+          next.confidence !== currentIntakeProgress.confidence ||
+          next.iteration !== currentIntakeProgress.iteration;
+        if (changed) {
           currentIntakeProgress = next;
           pushEvent("intake-progress", currentIntakeProgress);
         }
@@ -489,7 +516,7 @@ export async function startWebServer(epicDir: string): Promise<WebServerHandle> 
 
       if (method === "PUT" && pathname === "/api/model-config") {
         const body = await readBody(req).catch(() => null);
-        const b = body as { requestId?: string; tiers: Record<string, string | null> } | null;
+        const b = body as { requestId?: string; tiers: Record<string, string | null>; scoutConcurrency?: number } | null;
         if (!b) { sendJson(res, 400, { ok: false, error: "Invalid body" }); return; }
         const { requestId, tiers } = b;
 
@@ -499,6 +526,11 @@ export async function startWebServer(epicDir: string): Promise<WebServerHandle> 
         const cheap = tiers?.cheap;
         if (strong && standard && cheap) {
           await saveModelTierConfig({ strong, standard, cheap } as ModelTierConfig);
+        }
+
+        // Save scout concurrency
+        if (typeof b.scoutConcurrency === "number" && b.scoutConcurrency > 0) {
+          await saveScoutConcurrency(b.scoutConcurrency);
         }
 
         // Resolve the blocking gate if requestId matches
@@ -664,10 +696,11 @@ export async function startWebServer(epicDir: string): Promise<WebServerHandle> 
         registerAgent(info: {
           id: string; name: string; dir: string; role: string;
           model: string | null; parent: string | null;
+          status?: "running" | null;
         }): void {
           const agent: AgentInfoInternal = {
             ...info,
-            status: "running",
+            status: info.status ?? "running",
             tokensSent: 0,
             tokensReceived: 0,
             recentActions: [],
@@ -677,9 +710,18 @@ export async function startWebServer(epicDir: string): Promise<WebServerHandle> 
             completionSummary: null,
           };
           agents.set(info.id, agent);
-          startAgentPolling(agent);
+          if (agent.status === "running") startAgentPolling(agent);
           pushEvent("agents", { agents: buildAgentsArray() });
           if (info.role === "scout") pushEvent("scouts", { scouts: buildScoutsArray() });
+        },
+
+        startAgent(id: string): void {
+          const agent = agents.get(id);
+          if (!agent || agent.status !== null) return;
+          agent.status = "running";
+          startAgentPolling(agent);
+          pushEvent("agents", { agents: buildAgentsArray() });
+          if (agent.role === "scout") pushEvent("scouts", { scouts: buildScoutsArray() });
         },
 
         completeAgent(id: string): void {
@@ -768,7 +810,8 @@ export async function startWebServer(epicDir: string): Promise<WebServerHandle> 
         async requestModelConfig(): Promise<void> {
           const requestId = randomUUID();
           const config = await loadModelTierConfig();
-          const payload = { requestId, tiers: config, availableModels };
+          const scoutConcurrency = await loadScoutConcurrency();
+          const payload = { requestId, tiers: config, scoutConcurrency, availableModels };
           return new Promise<void>((resolve, reject) => {
             pendingInputs.set(requestId, {
               type: "model-config" as const,

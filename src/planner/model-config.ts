@@ -18,6 +18,7 @@ export type ModelTierConfig = Record<ModelTier, string>;
 
 interface KoanConfigFile {
   modelTiers?: Record<string, string>;
+  scoutConcurrency?: number;
   [key: string]: unknown;
 }
 
@@ -72,6 +73,44 @@ export async function loadModelTierConfig(): Promise<ModelTierConfig | null> {
 
   return result as ModelTierConfig;
 }
+
+// -- Scout concurrency -------------------------------------------------------
+
+const DEFAULT_SCOUT_CONCURRENCY = 8;
+
+export async function loadScoutConcurrency(): Promise<number> {
+  try {
+    const raw = await fs.readFile(CONFIG_PATH, "utf8");
+    const parsed = JSON.parse(raw) as KoanConfigFile;
+    if (typeof parsed.scoutConcurrency === "number" && parsed.scoutConcurrency > 0) {
+      return parsed.scoutConcurrency;
+    }
+  } catch {
+    // File missing or invalid — use default.
+  }
+  return DEFAULT_SCOUT_CONCURRENCY;
+}
+
+export async function saveScoutConcurrency(concurrency: number): Promise<void> {
+  const configDir = path.dirname(CONFIG_PATH);
+  await fs.mkdir(configDir, { recursive: true });
+
+  let existing: KoanConfigFile = {};
+  try {
+    const raw = await fs.readFile(CONFIG_PATH, "utf8");
+    existing = JSON.parse(raw) as KoanConfigFile;
+  } catch {
+    // Start fresh.
+  }
+
+  existing.scoutConcurrency = concurrency;
+
+  const tmpPath = `${CONFIG_PATH}.tmp`;
+  await fs.writeFile(tmpPath, `${JSON.stringify(existing, null, 2)}\n`, "utf8");
+  await fs.rename(tmpPath, CONFIG_PATH);
+}
+
+// -- Model tiers (save) ------------------------------------------------------
 
 export async function saveModelTierConfig(config: ModelTierConfig): Promise<void> {
   const configDir = path.dirname(CONFIG_PATH);

@@ -32,10 +32,13 @@ function groupByProvider(models) {
   }))
 }
 
+const DEFAULT_SCOUT_CONCURRENCY = 8
+
 export function ModelConfig({ token, isGate = false, onClose }) {
   const pending = useStore(s => s.pendingInput)
   const availableModels = useStore(s => s.availableModels)
   const [tiers, setTiers] = useState({ strong: '', standard: '', cheap: '' })
+  const [scoutConcurrency, setScoutConcurrency] = useState(DEFAULT_SCOUT_CONCURRENCY)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
 
@@ -48,6 +51,7 @@ export function ModelConfig({ token, isGate = false, onClose }) {
         standard: t?.standard || '',
         cheap: t?.cheap || '',
       })
+      setScoutConcurrency(t?.scoutConcurrency || DEFAULT_SCOUT_CONCURRENCY)
       setLoading(false)
       return
     }
@@ -61,6 +65,7 @@ export function ModelConfig({ token, isGate = false, onClose }) {
             cheap: data.tiers.cheap || '',
           })
         }
+        if (data.scoutConcurrency) setScoutConcurrency(data.scoutConcurrency)
         setLoading(false)
       })
       .catch(() => setLoading(false))
@@ -74,6 +79,7 @@ export function ModelConfig({ token, isGate = false, onClose }) {
         standard: tiers.standard || null,
         cheap: tiers.cheap || null,
       },
+      scoutConcurrency,
     }
     if (isGate && pending?.requestId) {
       body.requestId = pending.requestId
@@ -130,6 +136,21 @@ export function ModelConfig({ token, isGate = false, onClose }) {
             </select>
           </div>
         ))}
+      </div>
+
+      <div class="model-config-section">
+        <h3 class="model-config-section-heading">Scout Concurrency</h3>
+        <p class="phase-status">
+          Maximum number of scout agents to run in parallel during codebase investigation.
+        </p>
+        <input
+          type="number"
+          class="scout-concurrency-input"
+          min="1"
+          max="32"
+          value={scoutConcurrency}
+          onChange={e => setScoutConcurrency(Math.max(1, Math.min(32, parseInt(e.target.value) || DEFAULT_SCOUT_CONCURRENCY)))}
+        />
       </div>
 
       <div class="form-actions">

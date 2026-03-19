@@ -18,7 +18,7 @@ export function connectSSE(token) {
     ask:                (d) => set({ pendingInput: { type: 'ask',    requestId: d.requestId, payload: d.questions } }),
     review:             (d) => set({ pendingInput: { type: 'review', requestId: d.requestId, payload: d.stories } }),
     'model-config':           (d) => set(s => ({
-      pendingInput: { type: 'model-config', requestId: d.requestId, payload: d.tiers },
+      pendingInput: { type: 'model-config', requestId: d.requestId, payload: { ...d.tiers, scoutConcurrency: d.scoutConcurrency } },
       ...(d.availableModels ? { availableModels: d.availableModels } : {}),
     })),
     'model-config-confirmed': ()  => set(s => s.pendingInput?.type === 'model-config' ? { pendingInput: null } : {}),

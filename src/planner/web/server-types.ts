@@ -171,10 +171,23 @@ export interface PipelineEndEvent {
   summary: string;
 }
 
+// Confidence level type for the intake confidence loop.
+export type IntakeConfidenceLevel = "exploring" | "low" | "medium" | "high" | "certain" | null;
+
+export interface IntakeProgressEvent {
+  subPhase: string | null;
+  intakeDone: boolean;
+  // The most recent confidence level declared by koan_set_confidence.
+  // Null before the first Reflect step completes.
+  confidence: IntakeConfidenceLevel;
+  // The current loop iteration (1-based). Zero before the loop begins.
+  iteration: number;
+}
+
 export interface ScoutState {
   id: string;
   role: string;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | null;
   lastAction: string | null;
   eventCount: number;
   model: string | null;
@@ -193,10 +206,10 @@ export interface AgentEntry {
   role: string;
   model: string | null;
   parent: string | null;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "failed" | null;
   tokensSent: number;
   tokensReceived: number;
-  recentActions: Array<{ tool: string; summary: string; inFlight: boolean }>;
+  recentActions: Array<{ tool: string; summary: string; inFlight: boolean; ts?: string }>;
   subPhase: string | null;
 }
 
@@ -236,7 +249,9 @@ export interface WebServerHandle {
     role: string;
     model: string | null;
     parent: string | null;
+    status?: "running" | null;
   }): void;
+  startAgent(id: string): void;
   completeAgent(id: string): void;
 
   // Blocking input methods

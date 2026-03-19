@@ -24,6 +24,7 @@ import {
 import type { ScoutTask as TaskScoutTask } from "./task.js";
 import { pool } from "./pool.js";
 import { readProjection } from "./audit.js";
+import { loadScoutConcurrency } from "../model-config.js";
 import type { WebServerHandle, AskQuestion, AnswerResult } from "../web/server-types.js";
 import { OTHER_OPTION } from "../web/server-types.js";
 
@@ -133,8 +134,9 @@ async function handleScoutRequest(
     return { ipcTask, subagentDir: scoutDir };
   });
 
-  // Register scouts with the web server before spawning so the UI shows them
-  // immediately rather than waiting for the first audit poll.
+  // Register scouts with the web server as queued (status: null) so the UI
+  // shows them immediately. They transition to "running" when the pool picks
+  // them up and the pi process is actually launched.
   if (webServer) {
     for (const entry of scoutEntries) {
       webServer.registerAgent({
@@ -144,18 +146,21 @@ async function handleScoutRequest(
         role: "scout",
         model: null,
         parent: scoutCtx.parentRole,
+        status: null,
       });
     }
   }
 
   const taskIds = scoutEntries.map((t) => t.ipcTask.id);
+  const concurrency = await loadScoutConcurrency();
   await pool(
     taskIds,
-    4,
+    concurrency,
     async (taskId) => {
       if (signal.aborted) return { exitCode: 1, stderr: "aborted", subagentDir: "" };
 
       const entry = scoutEntries.find((t) => t.ipcTask.id === taskId)!;
+      webServer?.startAgent(taskId);
       await fs.mkdir(entry.subagentDir, { recursive: true });
 
       // Construct the task manifest for this scout. The IPC-level ipcTask carries
