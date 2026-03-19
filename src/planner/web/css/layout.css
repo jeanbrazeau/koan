@@ -200,6 +200,40 @@
   user-select: none;
 }
 
+/* ---- Scout dispatch card ---- */
+
+.activity-card-scouts .activity-card-tool {
+  color: var(--blue);
+}
+
+.scout-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--gap-xs);
+  padding: 0 var(--gap-md) var(--gap-sm);
+}
+
+.scout-entry {
+  display: flex;
+  align-items: baseline;
+  gap: var(--gap-sm);
+  padding: 3px var(--gap-sm);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  background: var(--bg);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+}
+
+.scout-name {
+  color: var(--text-muted);
+  font-weight: 500;
+}
+
+.scout-role {
+  color: var(--text-ghost);
+}
+
 .activity-card-more:hover {
   color: var(--text-strong);
 }
@@ -239,7 +273,7 @@
   padding-left: 12px;
 }
 
-/* Monitor — sticky bottom, sizes to content */
+/* Monitor — sticky bottom, sizes to content, centered like activity feed */
 .monitor {
   flex: 0 0 auto;
   max-height: 40vh;
@@ -250,6 +284,11 @@
   /* Fade at top edge when scrollable */
   mask-image: linear-gradient(to bottom, transparent, black 12px, black);
   -webkit-mask-image: linear-gradient(to bottom, transparent, black 12px, black);
+}
+
+.monitor-inner {
+  max-width: 960px;
+  margin: 0 auto;
 }
 
 .agent-table-header {

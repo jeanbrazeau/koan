@@ -23,31 +23,33 @@ export function AgentMonitor() {
 
   return (
     <footer class="monitor">
-      <div class="agent-table-header">
-        <span class="monitor-label">Subagents</span>
-        <div class="agent-badges">
-          <span class="badge active">{running}</span>
-          {done > 0 && <span class="badge done">{done}</span>}
+      <div class="monitor-inner">
+        <div class="agent-table-header">
+          <span class="monitor-label">Subagents</span>
+          <div class="agent-badges">
+            <span class="badge active">{running}</span>
+            {done > 0 && <span class="badge done">{done}</span>}
+          </div>
+          <span class="token-totals">
+            {(sent > 0 || recv > 0) ? `↑${formatTokens(sent)} ↓${formatTokens(recv)}` : ''}
+          </span>
         </div>
-        <span class="token-totals">
-          {(sent > 0 || recv > 0) ? `↑${formatTokens(sent)} ↓${formatTokens(recv)}` : ''}
-        </span>
+        <table class="agent-table">
+          <thead>
+            <tr>
+              <th class="col-status"></th>
+              <th class="col-agent">agent</th>
+              <th class="col-model">model</th>
+              <th class="col-tokens">↑ sent</th>
+              <th class="col-tokens">↓ recv</th>
+              <th class="col-doing">doing</th>
+            </tr>
+          </thead>
+          <tbody>
+            {agents.map(a => <AgentRow key={a.id} agent={a} maxLines={maxLines} />)}
+          </tbody>
+        </table>
       </div>
-      <table class="agent-table">
-        <thead>
-          <tr>
-            <th class="col-status"></th>
-            <th class="col-agent">agent</th>
-            <th class="col-model">model</th>
-            <th class="col-tokens">↑ sent</th>
-            <th class="col-tokens">↓ recv</th>
-            <th class="col-doing">doing</th>
-          </tr>
-        </thead>
-        <tbody>
-          {agents.map(a => <AgentRow key={a.id} agent={a} maxLines={maxLines} />)}
-        </tbody>
-      </table>
     </footer>
   )
 }

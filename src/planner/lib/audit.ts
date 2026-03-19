@@ -581,6 +581,8 @@ export interface LogLine {
   ts?: string;
   // Expandable content body: thinking text, tool output, etc.
   body?: string;
+  // Structured scout data for koan_request_scouts cards.
+  scouts?: Array<{ id: string; role: string }>;
 }
 
 interface ToolShape {
@@ -600,7 +602,7 @@ const KOAN_SHAPES: Record<string, ToolShape> = {
   koan_retry_story: { keys: ["story_id", "failure_summary"], freeform: ["failure_summary"], highValue: true },
   koan_skip_story: { keys: ["story_id", "reason"], freeform: ["reason"], highValue: true },
   koan_ask_question: { keys: ["questions"], arrays: ["questions"], highValue: true },
-  koan_request_scouts: { keys: ["scouts"], arrays: ["scouts"], highValue: true },
+  koan_request_scouts: { keys: [], highValue: true },
 };
 
 // Reads events.jsonl, correlates tool pairs, and returns structured log entries.
@@ -910,10 +912,10 @@ function formatKoanInvocation(inv: ToolInvocation): LogLine {
     inFlight: inv.inFlight,
   };
 
-  // Expand koan_request_scouts with per-scout detail lines.
+  // Structured scout data for the UI card.
   if (inv.tool === "koan_request_scouts" && Array.isArray(inv.input["scouts"])) {
-    line.details = (inv.input["scouts"] as Array<Record<string, unknown>>).map(
-      (s) => `${s["id"] ?? "?"} (${s["role"] ?? "agent"})`,
+    line.scouts = (inv.input["scouts"] as Array<Record<string, unknown>>).map(
+      (s) => ({ id: String(s["id"] ?? "?"), role: String(s["role"] ?? "agent") }),
     );
   }
 
