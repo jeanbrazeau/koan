@@ -132,7 +132,7 @@ async function deleteIpcFile(dir) { ... }
 |--------|----------|---------|
 | **Parent IPC responder** | 300ms | Detect subagent requests quickly |
 | **Subagent tool** | 500ms | Wait for parent response |
-| **Web server agent polling** | 500ms | Update agent status in UI |
+| **Web server agent polling** | 50ms | Update agent status in UI |
 
 The parent polls slightly faster than the subagent to ensure it picks up
 requests promptly. Both intervals are low enough for interactive feel.

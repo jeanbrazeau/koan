@@ -290,21 +290,52 @@ the write is allowed (cannot scope-check without context).
 
 ## Model Tiers
 
-Roles map deterministically to 3 tiers:
+### Why 3 tiers instead of per-role configuration
 
-| Tier | Roles | Purpose |
-|------|-------|---------|
-| **strong** | intake, decomposer, orchestrator, planner | Complex reasoning, planning, decomposition |
-| **standard** | executor | Code implementation |
-| **cheap** | scout | Narrow codebase investigation |
+Koan has 6 roles, but they cluster into 3 capability bands. Configuring 3
+model names is simpler than 6 and matches the natural grouping:
 
-The user configures which specific model each tier uses via the web UI at
-pipeline start (model config gate). If no config exists, `resolveModelForRole`
-returns `undefined` and the `--model` flag is omitted, preserving pi's
-current active model as the implicit fallback.
+| Tier | Roles | Why this tier |
+|------|-------|--------------|
+| **strong** | intake, decomposer, orchestrator, planner | Complex multi-step reasoning: investigating ambiguous requirements, splitting work into stories, verifying correctness, producing precise implementation plans |
+| **standard** | executor | Code implementation: reliable tool use and file editing without requiring the deepest reasoning |
+| **cheap** | scout | Narrow codebase investigation: reading files, grepping patterns, writing a focused findings report — no deep reasoning needed |
 
-Model tier config is all-or-nothing: all 3 tiers must be present. Partial
-configs are treated as absent and logged.
+The mapping is hardcoded in `types.ts` (`ROLE_MODEL_TIER`). Adding a new role
+requires updating that map.
+
+### Configuration
+
+Model tiers are configured via the web UI at pipeline start (the **model config
+gate** fires before any subagent spawns). The user selects one model per tier.
+Config is persisted to `~/.koan/config.json` under the `modelTiers` key:
+
+```json
+{
+  "modelTiers": {
+    "strong": "claude-opus-4-5",
+    "standard": "claude-sonnet-4-5",
+    "cheap": "claude-haiku-4-5"
+  },
+  "scoutConcurrency": 4
+}
+```
+
+If no config exists or the config is partial, `resolveModelForRole` returns
+`undefined` and the `--model` flag is omitted — pi's current active model
+becomes the implicit fallback for all roles.
+
+Config is **all-or-nothing**: all 3 tiers must be present. Partial configs
+are treated as absent and logged. This prevents a half-configured state where
+some roles use intended models and others silently fall back.
+
+### Scout concurrency
+
+`scoutConcurrency` (default: 4) controls how many scout subagents run in
+parallel via the bounded pool (`lib/pool.ts`). The pool uses an in-process
+semaphore: all scout tasks are submitted to `Promise.all` simultaneously; the
+semaphore gates actual execution. Increase this for faster scouting on machines
+with ample resources; decrease it to reduce peak memory pressure.
 
 ---
 
@@ -350,7 +381,7 @@ The three JSON files have distinct lifecycles per
 | File | Writer | Reader | When |
 |------|--------|--------|------|
 | `task.json` | Parent | Child | Once at startup |
-| `state.json` | Child | Parent | Continuous (500ms polling) |
+| `state.json` | Child | Parent | Continuous (50ms polling) |
 | `ipc.json` | Both | Both | Per-request (created, answered, deleted) |
 
 ---
@@ -361,11 +392,11 @@ The parent registers each subagent with the web server for UI tracking:
 
 ```typescript
 webServer.registerAgent({ id, name, dir, role, model, parent });
-// → starts 500ms polling of audit projection + recent logs
+// → starts 50ms polling of audit projection + recent logs
 // → SSE "agents" event to browser
 
 webServer.trackSubagent(dir, role, storyId?);
-// → starts 500ms polling for "subagent" + "logs" SSE events
+// → starts 50ms polling for "subagent" + "logs" SSE events
 
 // ... subagent runs ...
 
@@ -377,7 +408,7 @@ webServer.completeAgent(id);
 ```
 
 **Dual polling for intake agent:** Both `registerAgent()` and
-`trackSubagent()` poll at 500ms. `registerAgent` polling derives the intake
+`trackSubagent()` poll at 50ms. `registerAgent` polling derives the intake
 sub-phase for the progress bar:
 
 | Step | Pending ask? | Sub-phase |
