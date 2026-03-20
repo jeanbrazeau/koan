@@ -159,6 +159,7 @@ This is not optional — the IPC responder, web server, and audit system all
 poll files concurrently. A partial read of `ipc.json` or `state.json` would
 cause silent data corruption or spurious errors.
 
+
 ---
 
 ## Tool Registration Constraint
@@ -176,6 +177,100 @@ is impossible. Instead:
 3. The `RuntimeContext` is populated later, during `before_agent_start`
 
 This is the **mutable-ref pattern**: static registration, dynamic dispatch.
+
+---
+
+## Event-Sourced Audit
+
+Each subagent maintains an append-only event log (`events.jsonl`) and an
+eagerly-materialized projection (`state.json`). This is the observability
+layer that drives the web dashboard.
+
+```
+audit event appended → fold(events) → state.json written atomically
+web server polls state.json (50ms) → detects change → pushes SSE event
+sse.js handler → Zustand store update → component re-render
+```
+
+### Rules
+
+- **`fold()` is pure** — given the same event sequence, it must produce the same
+  projection. No I/O, no randomness, no side effects inside `fold()`.
+- **New event types require a fold handler.** Unknown events are silently ignored
+  (forward compatibility), but a new event that is not folded contributes nothing
+  to the projection and will not be visible to the web server or UI.
+- **Projection is eagerly materialized.** It is written atomically after every
+  `append()` call. The web server reads `state.json`, not `events.jsonl`. This
+  keeps polling cheap (one file read) without needing to replay the log.
+- **`append()` calls are serialized.** `EventLog` serializes appends via an
+  internal promise chain. Concurrent callers (e.g., heartbeat timer and
+  `tool_result` handler) enqueue without racing on the `.tmp.json` file.
+
+### Adding new observable state
+
+When adding a new piece of state that the UI should see, wire all five layers:
+
+1. **Emit an audit event** — add a typed event and an `emit*()` helper in `lib/audit.ts`
+2. **Update `fold()`** — handle the new event type to update the projection field
+3. **Update the Projection type** — add the field to the `Projection` interface
+4. **Web server polling** — read the new field from the cached projection in the 50ms polling callback and include it in the SSE payload
+5. **Frontend** — add a handler in `sse.js` and a slice in `store.js`
+
+All five layers must be present. Missing any one of them produces silent data
+loss — the event is appended but never reaches the browser.
+
+---
+
+## SSE Event Lifecycle
+
+State flows from LLM tool calls to the browser through a five-layer pipeline.
+All layers must be wired for a new event type to be visible end-to-end.
+
+```
+[LLM calls tool]
+     ↓
+[tool mutates ctx + calls ctx.eventLog.emit*()] ← lib/audit.ts
+     ↓
+[fold() updates Projection → state.json written atomically]
+     ↓
+[web server polls state.json every 50ms, detects change] ← web/server.ts
+     ↓
+[pushEvent(type, payload) → SSE stream → browser]
+     ↓
+[sse.js addEventListener(type, handler) → useStore.setState()] ← web/js/sse.js
+     ↓
+[Zustand component selector → React re-render] ← web/js/store.js
+```
+
+### Concrete example: `koan_set_confidence`
+
+```
+LLM calls koan_set_confidence({ level: "high" })
+  → ctx.intakeConfidence = "high"
+  → ctx.eventLog.emitConfidenceChange("high", 2)
+      → append({ kind: "confidence_change", level: "high", iteration: 2 })
+      → fold: projection.intakeConfidence = "high", projection.intakeIteration = 2
+      → writeState(projection) → state.json
+  → returns "Confidence set to high."
+
+web server polling timer fires (50ms)
+  → pollAgent(intake) → readProjection(dir) → intakeConfidence: "high"
+  → agent.lastProjection = projection
+  → intake sub-phase → builds IntakeProgressEvent { confidence: "high", iteration: 2, ... }
+  → pushEvent("intake-progress", event) → SSE stream
+
+browser receives "intake-progress" event
+  → sse.js handler → useStore.setState({ intakeProgress: event })
+  → confidence visualization component re-renders
+```
+
+### Replay on reconnect
+
+The web server buffers the last value of every stateful SSE event type. On
+reconnect, `replayState()` writes all buffered events to the new client. This
+ensures the browser always has current state after a network drop, without
+requiring a full page reload.
+
 
 ---
 
@@ -239,18 +334,52 @@ constraint. Do not assume bash calls are blocked for planning roles.
 
 ### Don't rely on prompt instructions alone to restrict step behavior
 
-Prompt instructions can be ignored by the LLM. The intake phase learned this
-the hard way: the original 3-step design told the LLM not to scout in step 1,
-but the LLM frontloaded all work into step 1 anyway, causing duplicate scout
-requests in later steps.
+**The pattern: prompt expresses intent; mechanical gate catches non-compliance.
+Neither alone is sufficient.**
 
-Mechanical enforcement is required for any behavior that is critical to
-correctness. Use the permission fence (`checkPermission` with `intakeStep`) to
-block tools that must not be used in a given step. Use
-`validateStepCompletion()` to block step advancement when required pre-calls
-have not been made. Prompts express intent; enforcement catches non-compliance.
+- **Prompt alone** — the LLM can ignore it. The original 3-step intake design
+  told the LLM not to scout in step 1; it frontloaded all work into step 1
+  anyway, producing duplicate scout requests in later steps.
+- **Gate alone** — the LLM receives a cryptic "blocked" error with no context.
+  It cannot fix the problem if it does not know what it did wrong.
+
+Three enforcement mechanisms are available — use the appropriate one for the
+constraint:
+
+| Mechanism | What it enforces | How |
+|-----------|-----------------|-----|
+| **Permission fence** (`checkPermission`) | Which tools a role (or step) can use | Block at `tool_call` event; LLM sees a rejection message |
+| **`validateStepCompletion()`** | Required pre-calls before step advancement | Block `koan_complete_step`; LLM sees an error and must comply |
+| **Tool description** | Soft guidance on when to call | Cannot be enforced; LLM can ignore it |
+
+Any behavioral constraint that matters for correctness needs **both** a prompt
+instruction (so the LLM knows what to do) and a mechanical gate (so
+non-compliance is caught and corrected, not silently propagated).
 
 See [intake-loop.md § Step-Aware Permission Gating](./intake-loop.md#step-aware-permission-gating).
+
+### Don't give a step multiple cognitive goals
+
+Each step should have exactly one cognitive goal. Grouping multiple goals into
+a single step ("do A, then B, then C") enables **simulated refinement**: the
+LLM artificially downgrades its output for A to manufacture visible improvement
+in C. When all three goals are in one step, the model can pre-plan the
+"improvement" because it already knows C is coming.
+
+Separate `koan_complete_step` calls enforce genuinely isolated reasoning: the
+LLM must complete each goal before it sees the next goal's instructions. There
+is no opportunity to sandbag — the next step's prompt has not arrived yet.
+
+This is why the intake phase has three loop steps (Scout / Deliberate / Reflect)
+rather than a single monolithic "investigate" step. The scout phase follows the
+same principle (orient → investigate → verify → report — four distinct goals,
+four distinct steps).
+
+When designing a new phase, each step should answer: "What is the single thing
+this step accomplishes?" If the answer requires "and then", split the step.
+
+See [intake-loop.md § Prompt Chaining over Stepwise](./intake-loop.md#prompt-engineering-principles)
+for the detailed rationale.
 
 ### Don't parse free-text for loop control decisions
 
