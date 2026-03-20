@@ -446,7 +446,7 @@ export async function startWebServer(epicDir: string): Promise<WebServerHandle> 
           pushEvent("intake-progress", currentIntakeProgress);
         }
       }
-    }, 500);
+    }, 50);
     timer.unref();
     agent.pollingTimer = timer;
   }
@@ -682,7 +682,7 @@ export async function startWebServer(epicDir: string): Promise<WebServerHandle> 
                 pushEvent("subagent", event);
               }
             } catch { /* Non-fatal */ }
-          }, 500);
+          }, 50);
           timer.unref();
           trackingTimer = timer;
         },
