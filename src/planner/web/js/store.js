@@ -10,6 +10,7 @@ export const useStore = create((set) => ({
   currentToolCallId: null,   // string | null — in-flight tool for the main agent
   subagent: null,
   pendingInput: null,
+  intakeProgress: null,      // IntakeProgressEvent | null — set during intake phase
 
   // Client-only state
   notifications: [],

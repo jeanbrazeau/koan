@@ -6,15 +6,23 @@ export function connectSSE(token) {
 
   const handlers = {
     'init':             (d) => set({ availableModels: d.availableModels || [] }),
-    phase:              (d) => set({ phase: d.phase, ...(d.phase !== 'intake' && { pendingInput: null }) }),
-    'intake-progress':  () => {},  // data model preserved server-side; UI unused for now
+    phase:              (d) => set({
+      phase: d.phase,
+      // Clear interaction state and intake progress when leaving intake
+      ...(d.phase !== 'intake' && { pendingInput: null, intakeProgress: null }),
+    }),
+    'intake-progress':  (d) => set({ intakeProgress: d }),
     stories:            (d) => set({ stories: d.stories }),
     scouts:             (d) => set({ scouts: d.scouts }),
     agents:             (d) => set({ agents: d.agents }),
     logs:               (d) => set({ logs: d.lines, currentToolCallId: d.currentToolCallId ?? null }),
     subagent:           (d) => set({ subagent: d }),
     'subagent-idle':    ()  => set({ subagent: null }),
-    'pipeline-end':     (d) => set(s => ({ phase: d.success ? 'completed' : s.phase, pipelineEnd: d })),
+    'pipeline-end':     (d) => set(s => ({
+      phase: d.success ? 'completed' : s.phase,
+      pipelineEnd: d,
+      intakeProgress: null,
+    })),
     ask:                (d) => set({ pendingInput: { type: 'ask',    requestId: d.requestId, payload: d.questions } }),
     review:             (d) => set({ pendingInput: { type: 'review', requestId: d.requestId, payload: d.stories } }),
     'model-config':           (d) => set(s => ({
