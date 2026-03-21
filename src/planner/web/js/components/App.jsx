@@ -1,5 +1,4 @@
 import { Header } from './Header.jsx'
-import { SubagentMeta } from './SubagentMeta.jsx'
 import { PhaseContent } from './PhaseContent.jsx'
 import { ActivityFeed } from './ActivityFeed.jsx'
 import { AgentMonitor } from './AgentMonitor.jsx'
@@ -31,7 +30,6 @@ export function App({ token, topic }) {
         <div class="live-layout">
           <div class="live-main">
             <main class="main-panel">
-              <SubagentMeta />
               <ActivityFeed />
             </main>
           </div>

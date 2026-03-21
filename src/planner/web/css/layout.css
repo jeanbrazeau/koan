@@ -50,41 +50,6 @@
   margin-top: var(--header-height);
 }
 
-/* Subagent metadata bar */
-.subagent-meta {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: var(--gap-lg);
-  padding: var(--gap-sm) var(--gap-xl);
-  border-bottom: 1px solid var(--border);
-  background: var(--bg-surface);
-  font-family: var(--font-mono);
-  font-size: var(--font-size-sm);
-}
-
-.meta-role {
-  color: var(--blue);
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-}
-
-.meta-item {
-  color: var(--text-muted);
-}
-
-.meta-item::before {
-  content: '·';
-  color: var(--text-ghost);
-  margin-right: var(--gap-lg);
-}
-
-.meta-tokens {
-  margin-left: auto;
-  color: var(--text-dim);
-}
-
 /* Phase content area — scrollable, fills remaining space */
 .phase-content {
   flex: 1 1 0;
