@@ -30,7 +30,8 @@
     "test": "node --test --test-concurrency=1 build/tests"
   },
   "dependencies": {
-    "@sinclair/typebox": "^0.32.30"
+    "@sinclair/typebox": "^0.32.30",
+    "marked": "^17.0.5"
   },
   "devDependencies": {
     "@mariozechner/pi-coding-agent": "^0.52.10",
