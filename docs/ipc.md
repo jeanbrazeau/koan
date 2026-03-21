@@ -49,8 +49,7 @@ subagent: deleteIpcFile(dir)                           ← cleanup
 
 ## Message Types
 
-The protocol supports exactly two request types, discriminated by the `type`
-field:
+The protocol supports three request types, discriminated by the `type` field:
 
 ### `ask` — User questions
 
@@ -92,6 +91,33 @@ interface ScoutIpcFile {
   response: { findings: string[]; failures: string[] } | null;
 }
 ```
+
+### `artifact-review` — Human review of a written artifact
+
+The subagent has produced a markdown artifact and needs human review before
+advancing. The request contains the file path and raw markdown content; the
+response contains the user's feedback string or `"Accept"`.
+
+```typescript
+interface ArtifactReviewIpcFile {
+  type: "artifact-review";
+  id: string;
+  createdAt: string;
+  payload: {
+    artifactPath: string;  // file path (used as display label)
+    content: string;       // raw markdown (read from the file by the tool)
+    description?: string;  // optional reviewer context
+  };
+  response: {
+    id: string;
+    respondedAt: string;
+    feedback: string;      // "Accept" or free-form revision feedback
+  } | null;
+}
+```
+
+See [artifact-review.md](./artifact-review.md) for the full protocol, tool
+interface, web UI behavior, and reusability guidance.
 
 ---
 
@@ -149,8 +175,9 @@ while (!signal.aborted) {
   sleep(300ms)
   ipc = readIpcFile(subagentDir)
   if ipc === null or ipc.response !== null → continue
-  if ipc.type === "ask"           → handleAskRequest(...)
-  if ipc.type === "scout-request" → handleScoutRequest(...)
+  if ipc.type === "ask"             → handleAskRequest(...)
+  if ipc.type === "scout-request"   → handleScoutRequest(...)
+  if ipc.type === "artifact-review" → handleArtifactReviewRequest(...)
 }
 ```
 
@@ -268,6 +295,42 @@ The tool result tells the LLM:
 `"Failed scouts (non-fatal, proceed without them): task-id-1, task-id-2"`
 
 The LLM must proceed with whatever findings are available.
+
+---
+
+## Artifact Review Flow
+
+```
+brief-writer LLM calls koan_review_artifact({ path: "…/brief.md" })
+  → tool reads file content
+  → tool writes ArtifactReviewIpcFile { type: "artifact-review", response: null }
+  → tool enters 500ms poll loop (LLM turn blocked)
+
+ipc-responder detects { type: "artifact-review", response: null }
+  → calls webServer.requestArtifactReview(payload, signal)
+    → creates Promise in pendingInputs map
+    → SSE "artifact-review" event → browser renders ArtifactReview component
+    → user reads rendered markdown
+    → clicks "Accept" or types feedback and clicks "Send Feedback"
+    → POST /api/artifact-review → resolves Promise
+  → writes ArtifactReviewResponse { feedback } to ipc.json (atomic)
+
+tool poll detects response !== null
+  → breaks loop
+  → deleteIpcFile(dir)
+  → returns "User feedback:\n{feedback}" to LLM
+
+if feedback === "Accept":
+  LLM calls koan_complete_step → phase advances
+else:
+  LLM revises artifact, calls koan_review_artifact again
+  (loop repeats with a fresh IPC request)
+```
+
+The "Accept" button sends the literal string `"Accept"` as feedback — no
+special field or boolean. The LLM reads the feedback string and decides what
+to do. See [artifact-review.md § "Accept" Is Verbatim Text](./artifact-review.md).
+
 
 ---
 

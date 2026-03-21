@@ -7,6 +7,10 @@ Spoke documents:
 - [docs/ipc.md](docs/ipc.md) — file-based IPC protocol, scout spawning, question routing
 - [docs/state.md](docs/state.md) — driver/LLM boundary, epic and story state, routing rules
 - [docs/intake-loop.md](docs/intake-loop.md) — confidence-gated loop, non-linear step progression, prompt engineering
+- [docs/epic-brief.md](docs/epic-brief.md) — brief artifact, brief-writer subagent, downstream references
+- [docs/artifact-review.md](docs/artifact-review.md) — artifact review IPC protocol, review loop, reusability
+
+**Pipeline phases:** `intake` → `brief` → `decomposition` → `review` → `executing` → `completed`
 
 ---
 

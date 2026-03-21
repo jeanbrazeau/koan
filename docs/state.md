@@ -45,7 +45,7 @@ phase and the list of story IDs.
 
 ```typescript
 interface EpicState {
-  phase: EpicPhase;     // intake → decomposition → review → executing → completed
+  phase: EpicPhase;     // intake → brief → decomposition → review → executing → completed
   stories: string[];    // populated by driver after filesystem scan
 }
 ```
@@ -55,6 +55,7 @@ interface EpicState {
 | Phase | What happens |
 |-------|-------------|
 | `intake` | Intake subagent reads conversation, scouts codebase, asks user questions |
+| `brief` | Brief-writer subagent distills context.md into brief.md; user reviews via artifact review |
 | `decomposition` | Decomposer subagent splits work into stories |
 | `review` | User reviews story sketches in web UI (approve/remove) |
 | `executing` | Story loop: orchestrator → planner → executor → orchestrator → next |

@@ -14,6 +14,8 @@ principles, and pitfalls that govern the codebase.
   ownership, epic and story state, routing rules
 - [Intake Loop](./intake-loop.md) — confidence-gated investigation loop,
   non-linear step progression, prompt engineering principles
+- [Epic Brief](./epic-brief.md) — brief artifact, brief-writer subagent, downstream references
+- [Artifact Review](./artifact-review.md) — artifact review IPC protocol, review loop, reusability
 
 ---
 
