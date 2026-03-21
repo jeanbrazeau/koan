@@ -20,11 +20,12 @@ export function ArtifactReview({ token }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ token, requestId, feedback: feedbackText }),
       })
-      if (!resp.ok) {
+      if (resp.ok) {
+        useStore.setState({ pendingInput: null })
+      } else {
         console.error('Failed to submit artifact review:', await resp.text())
         setSubmitting(false)
       }
-      // On success, the server sends an SSE event that clears pendingInput
     } catch (err) {
       console.error('Failed to submit artifact review:', err)
       setSubmitting(false)
