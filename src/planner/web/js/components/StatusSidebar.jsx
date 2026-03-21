@@ -15,7 +15,7 @@ import { shortenModel, formatTokens, formatElapsed } from '../lib/utils.js'
 
 // Maps confidence level to number of filled segments (out of 5) and accent colour.
 const CONFIDENCE_DISPLAY = {
-  exploring: { segments: 0, color: 'var(--text-ghost)' },
+  exploring: { segments: 1, color: 'var(--blue)' },
   low:       { segments: 1, color: 'var(--red)' },
   medium:    { segments: 3, color: 'var(--orange)' },
   high:      { segments: 4, color: 'var(--green)' },
@@ -122,7 +122,7 @@ function IntakeStatus({ progress }) {
             <div
               key={i}
               class="sidebar-segment"
-              style={{ background: i < conf.segments ? conf.color : 'var(--border)' }}
+              style={{ background: i < conf.segments ? conf.color : 'var(--text-ghost)' }}
             />
           ))}
         </div>
