@@ -1,16 +1,19 @@
+/* Single centred column. max-width keeps the entire UI (header, sidebar,
+ * feed, monitor) as one cohesive panel in the middle of the viewport.
+ * The body background fills the remaining viewport edges. */
 .app {
   display: flex;
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
+  max-width: 1300px;
+  margin: 0 auto;
 }
 
-/* Header */
+/* Header — normal flex child, not fixed. Stays at top because .app is a
+ * flex column with overflow:hidden; child areas scroll internally. */
 .header {
-  position: fixed;
-  top: 0;
-  left: 0;
-  right: 0;
+  flex-shrink: 0;
   height: var(--header-height);
   display: flex;
   align-items: center;
@@ -18,7 +21,6 @@
   padding: 0 var(--gap-xl);
   background: var(--bg);
   border-bottom: 1px solid var(--border);
-  z-index: 50;
 }
 
 .header-left {
@@ -41,7 +43,6 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  margin-top: var(--header-height);
 }
 
 /* Phase content area — scrollable, fills remaining space */
@@ -64,7 +65,7 @@
 .activity-feed-scroll {
   flex: 1 1 0;
   min-height: 0;
-  overflow-y: auto;
+  overflow-y: overlay;
   padding: var(--gap-md) var(--gap-xl);
   /* Subtle fade at top when scrolled */
   mask-image: linear-gradient(to bottom, transparent, black 8px, black);
@@ -76,7 +77,6 @@
   flex-direction: column;
   gap: 2px;
   max-width: 960px;
-  margin: 0 auto;
 }
 
 /* ---- Activity cards (thinking, future: tool results) ---- */
@@ -118,7 +118,7 @@
 .activity-card-body {
   padding: 0 var(--gap-md) var(--gap-sm);
   font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
+  font-size: 13px;
   color: var(--text-dim);
   white-space: pre-wrap;
   word-break: break-word;
@@ -218,7 +218,7 @@
 .monitor {
   flex: 0 0 auto;
   max-height: 40vh;
-  overflow-y: auto;
+  overflow-y: overlay;
   border-top: 1px solid var(--border);
   background: var(--bg-elevated);
   padding: var(--gap-md) var(--gap-xl);
@@ -261,14 +261,13 @@
 
 /* ---- Live layout: activity feed + status sidebar ---- */
 
-/* Row wrapper that replaces main-panel in live (non-interactive) mode.
- * Handles the header offset so inner .main-panel does not need margin-top. */
+/* Row wrapper for live mode: sidebar (left) + activity feed (right).
+ * No centering or margin-top needed — the parent .app handles both. */
 .live-layout {
   flex: 1 1 0;
   min-height: 0;
   display: flex;
   flex-direction: row;
-  margin-top: var(--header-height);
 }
 
 /* Left column — takes all remaining width, scroll contained within. */
@@ -280,26 +279,24 @@
   flex-direction: column;
 }
 
-/* Cancel the top margin when main-panel lives inside live-main
- * (the live-layout wrapper already provides the header offset). */
-.live-main > .main-panel {
-  margin-top: 0;
-}
-
-/* ---- Status sidebar ---- */
+/* ---- Status sidebar ----
+ * Sits on the LEFT of the activity feed inside the centred .live-layout
+ * container. Width uses clamp(240px, 20vw, 300px): 20vw scales with the
+ * viewport; 240px/300px bound the range. Typography is mono throughout.
+ * The sidebar scrolls independently of the feed column. */
 
 .status-sidebar {
-  width: 200px;
+  width: clamp(240px, 20vw, 300px);
   flex-shrink: 0;
   background: var(--bg-elevated);
-  border-left: 1px solid var(--border);
+  border-right: 1px solid var(--border);
   overflow-y: auto;
-  padding: var(--gap-md);
+  padding: var(--gap-md) var(--gap-lg);
 }
 
 .sidebar-heading {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-dim);
   text-transform: uppercase;
   letter-spacing: 0.08em;
@@ -312,7 +309,7 @@
 
 .sidebar-label {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-ghost);
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -336,7 +333,7 @@
 /* Value line beneath a segment bar or dots */
 .sidebar-value {
   font-family: var(--font-mono);
-  font-size: var(--font-size-xs);
+  font-size: 13px;
   font-weight: 500;
   color: var(--text-muted);
 }
@@ -363,7 +360,40 @@
 
 .sidebar-summary {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 13px;
   color: var(--text-dim);
   line-height: 1.4;
+}
+
+/* Agent identity section */
+.sidebar-agent {
+  margin-bottom: var(--gap-md);
+  font-family: var(--font-mono);
+}
+
+.sidebar-agent-role {
+  color: var(--blue);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 13px;
+}
+
+.sidebar-agent-model {
+  color: var(--text-muted);
+  font-size: 13px;
+}
+
+.sidebar-agent-step {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-top: 2px;
+}
+
+.sidebar-agent-stats {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-dim);
+  font-size: 13px;
+  margin-top: 2px;
 }
