@@ -24,11 +24,6 @@
   transition: background 200ms ease, color 200ms ease, border-color 200ms ease;
 }
 
-/* Progress bar fill */
-.progress-fill {
-  transition: width 400ms cubic-bezier(0.4, 0, 0.2, 1);
-}
-
 /* Notification fade-out */
 .notification.fade-out {
   animation: fade-out 300ms ease-in forwards;
@@ -58,5 +53,3 @@
 .agent-doing-thinking {
   color: var(--text-muted);
 }
-
-

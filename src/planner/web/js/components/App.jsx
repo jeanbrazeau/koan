@@ -1,4 +1,3 @@
-import { ProgressBar } from './ProgressBar.jsx'
 import { Header } from './Header.jsx'
 import { SubagentMeta } from './SubagentMeta.jsx'
 import { PhaseContent } from './PhaseContent.jsx'
@@ -19,7 +18,6 @@ export function App({ token, topic }) {
 
   return (
     <div class="app">
-      <ProgressBar />
       <Header />
       {isInteractive ? (
         <main class="main-panel">
