@@ -137,6 +137,23 @@ async function runIntake(
   return true;
 }
 
+async function runBriefWriter(
+  epicDir: string,
+  cwd: string,
+  extensionPath: string,
+  log: Logger,
+  webServer: WebServerHandle | null,
+): Promise<boolean> {
+  const subagentDir = await ensureSubagentDirectory(epicDir, "brief-writer");
+  const opts: SpawnOptions = { cwd, extensionPath, log, webServer: webServer ?? undefined };
+  const result = await spawnTracked("brief-writer", "brief-writer", "brief-writer", { role: "brief-writer", epicDir }, subagentDir, undefined, opts, webServer);
+  if (result.exitCode !== 0) {
+    log("Brief writer failed", { exitCode: result.exitCode });
+    return false;
+  }
+  return true;
+}
+
 async function runDecomposer(
   epicDir: string,
   cwd: string,
@@ -356,8 +373,17 @@ export async function runPipeline(
   const intakeOk = await runIntake(epicDir, cwd, extensionPath, log, webServer);
   if (!intakeOk) return { success: false, summary: "Intake phase failed" };
 
+  // Brief phase: distill intake context into a compact epic brief.
   const afterIntake = await loadEpicState(epicDir);
-  await saveEpicState(epicDir, { ...afterIntake, phase: "decomposition" });
+  await saveEpicState(epicDir, { ...afterIntake, phase: "brief" });
+  webServer?.pushPhase("brief");
+
+  const briefOk = await runBriefWriter(epicDir, cwd, extensionPath, log, webServer);
+  if (!briefOk) return { success: false, summary: "Brief generation failed" };
+
+  // Decomposition phase: split the epic into story sketches.
+  const afterBrief = await loadEpicState(epicDir);
+  await saveEpicState(epicDir, { ...afterBrief, phase: "decomposition" });
   webServer?.pushPhase("decomposition");
 
   const decompOk = await runDecomposer(epicDir, cwd, extensionPath, log, webServer);

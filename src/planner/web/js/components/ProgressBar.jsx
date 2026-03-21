@@ -1,6 +1,6 @@
 import { useStore } from '../store.js'
 
-const PHASE_ORDER = ['intake', 'decomposition', 'review', 'executing', 'completed']
+const PHASE_ORDER = ['intake', 'brief', 'decomposition', 'review', 'executing', 'completed']
 
 export function ProgressBar() {
   const phase = useStore(s => s.phase)
