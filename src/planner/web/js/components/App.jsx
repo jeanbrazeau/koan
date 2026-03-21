@@ -1,3 +1,19 @@
+// Root layout component. Everything lives inside a single centred max-width
+// container (.app). The header is a normal flex child (not position:fixed);
+// it stays at the top because .app is a flex column with overflow:hidden and
+// child areas scroll internally.
+//
+// Two mutually exclusive content modes below the header:
+//
+//   Interactive — PhaseContent fills a centred scrollable column. Used for
+//                 forms, settings overlay, loading screen, and completion.
+//   Live        — StatusSidebar on the left, ActivityFeed on the right.
+//
+// isInteractive = !phase || pendingInput || showSettings || phase === 'completed'
+//
+// AgentMonitor and Notifications are always mounted; they manage their own
+// visibility via internal selectors.
+
 import { Header } from './Header.jsx'
 import { PhaseContent } from './PhaseContent.jsx'
 import { ActivityFeed } from './ActivityFeed.jsx'
@@ -25,15 +41,14 @@ export function App({ token, topic }) {
           </div>
         </main>
       ) : (
-        // Live layout: activity feed on the left, status sidebar on the right.
-        // The sidebar spans the full height of the content area, independently scrollable.
+        // Live layout: status sidebar on the left, activity feed on the right.
         <div class="live-layout">
+          <StatusSidebar />
           <div class="live-main">
             <main class="main-panel">
               <ActivityFeed />
             </main>
           </div>
-          <StatusSidebar />
         </div>
       )}
       <AgentMonitor />
