@@ -687,6 +687,15 @@ export async function startWebServer(epicDir: string): Promise<WebServerHandle> 
 
         pushPhase(phase: EpicPhase): void {
           currentPhase = phase;
+          // Evict finished agents from the previous phase so the UI starts clean.
+          for (const [id, agent] of agents) {
+            if (agent.status && agent.status !== "running") {
+              stopAgentPolling(agent);
+              agents.delete(id);
+            }
+          }
+          pushEvent("agents", { agents: buildAgentsArray() });
+          pushEvent("scouts", { scouts: buildScoutsArray() });
           pushEvent("phase", { phase });
           currentIntakeProgress = { ...currentIntakeProgress, intakeDone: phase !== "intake" };
           pushEvent("intake-progress", currentIntakeProgress);
