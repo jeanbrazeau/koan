@@ -85,20 +85,18 @@ from intake or when the pipeline ends.
 
 ```
 App
-├── ProgressBar          reads phase for step-fraction fill
 ├── Header
 │   ├── PillStrip        reads phase for active/done pill state
-│   └── Timer            reads subagent.startedAt, ticks via useEffect interval
+│   └── ⚙ settings btn
 │
 ├── (isInteractive) main.main-panel
 │   └── PhaseContent     dispatch hub (see below)
 │
-├── (live) div.live-layout          ← row split
-│   ├── div.live-main
-│   │   └── main.main-panel
-│   │       ├── SubagentMeta        reads subagent
-│   │       └── ActivityFeed        reads logs, currentToolCallId
-│   └── StatusSidebar               reads subagent, phase, intakeProgress
+├── (live) div.live-layout          ← sidebar + feed row
+│   ├── StatusSidebar               agent identity + phase status + summary
+│   └── div.live-main
+│       └── main.main-panel
+│           └── ActivityFeed        reads logs, currentToolCallId
 │
 ├── AgentMonitor         reads agents (hides when none active)
 └── Notifications        reads notifications; auto-dismisses via useEffect
@@ -110,9 +108,9 @@ App
 
 - **Interactive mode** — `PhaseContent` fills the scrollable area. Used for forms,
   loading screen, settings overlay, and completion.
-- **Live mode** — `SubagentMeta` + `ActivityFeed` fill the left column.
-  `StatusSidebar` sits in the right column (200px), showing phase-specific
-  status that updates as SSE events arrive.
+- **Live mode** — `StatusSidebar` sits in the left column (`clamp(240px, 20vw, 300px)`),
+  `ActivityFeed` fills the right column. The parent `.app` container handles
+  centering — no per-mode centering needed.
 
 **PhaseContent dispatch order:**
 
@@ -131,20 +129,34 @@ resetting local selection state without any explicit cleanup.
 
 ## StatusSidebar
 
-The `StatusSidebar` renders phase-specific context in the right column during
-live mode. It reads three store slices: `subagent` (visibility gate), `phase`
-(which content to show), and `intakeProgress` (intake-specific data).
+The `StatusSidebar` renders phase-specific context in the left column during
+live mode. It reads four store slices: `phase` (visibility gate and content
+dispatch), `subagent` (agent identity section), `intakeProgress`
+(intake-specific data), and `stories` (decomposition and execution progress).
 
-**During intake** (`phase === 'intake' && intakeProgress != null`):
-- Confidence meter — 5 segments filled according to level (exploring=0,
-  low=1, medium=3, high=4, certain=5), with a level-appropriate colour
-- Iteration indicator — 4 dots, filled up to the current round
-- Sub-phase label — current sub-phase name in purple
-- Summary — a static description derived from the sub-phase
+**Visibility:** The sidebar renders whenever `phase` is non-null — not gated on
+`subagent`. This means phase status (story progress, etc.) remains visible
+during brief gaps between subagent spawns. The agent identity section is
+omitted when `subagent` is null.
 
-**During other phases** — a simple label and "Phase in progress…" message.
-Per-phase rich content (e.g. story progress for `executing`) will be added
-as those phases are instrumented.
+**Agent identity section** (top, when `subagent` is non-null):
+- Role (uppercase, blue, mono) + shortened model name (muted) on one line
+- Step label from `subagent.stepName` or `Step N/M` on the next line
+- Token counts (↑sent ↓recv) + elapsed timer on the third line
+- Elapsed time is computed inline via `useState` + `useEffect` 1-second
+  interval from `subagent.startedAt`, using `formatElapsed` from `lib/utils.js`
+
+**Phase-specific sections** (middle):
+
+- **intake** + `intakeProgress` → `IntakeStatus`: confidence meter (5 segments),
+  iteration dots (4 rounds), sub-phase label, summary text per sub-phase
+- **brief** → `BriefStatus`: static "Drafting epic brief…" label
+- **decomposition** → `DecomposeStatus`: story count from `stories` slice
+- **executing** → `ExecuteStatus`: `done`/total complete count plus active count
+  (stories in `selected`, `planning`, `executing`, or `verifying` states)
+- **fallback** → `GenericStatus`: phase label + "Phase in progress…"
+
+**Summary section** (bottom, below divider): static contextual message per phase.
 
 ---
 
