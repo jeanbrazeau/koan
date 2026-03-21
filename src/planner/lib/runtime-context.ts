@@ -21,7 +21,7 @@
 //   before_agent_start after the log file is opened. Tools that need to emit
 //   audit events (e.g. koan_set_confidence) read this at call time.
 
-import type { EventLog } from "./audit.js";
+import type { EventLog } from "./event-log.js";
 
 export interface RuntimeContext {
   epicDir: string | null;
