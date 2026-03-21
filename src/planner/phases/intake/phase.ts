@@ -99,7 +99,7 @@ export class IntakePhase extends BasePhase {
   }
 
   protected getStepGuidance(step: number): StepGuidance {
-    return intakeStepGuidance(step, this.conversationPath, this.intakeState.iteration);
+    return intakeStepGuidance(step, this.conversationPath, this.intakeState.iteration, this.ctx.epicDir!);
   }
 
   // -- Non-linear progression: pure query, no side effects --

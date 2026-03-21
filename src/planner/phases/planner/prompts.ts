@@ -59,7 +59,7 @@ Each check entry must include:
 - MUST scope plan/context.md to only what the executor needs — context files that include too much code obscure the relevant parts.`;
 }
 
-export function plannerStepGuidance(step: number, storyId: string): StepGuidance {
+export function plannerStepGuidance(step: number, storyId: string, epicDir: string): StepGuidance {
   switch (step) {
     case 1:
       return {
@@ -73,9 +73,9 @@ export function plannerStepGuidance(step: number, storyId: string): StepGuidance
           "",
           "## What to read",
           "",
-          `1. Read \`stories/${storyId}/story.md\` in the epic directory — understand exactly what this story must accomplish, its acceptance criteria, and any noted constraints or dependencies.`,
-          "2. Read `context.md` in the epic directory — understand the scope, codebase findings, constraints, and decisions that apply to this story. If a decision is marked as unresolved, check whether it blocks this story.",
-          "3. Read `brief.md` in the epic directory — understand the product-level goals and constraints. The plan must serve these goals.",
+          `1. Read \`${epicDir}/stories/${storyId}/story.md\` — understand exactly what this story must accomplish, its acceptance criteria, and any noted constraints or dependencies.`,
+          `2. Read \`${epicDir}/context.md\` — understand the scope, codebase findings, constraints, and decisions that apply to this story. If a decision is marked as unresolved, check whether it blocks this story.`,
+          `3. Read \`${epicDir}/brief.md\` — understand the product-level goals and constraints. The plan must serve these goals.`,
           "4. Read the scout reports returned by `koan_request_scouts` for current codebase context.",
           "",
           "## What to analyze",
@@ -94,7 +94,7 @@ export function plannerStepGuidance(step: number, storyId: string): StepGuidance
           "- The list of files that will be modified or created",
           "- The sequence you plan for the steps (high-level)",
           "- Any risks or unresolved questions you identified",
-          "- Whether any open decisions in context.md block this story",
+          `- Whether any open decisions in \`${epicDir}/context.md\` block this story`,
         ],
       };
 
@@ -106,7 +106,7 @@ export function plannerStepGuidance(step: number, storyId: string): StepGuidance
           "",
           "## Write plan/plan.md",
           "",
-          `Create \`stories/${storyId}/plan/plan.md\` in the epic directory with a numbered list of implementation steps.`,
+          `Create \`${epicDir}/stories/${storyId}/plan/plan.md\` with a numbered list of implementation steps.`,
           "",
           "Each step must follow this format:",
           "```",
@@ -128,7 +128,7 @@ export function plannerStepGuidance(step: number, storyId: string): StepGuidance
           "",
           "## Write plan/context.md",
           "",
-          `Create \`stories/${storyId}/plan/context.md\` with curated code snippets the executor needs.`,
+          `Create \`${epicDir}/stories/${storyId}/plan/context.md\` with curated code snippets the executor needs.`,
           "",
           "Structure by file, then by section within the file:",
           "```",
@@ -161,7 +161,7 @@ export function plannerStepGuidance(step: number, storyId: string): StepGuidance
         instructions: [
           `Write the verification checklist for story \`${storyId}\`.`,
           "",
-          `Create \`stories/${storyId}/plan/verify.md\` in the epic directory. This file will be used by the orchestrator to verify the executor's output.`,
+          `Create \`${epicDir}/stories/${storyId}/plan/verify.md\`. This file will be used by the orchestrator to verify the executor's output.`,
           "",
           "## Structure",
           "",

@@ -54,7 +54,7 @@ export class OrchestratorPhase extends BasePhase {
 
   protected getStepGuidance(step: number): StepGuidance {
     return this.stepSequence === "pre-execution"
-      ? orchestratorPreStepGuidance(step)
-      : orchestratorPostStepGuidance(step, this.storyId);
+      ? orchestratorPreStepGuidance(step, this.ctx.epicDir!)
+      : orchestratorPostStepGuidance(step, this.ctx.epicDir!, this.storyId);
   }
 }

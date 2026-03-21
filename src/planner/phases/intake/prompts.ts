@@ -67,7 +67,7 @@ One file: **context.md** in the epic directory.
 - \`koan_complete_step\` — signal step completion.`;
 }
 
-export function intakeStepGuidance(step: number, conversationPath?: string, iteration = 1): StepGuidance {
+export function intakeStepGuidance(step: number, conversationPath?: string, iteration = 1, epicDir?: string): StepGuidance {
   switch (step) {
     // -------------------------------------------------------------------------
     // Step 1: Extract — read the conversation, build a mental model.
@@ -328,7 +328,9 @@ export function intakeStepGuidance(step: number, conversationPath?: string, iter
       return {
         title: INTAKE_STEP_NAMES[5],
         instructions: [
-          "Write `context.md` to the epic directory.",
+          epicDir
+            ? `Write \`${epicDir}/context.md\`.`
+            : "Write `context.md` to the epic directory.",
           "This file is the sole input for all downstream phases. Write it carefully.",
           "",
           "## Required sections",

@@ -63,7 +63,7 @@ export class BriefWriterPhase extends BasePhase {
   }
 
   protected getStepGuidance(step: number): StepGuidance {
-    return briefWriterStepGuidance(step);
+    return briefWriterStepGuidance(step, this.ctx.epicDir!);
   }
 
   // Pre-condition: require at least one koan_review_artifact call before

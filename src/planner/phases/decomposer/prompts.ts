@@ -57,7 +57,7 @@ You write the following files, all inside the epic directory:
 - \`koan_complete_step\` — to signal step completion.`;
 }
 
-export function decomposerStepGuidance(step: number): StepGuidance {
+export function decomposerStepGuidance(step: number, epicDir: string): StepGuidance {
   switch (step) {
     case 1:
       return {
@@ -68,9 +68,8 @@ export function decomposerStepGuidance(step: number): StepGuidance {
           "",
           "## Files to read",
           "",
-          "From the epic directory:",
-          "- `context.md` — intake analysis: conversation context, codebase findings, and user decisions",
-          "- `brief.md` — epic brief: problem statement, goals, and constraints",
+          `- \`${epicDir}/context.md\` — intake analysis: conversation context, codebase findings, and user decisions`,
+          `- \`${epicDir}/brief.md\` — epic brief: problem statement, goals, and constraints`,
           "",
           "If scout reports were referenced in your initial instructions above, read them now.",
           "If no scout reports were mentioned, proceed without them.",
@@ -102,7 +101,7 @@ export function decomposerStepGuidance(step: number): StepGuidance {
           "",
           "## epic.md",
           "",
-          "Write `epic.md` to the epic directory with these sections:",
+          `Write \`${epicDir}/epic.md\` with these sections:`,
           "",
           "### Overview",
           "One to three paragraphs describing the full scope of this epic.",

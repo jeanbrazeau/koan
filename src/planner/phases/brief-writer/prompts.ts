@@ -47,13 +47,13 @@ Keep the brief compact — under 50 lines. No UI flows, no technical design, no 
 After drafting, invoke \`koan_review_artifact\` to present the brief for review. If the user provides feedback, revise the brief and present it again. Continue until the user accepts.`;
 }
 
-export function briefWriterStepGuidance(step: number): StepGuidance {
+export function briefWriterStepGuidance(step: number, epicDir: string): StepGuidance {
   switch (step) {
     case 1:
       return {
         title: BRIEF_WRITER_STEP_NAMES[1],
         instructions: [
-          "Read `context.md` in the epic directory. Build a thorough mental model of:",
+          `Read \`${epicDir}/context.md\`. Build a thorough mental model of:`,
           "",
           "- The topic — what is being built or changed",
           "- Codebase findings — architecture, patterns, integration points",
@@ -68,11 +68,11 @@ export function briefWriterStepGuidance(step: number): StepGuidance {
       return {
         title: BRIEF_WRITER_STEP_NAMES[2],
         instructions: [
-          "Draft `brief.md` in the epic directory with the required sections",
+          `Draft \`${epicDir}/brief.md\` with the required sections`,
           "(Summary, Context & Problem, Goals, Constraints). Keep it under 50",
           "lines. No UI flows, no technical design, no implementation details.",
           "",
-          "After writing, invoke `koan_review_artifact` with the path to brief.md.",
+          `After writing, invoke \`koan_review_artifact\` with the path to \`${epicDir}/brief.md\`.`,
           "",
           "If the user responds with \"Accept\", call koan_complete_step.",
           "If the user provides feedback, revise brief.md to address the feedback,",

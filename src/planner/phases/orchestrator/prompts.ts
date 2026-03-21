@@ -81,7 +81,7 @@ When you make a decision that modifies artifacts without explicit human instruct
 - When uncertain about a verdict, prefer koan_retry_story with a detailed failure_summary. Ask the user only when the failure reveals a genuine requirements ambiguity.`;
 }
 
-export function orchestratorPreStepGuidance(step: number): StepGuidance {
+export function orchestratorPreStepGuidance(step: number, epicDir: string): StepGuidance {
   switch (step) {
     case 1:
       return {
@@ -91,10 +91,10 @@ export function orchestratorPreStepGuidance(step: number): StepGuidance {
           "",
           "## What to read",
           "",
-          "1. Read `epic.md` in the epic directory — understand the overall goal and scope.",
-          "2. Read `brief.md` in the epic directory — understand the product-level goals and constraints.",
-          "3. Read the Decisions section of `context.md` in the epic directory — understand decisions that shape execution.",
-          "4. Read each `story.md` file for every story in the epic — understand what each story builds and depends on.",
+          `1. Read \`${epicDir}/epic.md\` — understand the overall goal and scope.`,
+          `2. Read \`${epicDir}/brief.md\` — understand the product-level goals and constraints.`,
+          `3. Read the Decisions section of \`${epicDir}/context.md\` — understand decisions that shape execution.`,
+          `4. Read each \`story.md\` file in \`${epicDir}/stories/\` — understand what each story builds and depends on.`,
           "",
           "## What to analyze",
           "",
@@ -146,9 +146,9 @@ export function orchestratorPreStepGuidance(step: number): StepGuidance {
   }
 }
 
-export function orchestratorPostStepGuidance(step: number, storyId?: string): StepGuidance {
+export function orchestratorPostStepGuidance(step: number, epicDir: string, storyId?: string): StepGuidance {
   const storyRef = storyId ? `story \`${storyId}\`` : "the current story";
-  const verifyPath = storyId ? `stories/${storyId}/plan/verify.md` : "stories/<storyId>/plan/verify.md";
+  const verifyPath = storyId ? `${epicDir}/stories/${storyId}/plan/verify.md` : `${epicDir}/stories/<storyId>/plan/verify.md`;
 
   switch (step) {
     case 1:
@@ -159,7 +159,7 @@ export function orchestratorPostStepGuidance(step: number, storyId?: string): St
           "",
           "## What to read",
           "",
-          `1. Read \`${verifyPath}\` in the epic directory — every check you must run.`,
+          `1. Read \`${verifyPath}\` — every check you must run.`,
           "2. Read the story's `story.md` to understand the acceptance criteria.",
           "",
           "## Running checks",
@@ -224,7 +224,7 @@ export function orchestratorPostStepGuidance(step: number, storyId?: string): St
       return {
         title: ORCHESTRATOR_POST_STEP_NAMES[3],
         instructions: [
-          "Propagate lessons from this story's execution to remaining stories and the Decisions section of context.md.",
+          `Propagate lessons from this story's execution to remaining stories and the Decisions section of \`${epicDir}/context.md\`.`,
           "",
           "## What to propagate",
           "",
@@ -241,7 +241,7 @@ export function orchestratorPostStepGuidance(step: number, storyId?: string): St
           "1. Read its `story.md`.",
           "2. Add a `## [autonomous] Propagated Context` section with the relevant information.",
           "",
-          "Update the Decisions section of `context.md` if a new decision was made or an existing one was invalidated.",
+          `Update the Decisions section of \`${epicDir}/context.md\` if a new decision was made or an existing one was invalidated.`,
           "Add `[autonomous]` prefix to any autonomous additions.",
           "",
           "If no propagation is needed, skip file updates and proceed.",

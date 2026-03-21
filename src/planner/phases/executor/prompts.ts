@@ -54,7 +54,7 @@ Improvised solutions that seem reasonable in isolation frequently break other pa
 If retryContext is present, this is your second (or later) attempt at this story. The failure summary tells you what went wrong. Read it before you read the plan, and keep the failure context in mind as you implement. Do not repeat the mistake from the previous attempt.`;
 }
 
-export function executorStepGuidance(step: number, storyId: string, retryContext?: string): StepGuidance {
+export function executorStepGuidance(step: number, storyId: string, epicDir: string, retryContext?: string): StepGuidance {
   switch (step) {
     case 1:
       return {
@@ -64,8 +64,8 @@ export function executorStepGuidance(step: number, storyId: string, retryContext
           "",
           "## What to read",
           "",
-          `1. Read \`stories/${storyId}/plan/plan.md\` — read every step from start to finish. Do not skim.`,
-          `2. Read \`stories/${storyId}/plan/context.md\` — understand the function signatures, types, and imports for every file the plan touches.`,
+          `1. Read \`${epicDir}/stories/${storyId}/plan/plan.md\` — read every step from start to finish. Do not skim.`,
+          `2. Read \`${epicDir}/stories/${storyId}/plan/context.md\` — understand the function signatures, types, and imports for every file the plan touches.`,
           ...(retryContext
             ? [
                 "",

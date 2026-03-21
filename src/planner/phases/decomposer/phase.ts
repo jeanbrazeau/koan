@@ -32,6 +32,6 @@ export class DecomposerPhase extends BasePhase {
   }
 
   protected getStepGuidance(step: number): StepGuidance {
-    return decomposerStepGuidance(step);
+    return decomposerStepGuidance(step, this.ctx.epicDir!);
   }
 }

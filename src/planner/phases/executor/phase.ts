@@ -38,6 +38,6 @@ export class ExecutorPhase extends BasePhase {
   }
 
   protected getStepGuidance(step: number): StepGuidance {
-    return executorStepGuidance(step, this.storyId, this.retryContext);
+    return executorStepGuidance(step, this.storyId, this.ctx.epicDir!, this.retryContext);
   }
 }

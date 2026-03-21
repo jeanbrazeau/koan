@@ -36,6 +36,6 @@ export class PlannerPhase extends BasePhase {
   }
 
   protected getStepGuidance(step: number): StepGuidance {
-    return plannerStepGuidance(step, this.storyId);
+    return plannerStepGuidance(step, this.storyId, this.ctx.epicDir!);
   }
 }
