@@ -7,32 +7,18 @@
 //  2. Writes JSON state (for driver polling)
 //  3. Writes templated markdown status.md (for LLM reads, §11.5.4)
 
-import { promises as fs } from "node:fs";
-import * as path from "node:path";
-
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import type { RuntimeContext } from "../lib/runtime-context.js";
 import { loadStoryState, saveStoryState } from "../epic/state.js";
+import { writeArtifact } from "../epic/artifacts.js";
 import type { StoryStatus } from "../types.js";
 
 // -- Helpers --
 
 function now(): string {
   return new Date().toISOString();
-}
-
-function storyDir(epicDir: string, storyId: string): string {
-  return path.join(epicDir, "stories", storyId);
-}
-
-async function writeStatusMd(epicDir: string, storyId: string, content: string): Promise<void> {
-  const dir = storyDir(epicDir, storyId);
-  const target = path.join(dir, "status.md");
-  const tmp = path.join(dir, "status.md.tmp");
-  await fs.writeFile(tmp, content, "utf8");
-  await fs.rename(tmp, target);
 }
 
 // §11.5.4 templated status.md format.
@@ -85,8 +71,8 @@ export async function executeSelectStory(epicDir: string, storyId: string): Prom
   assertStatus(storyId, state.status, ["pending", "retry"]);
 
   await saveStoryState(epicDir, storyId, { ...state, status: "selected", updatedAt: ts });
-  await writeStatusMd(
-    epicDir, storyId,
+  await writeArtifact(
+    epicDir, `stories/${storyId}/status.md`,
     statusMd(storyId, "selected", `Selected at: ${ts}`, "(pending -- not yet verified)", ""),
   );
 
@@ -106,8 +92,8 @@ export async function executeCompleteStory(
   assertStatus(storyId, state.status, ["verifying"]);
 
   await saveStoryState(epicDir, storyId, { ...state, status: "done", updatedAt: ts });
-  await writeStatusMd(
-    epicDir, storyId,
+  await writeArtifact(
+    epicDir, `stories/${storyId}/status.md`,
     statusMd(
       storyId, "done",
       `Completed at: ${ts}`,
@@ -137,8 +123,8 @@ export async function executeRetryStory(
     updatedAt: ts,
     failureSummary: failureSummary,
   });
-  await writeStatusMd(
-    epicDir, storyId,
+  await writeArtifact(
+    epicDir, `stories/${storyId}/status.md`,
     statusMd(
       storyId, "retry",
       `Queued for retry at: ${ts}`,
@@ -168,8 +154,8 @@ export async function executeSkipStory(
     updatedAt: ts,
     skipReason: reason,
   });
-  await writeStatusMd(
-    epicDir, storyId,
+  await writeArtifact(
+    epicDir, `stories/${storyId}/status.md`,
     statusMd(
       storyId, "skipped",
       `Skipped at: ${ts}`,

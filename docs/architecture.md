@@ -10,6 +10,7 @@ principles, and pitfalls that govern the codebase.
   workflow, phase dispatch, permissions, model tiers
 - [IPC](./ipc.md) — file-based inter-process communication between parent and
   subagent, scout spawning, question routing
+- [Token Streaming](./token-streaming.md) — stdout JSONL parsing, pi `--mode json` integration, SSE delta path
 - [State & Driver](./state.md) — the driver/LLM boundary, JSON vs markdown
   ownership, epic and story state, routing rules
 - [Intake Loop](./intake-loop.md) — confidence-gated investigation loop,

@@ -6,12 +6,13 @@
 // the artifact and invokes this tool again. The tool itself is stateless — it
 // reads the artifact, presents it, and returns the user's response verbatim.
 
-import { promises as fs } from "node:fs";
+import * as path from "node:path";
 
 import { Type, type Static } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
 import type { RuntimeContext } from "../lib/runtime-context.js";
+import { readArtifact } from "../epic/artifacts.js";
 import {
   ipcFileExists,
   writeIpcFile,
@@ -51,6 +52,7 @@ type ToolResult = { content: Array<{ type: "text"; text: string }>; details: und
 
 export async function executeReviewArtifact(
   params: ReviewArtifactParams,
+  epicDir: string | null,
   subagentDir: string | null,
   signal?: AbortSignal | null,
 ): Promise<ToolResult> {
@@ -59,6 +61,13 @@ export async function executeReviewArtifact(
   if (!dir) {
     return {
       content: [{ type: "text" as const, text: "Error: koan_review_artifact is only available in subagent context." }],
+      details: undefined,
+    };
+  }
+
+  if (!epicDir) {
+    return {
+      content: [{ type: "text" as const, text: "Error: Epic directory is not set." }],
       details: undefined,
     };
   }
@@ -72,7 +81,8 @@ export async function executeReviewArtifact(
 
   let content: string;
   try {
-    content = await fs.readFile(params.path, "utf8");
+    const relativePath = path.relative(epicDir, params.path);
+    content = await readArtifact(epicDir, relativePath);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return {
@@ -123,7 +133,7 @@ export function registerReviewArtifactTool(pi: ExtensionAPI, ctx: RuntimeContext
     parameters: ReviewArtifactSchema,
 
     async execute(_toolCallId, params, signal) {
-      return executeReviewArtifact(params as ReviewArtifactParams, ctx.subagentDir, signal);
+      return executeReviewArtifact(params as ReviewArtifactParams, ctx.epicDir, ctx.subagentDir, signal);
     },
   });
 }
