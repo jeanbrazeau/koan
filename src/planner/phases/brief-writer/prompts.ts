@@ -55,7 +55,8 @@ export function briefWriterStepGuidance(step: number, epicDir: string): StepGuid
         instructions: [
           `Read \`${epicDir}/landscape.md\`. Build a thorough mental model of:`,
           "",
-          "- The topic — what is being built or changed",
+          "- Task Summary — what is being built or changed",
+          "- Prior Art — previous attempts, related systems, or prior conversations",
           "- Codebase findings — architecture, patterns, integration points",
           "- Decisions — every question asked and the user's answer",
           "- Constraints — technical, timeline, compatibility requirements",

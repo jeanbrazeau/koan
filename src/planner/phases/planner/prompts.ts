@@ -74,7 +74,7 @@ export function plannerStepGuidance(step: number, storyId: string, epicDir: stri
           "## What to read",
           "",
           `1. Read \`${epicDir}/stories/${storyId}/story.md\` — understand exactly what this story must accomplish, its acceptance criteria, and any noted constraints or dependencies.`,
-          `2. Read \`${epicDir}/landscape.md\` — understand the scope, codebase findings, constraints, and decisions that apply to this story. If a decision is marked as unresolved, check whether it blocks this story.`,
+          `2. Read \`${epicDir}/landscape.md\` — understand the task background: prior art, codebase findings, project conventions, constraints, and decisions. If a decision is marked as unresolved, check whether it blocks this story.`,
           `3. Read \`${epicDir}/brief.md\` — understand the product-level goals and constraints. The plan must serve these goals.`,
           "4. Read the scout reports returned by `koan_request_scouts` for current codebase context.",
           "",

@@ -388,7 +388,7 @@ After a subagent runs, its directory contains:
   stdout.log          # JSONL event stream from pi --mode json -p (structured, not raw text)
   stderr.log          # Captured stderr from pi process
   findings.md         # Task output (scouts)
-  landscape.md         # Task output (intake — conversation, codebase findings, decisions)
+  landscape.md         # Task output (intake — task summary, prior art, codebase findings, project conventions, decisions, constraints, open items)
 ```
 
 The three JSON files have distinct lifecycles per

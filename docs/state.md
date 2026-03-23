@@ -232,7 +232,7 @@ This applies to:
 {epicDir}/
   epic-state.json           # Epic phase + story list
   conversation.jsonl        # Exported conversation (input to intake)
-  landscape.md               # Written by intake (conversation, codebase findings, decisions)
+  landscape.md               # Written by intake (task summary, prior art, codebase findings, project conventions, decisions, constraints, open items)
   stories/
     {storyId}/
       story.md              # Written by decomposer

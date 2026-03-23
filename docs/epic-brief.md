@@ -68,7 +68,7 @@ mechanical transformation).
 Boot → koan_complete_step (step 0 → 1)
 
 Step 1 (Read):
-  Read landscape.md. Build mental model of topic, codebase findings,
+  Read landscape.md. Build mental model of task summary, prior art, codebase findings, project conventions,
   decisions, and constraints. No file writes allowed.
 
 Step 2 (Draft & Review):

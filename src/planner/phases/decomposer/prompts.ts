@@ -68,7 +68,7 @@ export function decomposerStepGuidance(step: number, epicDir: string): StepGuida
           "",
           "## Files to read",
           "",
-          `- \`${epicDir}/landscape.md\` — intake analysis: conversation context, codebase findings, and user decisions`,
+          `- \`${epicDir}/landscape.md\` — task summary, prior art, codebase findings, project conventions, decisions, and constraints`,
           `- \`${epicDir}/brief.md\` — epic brief: problem statement, goals, and constraints`,
           "",
           "If scout reports were referenced in your initial instructions above, read them now.",
