@@ -201,13 +201,14 @@ The frontend accumulates deltas; the server sends only the new tokens each
 event. Accumulation on the client matches the provider stream's own framing
 and avoids growing SSE payload sizes as text grows.
 
-### Component (`src/planner/web/js/components/StreamingOutput.jsx`)
+### Component (`src/planner/web/js/components/ActivityFeed.jsx`)
 
-`StreamingOutput` renders only when `streamingText` is non-empty. It sits
-below `<ActivityFeed />` inside `.main-panel` (a flex column). The component
-uses `flex-shrink: 0` so it holds a fixed maximum height of 180px while
-`.activity-feed` takes the remaining space above. A `useEffect` on
-`streamingText` scrolls the body div to the bottom on every token arrival.
+Streamed tokens render inline inside the in-flight `ThinkingCard`. While
+`isInFlight && streamingText`, the card's `body` is overridden with
+`streamingText` and the card auto-expands. A blinking cursor element
+(`.streaming-cursor`) marks the insertion point. When the turn completes,
+the official thinking text from `events.jsonl` replaces the streamed version
+via the normal audit poll path.
 
 ---
 

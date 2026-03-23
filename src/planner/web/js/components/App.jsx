@@ -6,7 +6,7 @@
 // Three-column workspace shell below the header:
 //
 //   Left   -- StatusSidebar (live mode only)
-//   Center -- main-panel: PhaseContent (interactive) or ActivityFeed + StreamingOutput (live)
+//   Center -- main-panel: PhaseContent (interactive) or ActivityFeed (live)
 //   Right  -- ArtifactsFolder (always mounted)
 //
 // isInteractive = !phase || pendingInput || showSettings || phase === 'completed'
@@ -20,7 +20,6 @@ import { ActivityFeed } from './ActivityFeed.jsx'
 import { AgentMonitor } from './AgentMonitor.jsx'
 import { StatusSidebar } from './StatusSidebar.jsx'
 import { Notifications } from './Notifications.jsx'
-// StreamingOutput removed — streaming tokens now render inline in ActivityFeed's ThinkingCard
 import { ArtifactsFolder } from './ArtifactsFolder.jsx'
 import { useStore } from '../store.js'
 
