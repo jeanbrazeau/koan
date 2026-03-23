@@ -65,6 +65,18 @@ export default function koan(pi: ExtensionAPI): void {
     default: "",
   });
 
+  pi.registerFlag("koan-webserver-port", {
+    description: "Fixed port for the koan web server (default: random)",
+    type: "string",
+    default: "",
+  });
+
+  pi.registerFlag("koan-webserver-token", {
+    description: "Fixed session token (UUID) for the koan web server (default: random)",
+    type: "string",
+    default: "",
+  });
+
   const ctx = createRuntimeContext();
 
   // Delegating holder: tools register at init with this stable ref; dispatchPhase
@@ -193,9 +205,14 @@ export default function koan(pi: ExtensionAPI): void {
 
       const extensionPath = path.resolve(import.meta.dirname, "koan.ts");
 
-      const server = await startWebServer(epicInfo.directory);
+      const portFlag = pi.getFlag("koan-webserver-port") as string || "";
+      const serverPort = portFlag ? parseInt(portFlag, 10) : 0;
+      const serverToken = (pi.getFlag("koan-webserver-token") as string) || "";
+      const server = await startWebServer(epicInfo.directory, { port: serverPort, token: serverToken });
       try {
-        await openBrowser(pi, server.url);
+        // Skip opening the browser when a fixed port is set — the caller
+        // (e.g. an automated agent or test harness) already knows the URL.
+        if (!serverPort) await openBrowser(pi, server.url);
         await exportConversation(extCtx.sessionManager, epicInfo.directory);
         log("Conversation exported", { epicDir: epicInfo.directory });
 
