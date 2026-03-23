@@ -7,7 +7,7 @@
 //
 //   Left   -- StatusSidebar (live mode only)
 //   Center -- main-panel: PhaseContent (interactive) or ActivityFeed (live)
-//   Right  -- ArtifactsFolder (always mounted)
+//   Right  -- ArtifactsFolder (live mode only)
 //
 // isInteractive = !phase || pendingInput || showSettings || phase === 'completed'
 //
@@ -48,9 +48,9 @@ export function App({ token, topic }) {
             )}
           </main>
         </div>
-        <ArtifactsFolder token={token} />
+        {!isInteractive && <ArtifactsFolder token={token} />}
       </div>
-      <AgentMonitor />
+      {!showSettings && <AgentMonitor />}
       <Notifications />
     </div>
   )

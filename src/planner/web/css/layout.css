@@ -426,6 +426,13 @@
   flex-direction: column;
 }
 
+
+.artifacts-empty {
+  color: var(--text-ghost);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: var(--gap-md) 0;
+}
 /* ---- Artifact tree ---- */
 
 .tree-folder {

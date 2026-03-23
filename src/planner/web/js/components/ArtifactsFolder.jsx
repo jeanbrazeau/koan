@@ -159,44 +159,54 @@ export function ArtifactsFolder({ token }) {
     <div class="artifacts-sidebar">
       <div class="sidebar-heading">Artifacts</div>
 
-      {/* Epic root */}
-      <div class="tree-folder">
-        <div class="tree-folder-label" onClick={() => toggleFolder('epic-root')}>
-          {collapsedFolders.has('epic-root') ? '\u25B8' : '\u25BE'} epic root
-        </div>
-        {!collapsedFolders.has('epic-root') && (
-          <div class="tree-children">
-            {epicRootFiles.map(f => (
-              <FileEntry key={f.path} file={f} isNew={newPaths.has(f.path)} onOpen={setOpenFile} />
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Stories */}
-      <div class="tree-folder">
-        <div class="tree-folder-label" onClick={() => toggleFolder('stories')}>
-          {collapsedFolders.has('stories') ? '\u25B8' : '\u25BE'} stories/
-        </div>
-        {!collapsedFolders.has('stories') && (
-          <div class="tree-children">
-            {[...storiesMap.entries()].map(([id, files]) => (
-              <div class="tree-folder" key={id}>
-                <div class="tree-folder-label" onClick={() => toggleFolder(`stories/${id}`)}>
-                  {collapsedFolders.has(`stories/${id}`) ? '\u25B8' : '\u25BE'} {id}/
-                </div>
-                {!collapsedFolders.has(`stories/${id}`) && (
-                  <div class="tree-children">
-                    {files.map(f => (
-                      <FileEntry key={f.path} file={f} isNew={newPaths.has(f.path)} onOpen={setOpenFile} />
-                    ))}
-                  </div>
-                )}
+      {artifactFiles.length === 0 ? (
+        <div class="artifacts-empty">No artifacts yet</div>
+      ) : (
+        <>
+          {/* Epic root */}
+          {epicRootFiles.length > 0 && (
+            <div class="tree-folder">
+              <div class="tree-folder-label" onClick={() => toggleFolder('epic-root')}>
+                {collapsedFolders.has('epic-root') ? '\u25B8' : '\u25BE'} epic root
               </div>
-            ))}
-          </div>
-        )}
-      </div>
+              {!collapsedFolders.has('epic-root') && (
+                <div class="tree-children">
+                  {epicRootFiles.map(f => (
+                    <FileEntry key={f.path} file={f} isNew={newPaths.has(f.path)} onOpen={setOpenFile} />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Stories */}
+          {storiesMap.size > 0 && (
+            <div class="tree-folder">
+              <div class="tree-folder-label" onClick={() => toggleFolder('stories')}>
+                {collapsedFolders.has('stories') ? '\u25B8' : '\u25BE'} stories/
+              </div>
+              {!collapsedFolders.has('stories') && (
+                <div class="tree-children">
+                  {[...storiesMap.entries()].map(([id, files]) => (
+                    <div class="tree-folder" key={id}>
+                      <div class="tree-folder-label" onClick={() => toggleFolder(`stories/${id}`)}>
+                        {collapsedFolders.has(`stories/${id}`) ? '\u25B8' : '\u25BE'} {id}/
+                      </div>
+                      {!collapsedFolders.has(`stories/${id}`) && (
+                        <div class="tree-children">
+                          {files.map(f => (
+                            <FileEntry key={f.path} file={f} isNew={newPaths.has(f.path)} onOpen={setOpenFile} />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </>
+      )}
 
       {/* Overlay */}
       {openFile && (
