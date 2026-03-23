@@ -16,7 +16,7 @@ correctness anchor for all downstream phases.
 | **Summary** | 3–8 sentences: what this epic is about |
 | **Context & Problem** | Who is affected, where in the product, what the current pain is |
 | **Goals** | Numbered list of measurable objectives |
-| **Constraints** | Hard constraints from context.md (technical, timeline, compatibility) |
+| **Constraints** | Hard constraints from landscape.md (technical, timeline, compatibility) |
 
 **Size constraint:** Under 50 lines. The brief is consulted by the decomposer,
 planner, and orchestrator on every pipeline run — compact size ensures it
@@ -47,7 +47,7 @@ intake → brief → decomposition → review → executing → completed
 
 The brief sits between intake and decomposition:
 
-- **After intake:** `context.md` is complete — the LLM has investigated the
+- **After intake:** `landscape.md` is complete — the LLM has investigated the
   codebase, asked all clarifying questions, and produced a synthesis of
   findings and decisions. The brief distills this into a problem statement.
 - **Before decomposition:** The decomposer reads `brief.md` to scope stories
@@ -68,7 +68,7 @@ mechanical transformation).
 Boot → koan_complete_step (step 0 → 1)
 
 Step 1 (Read):
-  Read context.md. Build mental model of topic, codebase findings,
+  Read landscape.md. Build mental model of topic, codebase findings,
   decisions, and constraints. No file writes allowed.
 
 Step 2 (Draft & Review):
@@ -102,7 +102,7 @@ powers the review gate.
   "edit",
   "write",
   // No koan_ask_question — uses artifact review, not structured questions.
-  // No koan_request_scouts — all codebase context arrives via context.md.
+  // No koan_request_scouts — all codebase context arrives via landscape.md.
 ])]
 ```
 
@@ -138,8 +138,8 @@ The brief is modeled on Traycer's product brief pattern: each phase produces
 an artifact that downstream phases consult. The cascade in this pipeline:
 
 ```
-context.md          (intake synthesis)
-  → brief.md        (problem + goals + constraints)
+landscape.md        (intake synthesis)
+  → brief.md          (problem + goals + constraints)
     → story.md × N  (decomposition)
       → plan/context.md × N  (story plans)
 ```

@@ -55,7 +55,7 @@ interface EpicState {
 | Phase | What happens |
 |-------|-------------|
 | `intake` | Intake subagent reads conversation, scouts codebase, asks user questions |
-| `brief` | Brief-writer subagent distills context.md into brief.md; user reviews via artifact review |
+| `brief` | Brief-writer subagent distills landscape.md into brief.md; user reviews via artifact review |
 | `decomposition` | Decomposer subagent splits work into stories |
 | `review` | User reviews story sketches in web UI (approve/remove) |
 | `executing` | Story loop: orchestrator → planner → executor → orchestrator → next |
@@ -232,7 +232,7 @@ This applies to:
 {epicDir}/
   epic-state.json           # Epic phase + story list
   conversation.jsonl        # Exported conversation (input to intake)
-  context.md                # Written by intake (conversation, codebase findings, decisions)
+  landscape.md               # Written by intake (conversation, codebase findings, decisions)
   stories/
     {storyId}/
       story.md              # Written by decomposer

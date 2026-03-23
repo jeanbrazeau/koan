@@ -262,7 +262,7 @@ that need the LLM to call a domain tool before `koan_complete_step` (e.g.,
 `thoughts` is **internal chain-of-thought reasoning only**. It is NOT task
 output and MUST NOT be treated as such:
 
-- Task output goes to files (`findings.md`, `context.md`, etc.)
+- Task output goes to files (`findings.md`, `landscape.md`, etc.)
 - The driver/parent reads those files after the subagent exits
 - `thoughts` exists so models that cannot mix text + tool_call in one response
   (e.g., GPT-5-codex) can still express reasoning while advancing the workflow
@@ -388,7 +388,7 @@ After a subagent runs, its directory contains:
   stdout.log          # JSONL event stream from pi --mode json -p (structured, not raw text)
   stderr.log          # Captured stderr from pi process
   findings.md         # Task output (scouts)
-  context.md          # Task output (intake — conversation, codebase findings, decisions)
+  landscape.md         # Task output (intake — conversation, codebase findings, decisions)
 ```
 
 The three JSON files have distinct lifecycles per

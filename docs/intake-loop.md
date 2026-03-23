@@ -11,10 +11,10 @@ prompt engineering principles that govern it.
 ## Overview
 
 The intake phase is the most consequential subagent in the pipeline. Its
-single output — `context.md` — is the sole input for all downstream phases.
+single output — `landscape.md` — is the sole input for all downstream phases.
 Every story boundary, every implementation plan, and every line of code
 produced downstream depends on the completeness and accuracy of that file.
-Gaps in `context.md` compound: a missed decision becomes a wrong story
+Gaps in `landscape.md` compound: a missed decision becomes a wrong story
 boundary becomes a wrong plan becomes wrong code.
 
 This weight justifies a more elaborate workflow than other phases. Rather than
@@ -31,7 +31,7 @@ LLM declares it is "certain" the decomposer has everything it needs.
 | 2 | Scout | 1–4× | Dispatch codebase investigators. |
 | 3 | Deliberate | 1–4× | Enumerate knowns/unknowns, ask user questions. |
 | 4 | Reflect | 1–4× | Self-verify completeness, declare confidence. |
-| 5 | Synthesize | 1× | Write `context.md`. |
+| 5 | Synthesize | 1× | Write `landscape.md`. Review gate: calls `koan_review_artifact` before completing (same pattern as brief-writer). |
 
 Steps 2–4 form the loop. Each call to `koan_complete_step` during these steps
 either returns the next step in sequence or loops back from step 4 to step 2.
