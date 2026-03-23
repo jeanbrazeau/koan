@@ -18,6 +18,10 @@ export const useStore = create((set) => ({
   subagent: null,
   pendingInput: null,
   intakeProgress: null,      // IntakeProgressEvent | null -- set during intake phase
+  artifactFiles: [],         // ArtifactEntry[] -- epic artifact file listing
+
+  // Streaming token output from the active subagent
+  streamingText: "",
 
   // Client-only state
   notifications: [],
@@ -67,7 +71,20 @@ export function handleSubagentEvent(d) {
 }
 
 export function handleSubagentIdleEvent() {
-  set({ subagent: null })
+  // Reset streamingText here rather than in a separate 'subagent-idle' handler
+  // in sse.js: subagent-idle is the canonical signal that the active subagent
+  // has finished, so all subagent-end side-effects belong in one place. Adding
+  // a second handler in sse.js for the same event would split the teardown
+  // logic with no benefit.
+  set({ subagent: null, streamingText: "" })
+}
+
+export function handleTokenDeltaEvent(d) {
+  set(s => ({ streamingText: s.streamingText + d.delta }))
+}
+
+export function handleTokenClearEvent() {
+  set({ streamingText: "" })
 }
 
 export function handlePipelineEndEvent(d) {
@@ -123,6 +140,10 @@ export function handleArtifactReviewCancelledEvent(d) {
   set(s => s.pendingInput?.requestId === d.requestId
     ? { pendingInput: null, notifications: [...s.notifications, { id: Date.now(), message: 'The artifact review was cancelled.', level: 'warning' }] }
     : {})
+}
+
+export function handleArtifactsEvent(d) {
+  set({ artifactFiles: d.files || [] })
 }
 
 export function handleNotificationEvent(d) {

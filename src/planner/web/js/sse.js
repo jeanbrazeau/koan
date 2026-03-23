@@ -21,8 +21,11 @@ import {
   handleReviewCancelledEvent,
   handleArtifactReviewEvent,
   handleArtifactReviewCancelledEvent,
+  handleArtifactsEvent,
   handleNotificationEvent,
   handleConnectionError,
+  handleTokenDeltaEvent,
+  handleTokenClearEvent,
 } from './store.js'
 
 export function connectSSE(token) {
@@ -47,7 +50,10 @@ export function connectSSE(token) {
     'review-cancelled':          handleReviewCancelledEvent,
     'artifact-review':           handleArtifactReviewEvent,
     'artifact-review-cancelled': handleArtifactReviewCancelledEvent,
+    'artifacts':                 handleArtifactsEvent,
     'notification':              handleNotificationEvent,
+    'token-delta':               handleTokenDeltaEvent,
+    'token-clear':               handleTokenClearEvent,
   }
 
   for (const [event, handler] of Object.entries(handlers)) {

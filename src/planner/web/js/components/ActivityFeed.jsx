@@ -31,6 +31,11 @@ function ThinkingCard({ line, isInFlight, isFlashing }) {
     if (el) setIsClamped(el.scrollHeight > el.clientHeight + 2)
   }, [line.body, expanded])
 
+  // While in-flight with streaming body, treat as always expanded so the
+  // user sees tokens appear. Clamping only applies to completed thoughts.
+  const isStreaming = isInFlight && !!line.body
+  const showExpanded = expanded || isStreaming
+
   const cls = [
     'activity-card',
     'activity-card-thinking',
@@ -53,16 +58,16 @@ function ThinkingCard({ line, isInFlight, isFlashing }) {
         <>
           <div
             ref={bodyRef}
-            class={`activity-card-body${expanded ? ' expanded' : ''}`}
+            class={`activity-card-body${showExpanded ? ' expanded' : ''}`}
           >
-            {line.body}
+            {line.body}{isStreaming && <span class="streaming-cursor" />}
           </div>
-          {(isClamped && !expanded) && (
+          {(!isStreaming && isClamped && !expanded) && (
             <div class="activity-card-more" onClick={() => setExpanded(true)}>
               show more ▸
             </div>
           )}
-          {expanded && (
+          {(!isStreaming && expanded) && (
             <div class="activity-card-more" onClick={() => setExpanded(false)}>
               show less ▴
             </div>
@@ -133,6 +138,7 @@ function ActivityLine({ line, isInFlight, isFlashing }) {
 
 export function ActivityFeed() {
   const logs = useStore(s => s.logs)
+  const streamingText = useStore(s => s.streamingText)
   const containerRef = useRef(null)
   const stickRef = useRef(true)
 
@@ -140,13 +146,14 @@ export function ActivityFeed() {
   const prevLastRef = useRef(null)
   const [flashIndex, setFlashIndex] = useState(-1)
 
-  // Auto-scroll to bottom when new logs arrive, but only if already at bottom.
+  // Auto-scroll to bottom when new logs arrive or streaming text grows,
+  // but only if already at bottom.
   useEffect(() => {
     const el = containerRef.current
     if (el && stickRef.current) {
       el.scrollTop = el.scrollHeight
     }
-  }, [logs])
+  }, [logs, streamingText])
 
   // Detect when the last line transitions from in-flight to completed and flash it.
   useEffect(() => {
@@ -175,10 +182,17 @@ export function ActivityFeed() {
           const isFlashing = i === flashIndex
 
           if (line.tool === 'thinking') {
+            // While in-flight, feed streaming tokens into the thinking card's
+            // body so the user sees thinking text appear in realtime. When the
+            // turn completes, the official thinking text from events.jsonl
+            // replaces the streamed version via the normal audit poll path.
+            const thinkingLine = (isInFlight && streamingText)
+              ? { ...line, body: streamingText.replace(/\n{3,}/g, '\n\n') }
+              : line
             return (
               <ThinkingCard
                 key={i}
-                line={line}
+                line={thinkingLine}
                 isInFlight={isInFlight}
                 isFlashing={isFlashing}
               />

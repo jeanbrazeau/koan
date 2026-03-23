@@ -50,6 +50,23 @@
   margin-left: 0.4em;
 }
 
+/* Streaming cursor — pulsing bar at the end of streaming text */
+.streaming-cursor {
+  display: inline-block;
+  width: 6px;
+  height: 14px;
+  background: var(--blue);
+  border-radius: 1px;
+  vertical-align: text-bottom;
+  margin-left: 2px;
+  animation: cursor-blink 1s step-end infinite;
+}
+
+@keyframes cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0; }
+}
+
 .agent-doing-thinking {
   color: var(--text-muted);
 }
