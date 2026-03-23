@@ -60,7 +60,7 @@ export function registerWorkflowTools(
   // response (e.g. GPT-5-codex) still express reasoning via this param.
   // Task output is written to files in the subagent directory:
   //   - scouts:  {subagentDir}/findings.md
-  //   - intake:  {subagentDir}/context.md
+  //   - intake:  {subagentDir}/landscape.md
   //   - others:  as defined by step instructions
   // The driver/parent reads those files after the subagent exits.
   pi.registerTool({

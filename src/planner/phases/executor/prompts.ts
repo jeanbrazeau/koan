@@ -109,7 +109,7 @@ export function executorStepGuidance(step: number, storyId: string, epicDir: str
           "",
           "Work through plan/plan.md in order. For each step:",
           "",
-          "1. **Read the target file** — do not rely solely on context.md; read the actual current state of the file.",
+          "1. **Read the target file** — do not rely solely on plan/context.md; read the actual current state of the file.",
           "2. **Locate the change site** — find the exact function, class, or section described in the plan step.",
           "3. **Verify your assumption** — confirm that what you find matches what the plan describes. If it does not match, call koan_ask_question immediately.",
           "4. **Make the change** — implement exactly what the plan step specifies. No more, no less.",

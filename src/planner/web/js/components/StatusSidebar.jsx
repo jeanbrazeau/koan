@@ -29,7 +29,7 @@ const SUBPHASE_SUMMARY = {
   deliberate: 'Analyzing findings, preparing questions…',
   reflect:    'Verifying completeness of understanding…',
   questions:  'Waiting for user response…',
-  synthesize: 'Writing context.md…',
+  synthesize: 'Writing landscape.md…',
 }
 
 export function StatusSidebar() {

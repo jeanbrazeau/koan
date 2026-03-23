@@ -1,7 +1,7 @@
 // Brief-writer phase: reads intake context and produces brief.md.
 // Three-step workflow with a review gate:
 //
-//   Step 1 (Read)          — comprehend context.md; no file writes
+//   Step 1 (Read)          — comprehend landscape.md; no file writes
 //   Step 2 (Draft & Review) — write brief.md, invoke koan_review_artifact;
 //                             revise on feedback; advance only after "Accept"
 //   Step 3 (Finalize)      — phase complete

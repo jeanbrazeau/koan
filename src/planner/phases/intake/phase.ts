@@ -1,5 +1,5 @@
 // Intake phase: reads conversation, scouts codebase, asks clarifying questions,
-// and writes context.md — the sole input for all downstream phases.
+// and writes landscape.md — the sole input for all downstream phases.
 //
 // Five-step workflow with a confidence-gated loop:
 //
@@ -7,11 +7,11 @@
 //   Step 2 (Scout)      — dispatch codebase scouts for targeted exploration
 //   Step 3 (Deliberate) — enumerate knowns/unknowns, ask user questions
 //   Step 4 (Reflect)    — self-verify completeness, set confidence level
-//   Step 5 (Synthesize) — write context.md from all accumulated findings
+//   Step 5 (Synthesize & Review) — write landscape.md from all accumulated findings
 //
 // Steps 2-4 form the confidence loop. After Reflect, getNextStep() checks
 // intakeState.confidence:
-//   - If "certain" or max iterations reached -> return 5 (Synthesize)
+//   - If "certain" or max iterations reached -> return 5 (Synthesize & Review)
 //   - Otherwise -> return 2 (Scout), triggering a loop-back
 //
 // getNextStep() is pure — it only returns the next step number. All side effects
@@ -22,6 +22,10 @@
 // The loop enforces that koan_set_confidence is called before koan_complete_step
 // in Reflect via validateStepCompletion(). Confidence is reset to null in onLoopBack()
 // so each iteration requires a fresh assessment.
+//
+// Step 5 enforces that koan_review_artifact is called before koan_complete_step
+// via validateStepCompletion(). This ensures landscape.md is presented for user
+// review before the phase advances.
 //
 // Step 1 is read-only: the permission fence blocks koan_request_scouts,
 // koan_ask_question, koan_set_confidence, write, and edit during that step,
@@ -68,6 +72,10 @@ export class IntakePhase extends BasePhase {
 
   private readonly conversationPath: string;
 
+  // Counts koan_review_artifact calls during this phase session.
+  // Used by validateStepCompletion to enforce at least one review before advancing.
+  private reviewCallCount = 0;
+
   constructor(
     pi: ExtensionAPI,
     ctx: RuntimeContext,
@@ -82,6 +90,17 @@ export class IntakePhase extends BasePhase {
       get iteration() { return state.iteration; },
       setConfidence(level: ConfidenceLevel) { state.confidence = level; },
     };
+
+    // Track koan_review_artifact invocations so validateStepCompletion can
+    // verify that the LLM presented landscape.md for review before advancing.
+    // Always returns undefined — does not interfere with the base class
+    // permission fence registered by BasePhase.registerHandlers().
+    pi.on("tool_call", (event) => {
+      if (event.toolName === "koan_review_artifact") {
+        this.reviewCallCount++;
+      }
+      return undefined;
+    });
   }
 
   protected getSystemPrompt(): string {
@@ -105,8 +124,8 @@ export class IntakePhase extends BasePhase {
   // -- Non-linear progression: pure query, no side effects --
   //
   // Step 4 (Reflect) is the loop gate. Returns 2 (Scout) to loop back, or 5
-  // (Synthesize) to exit. Side effects for the loop-back case (iteration
-  // increment, confidence reset, event emission) live in onLoopBack().
+  // (Synthesize & Review) to exit. Side effects for the loop-back case
+  // (iteration increment, confidence reset, event emission) live in onLoopBack().
   protected getNextStep(currentStep: number): number | null {
     if (currentStep === 4) {
       const confidence = this.intakeState.confidence;
@@ -126,7 +145,7 @@ export class IntakePhase extends BasePhase {
       return 2;
     }
 
-    // Step 5 (Synthesize) is the final step.
+    // Step 5 (Synthesize & Review) is the final step.
     if (currentStep === 5) return null;
 
     // All other steps: linear progression.
@@ -146,16 +165,21 @@ export class IntakePhase extends BasePhase {
     this.log("Confidence loop: iterating", { newIteration: this.intakeState.iteration });
   }
 
-  // -- Pre-condition enforcement for Reflect (step 4) --
+  // -- Pre-condition enforcement for Reflect (step 4) and Synthesize & Review (step 5) --
   //
-  // The LLM must call koan_set_confidence before koan_complete_step during
-  // the Reflect step. If it hasn't, we return an error message that the LLM
+  // Step 4: The LLM must call koan_set_confidence before koan_complete_step.
+  // Step 5: The LLM must call koan_review_artifact before koan_complete_step.
+  // If a pre-condition is unmet, we return an error message that the LLM
   // sees as the tool result — it must fix the pre-condition before retrying.
   protected async validateStepCompletion(step: number): Promise<string | null> {
     if (step === 4 && this.intakeState.confidence === null) {
       return "You must call koan_set_confidence before completing the Reflect step. " +
         "Assess your confidence level based on the verification questions you answered, " +
         "then call koan_set_confidence, then call koan_complete_step.";
+    }
+    if (step === 5 && this.reviewCallCount === 0) {
+      return "You must call koan_review_artifact on landscape.md before completing this step. " +
+        "Write landscape.md, then invoke koan_review_artifact to present it for review.";
     }
     return null;
   }
@@ -176,6 +200,14 @@ export class IntakePhase extends BasePhase {
   // handleStepComplete, preserving correct order in events.jsonl.
   protected override onStepUpdated(step: number): void {
     this.ctx.intakeStep = step;
+
+    // Reset reviewCallCount when entering step 5 so only step-5 review calls
+    // count toward the validateStepCompletion gate.  Without this, a spurious
+    // koan_review_artifact call during the confidence loop (steps 2–4) would
+    // satisfy the gate before the LLM has written landscape.md.
+    if (step === 5) {
+      this.reviewCallCount = 0;
+    }
 
     if (step === 2 && this.intakeState.iteration === 1) {
       void this.eventLog?.emitIterationStart(1, IntakePhase.MAX_ITERATIONS);

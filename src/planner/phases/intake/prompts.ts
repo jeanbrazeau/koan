@@ -4,7 +4,7 @@
 //   Step 2 (Scout)      — dispatch codebase scouts for targeted exploration
 //   Step 3 (Deliberate) — enumerate knowns/unknowns, formulate & ask questions
 //   Step 4 (Reflect)    — self-verify completeness, declare confidence level
-//   Step 5 (Synthesize) — write context.md from all accumulated findings
+//   Step 5 (Synthesize & Review) — write landscape.md from all accumulated findings
 //
 // Steps 2–4 repeat until the LLM declares "certain" confidence (or max
 // iterations are exhausted). The iteration parameter is threaded through
@@ -26,15 +26,15 @@ export const INTAKE_STEP_NAMES: Record<number, string> = {
   2: "Scout",
   3: "Deliberate",
   4: "Reflect",
-  5: "Synthesize",
+  5: "Synthesize & Review",
 };
 
 export function intakeSystemPrompt(): string {
   return `You are an intake analyst for a coding task planner. You read a conversation history, explore the codebase, and ask the user targeted questions until you have complete context for planning.
 
-Your output — a single context.md file — is the sole foundation for all downstream work. Every story boundary, every implementation plan, and every line of code written downstream depends on the quality and completeness of this file. Gaps here compound into wrong plans and wrong code.
+Your output — a single landscape.md file — is the sole foundation for all downstream work. Every story boundary, every implementation plan, and every line of code written downstream depends on the quality and completeness of this file. Gaps here compound into wrong plans and wrong code.
 
-An assumption you make without verifying will become a fact the decomposer treats as decided. A question you don't ask is an answer you're making up. When the executor writes the wrong code because context.md contained an unchecked assumption, that failure traces back to this phase.
+An assumption you make without verifying will become a fact the decomposer treats as decided. A question you don't ask is an answer you're making up. When the executor writes the wrong code because landscape.md contained an unchecked assumption, that failure traces back to this phase.
 
 ## Your role
 
@@ -55,7 +55,7 @@ You work in a loop: scout the codebase, think through what you know, ask the use
 
 ## Output
 
-One file: **context.md** in the epic directory.
+One file: **landscape.md** in the epic directory.
 
 ## Tools
 
@@ -63,7 +63,8 @@ One file: **context.md** in the epic directory.
 - \`koan_request_scouts\` — request parallel codebase exploration.
 - \`koan_ask_question\` — ask the user clarifying questions.
 - \`koan_set_confidence\` — declare your confidence level.
-- \`write\` / \`edit\` — for writing context.md (final step only).
+- \`koan_review_artifact\` — present landscape.md for user review (final step only).
+- \`write\` / \`edit\` — for writing landscape.md (final step only).
 - \`koan_complete_step\` — signal step completion.`;
 }
 
@@ -186,7 +187,7 @@ export function intakeStepGuidance(step: number, conversationPath?: string, iter
           "- Would the executor hit a surprise that requires re-planning?",
           "",
           "This is the only phase where the user can be consulted. After intake, all",
-          "downstream phases work from context.md alone. Anything you get wrong here",
+          "downstream phases work from landscape.md alone. Anything you get wrong here",
           "will silently propagate through decomposition, planning, and execution.",
           "",
           "Mark each unknown as:",
@@ -315,10 +316,11 @@ export function intakeStepGuidance(step: number, conversationPath?: string, iter
       };
 
     // -------------------------------------------------------------------------
-    // Step 5: Synthesize — write context.md.
+    // Step 5: Synthesize & Review — write landscape.md.
     //
     // This step runs once, after the confidence loop exits. The LLM consolidates
-    // everything gathered across all iterations into a single structured file.
+    // everything gathered across all iterations into a single structured file,
+    // then presents it for user review via koan_review_artifact.
     //
     // A pre-write verification checklist ensures the output serves the
     // decomposer's needs: if any checklist question cannot be answered, it must
@@ -329,36 +331,68 @@ export function intakeStepGuidance(step: number, conversationPath?: string, iter
         title: INTAKE_STEP_NAMES[5],
         instructions: [
           epicDir
-            ? `Write \`${epicDir}/context.md\`.`
-            : "Write `context.md` to the epic directory.",
+            ? `Write \`${epicDir}/landscape.md\`.`
+            : "Write `landscape.md` to the epic directory.",
           "This file is the sole input for all downstream phases. Write it carefully.",
           "",
           "## Required sections",
           "",
-          "### Topic",
+          "### Task Summary",
           "One paragraph: what is being built or changed. Facts from the conversation only.",
           "",
+          "### Prior Art",
+          "Previous attempts, referenced plans, related systems mentioned in the conversation.",
+          "This gives downstream phases historical context.",
+          "If none: (none referenced)",
+          "",
           "### Codebase Findings",
-          "Key findings from scouts: architecture, patterns, existing code, integration points.",
-          "Organize by area, not by scout task or iteration.",
+          "Key findings from scouts, organized by area (not by scout task or iteration).",
           "If no scouts were needed: (no codebase exploration was needed)",
+          "",
+          "#### [Area Name]",
+          "...",
+          "",
+          "### Project Conventions",
+          "Where to find coding standards and patterns — pointers, not descriptions.",
+          "This section captures WHERE conventions live, not WHAT they are.",
+          "Downstream agents will read the referenced files directly.",
+          "If no explicit conventions are found, note that (e.g., 'no linter config; style is implicit from existing code patterns').",
+          "",
+          "**File references**: Always use markdown link format: `[filename](relative/path/to/file)`.",
+          "Example: `[base-phase.ts](src/planner/phases/base-phase.ts)`. Never use bare paths.",
+          "",
+          "#### Coding Style",
+          "Where style is defined: linter config, formatter config, or emergent from codebase.",
+          "Example: \"ESLint config at [.eslintrc.json](.eslintrc.json)\" or \"no linter; follows Go stdlib style\"",
+          "",
+          "#### Testing Strategy",
+          "Where testing approach is defined: doc, config, patterns.",
+          "Example: \"[testing-philosophy.md](doc/01-principles/testing-philosophy.md) — integration-first with testcontainers\"",
+          "",
+          "#### Architecture Patterns",
+          "Where architecture conventions live: docs, or emergent from code.",
+          "Example: \"constructor-based DI, no framework; see [BasePhase](src/planner/phases/base-phase.ts)\"",
+          "",
+          "#### Documentation",
+          "Where documentation standards are defined.",
+          "Example: \"CLAUDE.md per package\", \"JSDoc on all exports\"",
           "",
           "### Decisions",
           "Every question asked and the user's answer, across all rounds.",
-          "Format: **Q: [question]** / A: [answer]",
+          "Format: **Q:** [question] / **A:** [answer]",
           "If no questions were needed: (no questions were needed — context was sufficient)",
           "",
           "### Constraints",
-          "All constraints discovered: from conversation, from codebase (scouts), from user answers.",
+          "All constraints discovered: from conversation, codebase, user answers.",
           "If none: (none identified)",
           "",
           "### Open Items",
-          "Anything unresolved. Should be empty or near-empty if confidence was 'certain'.",
+          "Anything unresolved. Should be empty if confidence was 'certain'.",
           "If none: (none)",
           "",
           "## Pre-write verification",
           "",
-          "Before writing, verify context.md answers these questions (the decomposer needs them):",
+          "Before writing, verify landscape.md answers these questions (the decomposer needs them):",
           "- What is the top-level goal?",
           "- What are the distinct deliverable units of work?",
           "- What existing code does this touch and how is it structured?",
@@ -366,6 +400,14 @@ export function intakeStepGuidance(step: number, conversationPath?: string, iter
           "- Are there dependencies between work units?",
           "",
           "If you cannot answer any of these from what you've gathered, note it in Open Items.",
+          "",
+          "## After writing",
+          "",
+          epicDir
+            ? `Call \`koan_review_artifact\` with the path \`${epicDir}/landscape.md\` and description "Landscape document — background information for downstream planning".`
+            : "Call `koan_review_artifact` with the path to landscape.md and description \"Landscape document — background information for downstream planning\".",
+          "If the user provides feedback, revise landscape.md to address the feedback, then call `koan_review_artifact` again.",
+          "When the user accepts, call `koan_complete_step`.",
         ],
       };
 

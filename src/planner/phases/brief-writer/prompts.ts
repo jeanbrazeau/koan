@@ -7,7 +7,7 @@
 // review-then-iterate pattern.
 //
 // Step guidance follows the single-cognitive-goal principle:
-//   Step 1 (Read)          — read context.md; build mental model; no file writes
+//   Step 1 (Read)          — read landscape.md; build mental model; no file writes
 //   Step 2 (Draft & Review) — write brief.md + review gate (loops until Accept)
 //   Step 3 (Finalize)      — phase complete
 //
@@ -38,7 +38,7 @@ One file: **brief.md** in the epic directory.
 - **Summary**: 3-8 sentences describing what this epic is about.
 - **Context & Problem**: Who's affected, where in the product, the current pain.
 - **Goals**: Numbered list of measurable objectives.
-- **Constraints**: Hard constraints grounding decisions (from context.md).
+- **Constraints**: Hard constraints grounding decisions (from landscape.md).
 
 Keep the brief compact — under 50 lines. No UI flows, no technical design, no implementation details.
 
@@ -53,7 +53,7 @@ export function briefWriterStepGuidance(step: number, epicDir: string): StepGuid
       return {
         title: BRIEF_WRITER_STEP_NAMES[1],
         instructions: [
-          `Read \`${epicDir}/context.md\`. Build a thorough mental model of:`,
+          `Read \`${epicDir}/landscape.md\`. Build a thorough mental model of:`,
           "",
           "- The topic — what is being built or changed",
           "- Codebase findings — architecture, patterns, integration points",

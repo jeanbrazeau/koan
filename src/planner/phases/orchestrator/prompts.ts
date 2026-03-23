@@ -41,7 +41,7 @@ You are a decision-maker. You read content, apply judgment, and direct the workf
 - **Verification**: Running the checks defined in a story's verify.md to determine whether the implementation is correct.
 - **Verdict**: Declaring the outcome of a story's execution — success or retry with feedback.
 - **Story selection**: Choosing which story executes next based on the dependency graph and current epic state.
-- **Learning propagation**: When you discover something during verification, update remaining story.md files and the Decisions section of context.md. Mark every autonomous update with \`[autonomous]\`.
+- **Learning propagation**: When you discover something during verification, update remaining story.md files and the Decisions section of landscape.md. Mark every autonomous update with \`[autonomous]\`.
 - **User communication**: When you encounter genuine ambiguity or need human judgment, call \`koan_ask_question\`. After getting the answer, decide what to do (retry with new context, skip, etc.) and call the appropriate tool.
 
 ## When to ask the user
@@ -93,7 +93,7 @@ export function orchestratorPreStepGuidance(step: number, epicDir: string): Step
           "",
           `1. Read \`${epicDir}/epic.md\` — understand the overall goal and scope.`,
           `2. Read \`${epicDir}/brief.md\` — understand the product-level goals and constraints.`,
-          `3. Read the Decisions section of \`${epicDir}/context.md\` — understand decisions that shape execution.`,
+          `3. Read the Decisions section of \`${epicDir}/landscape.md\` — understand decisions that shape execution.`,
           `4. Read each \`story.md\` file in \`${epicDir}/stories/\` — understand what each story builds and depends on.`,
           "",
           "## What to analyze",
@@ -204,7 +204,7 @@ export function orchestratorPostStepGuidance(step: number, epicDir: string, stor
           "Ask the user a focused question. Based on the answer:",
           "  - Call koan_retry_story with the user's direction as context",
           "  - Call koan_skip_story if the user decides the story is no longer needed",
-          "  - Call koan_complete_story if the user confirms the outcome is acceptable",
+          "  - Call koan_complete_story if the user confirmed the outcome is acceptable",
           "",
           "## Decision rule",
           "",
@@ -224,7 +224,7 @@ export function orchestratorPostStepGuidance(step: number, epicDir: string, stor
       return {
         title: ORCHESTRATOR_POST_STEP_NAMES[3],
         instructions: [
-          `Propagate lessons from this story's execution to remaining stories and the Decisions section of \`${epicDir}/context.md\`.`,
+          `Propagate lessons from this story's execution to remaining stories and the Decisions section of \`${epicDir}/landscape.md\`.`,
           "",
           "## What to propagate",
           "",
@@ -241,7 +241,7 @@ export function orchestratorPostStepGuidance(step: number, epicDir: string, stor
           "1. Read its `story.md`.",
           "2. Add a `## [autonomous] Propagated Context` section with the relevant information.",
           "",
-          `Update the Decisions section of \`${epicDir}/context.md\` if a new decision was made or an existing one was invalidated.`,
+          `Update the Decisions section of \`${epicDir}/landscape.md\` if a new decision was made or an existing one was invalidated.`,
           "Add `[autonomous]` prefix to any autonomous additions.",
           "",
           "If no propagation is needed, skip file updates and proceed.",

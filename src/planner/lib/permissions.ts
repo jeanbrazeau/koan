@@ -35,6 +35,7 @@ export const ROLE_PERMISSIONS: ReadonlyMap<string, ReadonlySet<string>> = new Ma
       "koan_ask_question",
       "koan_request_scouts",
       "koan_set_confidence",
+      "koan_review_artifact",
       "edit",
       "write",
     ]),
@@ -67,7 +68,7 @@ export const ROLE_PERMISSIONS: ReadonlyMap<string, ReadonlySet<string>> = new Ma
       "edit",
       "write",
       // No koan_ask_question — the brief-writer uses artifact review, not structured questions.
-      // No koan_request_scouts — all codebase context arrives via context.md from intake.
+      // No koan_request_scouts — all codebase context arrives via landscape.md from intake.
     ]),
   ],
   [
@@ -168,7 +169,7 @@ export function checkPermission(
   }
 
   // Brief-writer step 1 (Read) is read-only: block write and edit so the LLM
-  // cannot draft files before it has comprehended context.md.
+  // cannot draft files before it has comprehended landscape.md.
   if (role === "brief-writer" && briefWriterStep === 1 && STEP_1_BLOCKED_TOOLS.has(toolName)) {
     return {
       allowed: false,
