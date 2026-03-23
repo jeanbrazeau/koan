@@ -174,11 +174,13 @@ export async function spawnSubagent(
           ) {
             opts.webServer?.pushTokenDelta(event.assistantMessageEvent.delta);
           }
-          // Clear streaming text when an assistant message finishes. Without
-          // this, thinking from turn N stays visible while the LLM executes
-          // tools or waits on IPC, and turn N+1 thinking concatenates onto it.
+          // Clear on message_start, NOT message_end. Pipe buffering delivers
+          // an entire turn's events in one read(), so clearing on message_end
+          // wipes streamingText in the same tick as pushTokenDelta — the
+          // browser never renders the text. Clearing on message_start lets
+          // thinking text survive through tool execution until the next turn.
           if (
-            event.type === "message_end" &&
+            event.type === "message_start" &&
             event.message?.role === "assistant"
           ) {
             opts.webServer?.clearTokenStream();
