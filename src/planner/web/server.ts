@@ -700,9 +700,26 @@ export async function startWebServer(epicDir: string): Promise<WebServerHandle> 
         url,
         port,
 
+        evictFinishedAgents(): void {
+          let changed = false;
+          for (const [id, agent] of agents) {
+            if (agent.status && agent.status !== "running") {
+              stopAgentPolling(agent);
+              agents.delete(id);
+              changed = true;
+            }
+          }
+          if (changed) {
+            pushEvent("agents", { agents: buildAgentsArray() });
+            pushEvent("scouts", { scouts: buildScoutsArray() });
+          }
+        },
+
         pushPhase(phase: EpicPhase): void {
           currentPhase = phase;
           // Evict finished agents from the previous phase so the UI starts clean.
+          // evictFinishedAgents pushes agents/scouts events only if something
+          // changed, but we always push them here to ensure a clean broadcast.
           for (const [id, agent] of agents) {
             if (agent.status && agent.status !== "running") {
               stopAgentPolling(agent);

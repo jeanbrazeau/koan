@@ -309,6 +309,8 @@ export interface WebServerHandle {
   }): void;
   startAgent(id: string): void;
   completeAgent(id: string): void;
+  /** Remove all non-running agents so the next batch starts from a clean slate. */
+  evictFinishedAgents(): void;
   trackSubagent(dir: string, role: string, storyId?: string): void;
   clearSubagent(): void;
 

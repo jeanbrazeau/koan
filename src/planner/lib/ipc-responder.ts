@@ -173,6 +173,11 @@ async function handleScoutRequest(
     return { ipcTask, subagentDir: scoutDir };
   });
 
+  // Clear finished agents from previous rounds so the UI starts clean.
+  // Without this, completed scouts from round N stay in the table when
+  // round N+1 begins — a visual leak since no phase transition fires.
+  webServer?.evictFinishedAgents();
+
   // Register scouts with the web server as queued (status: null) so the UI
   // shows them immediately. They transition to "running" when the pool picks
   // them up and the pi process is actually launched.
