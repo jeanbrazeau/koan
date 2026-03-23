@@ -15,6 +15,7 @@
 // Prompts express intent; the mechanical gate catches non-compliance.
 
 import type { StepGuidance } from "../../lib/step.js";
+import { REVIEW_PROTOCOL } from "../review-protocol.js";
 
 export const BRIEF_WRITER_STEP_NAMES: Record<number, string> = {
   1: "Read",
@@ -42,9 +43,7 @@ One file: **brief.md** in the epic directory.
 
 Keep the brief compact — under 50 lines. No UI flows, no technical design, no implementation details.
 
-## Review
-
-After drafting, invoke \`koan_review_artifact\` to present the brief for review. If the user provides feedback, revise the brief and present it again. Continue until the user accepts.`;
+${REVIEW_PROTOCOL}`;
 }
 
 export function briefWriterStepGuidance(step: number, epicDir: string): StepGuidance {
@@ -74,10 +73,6 @@ export function briefWriterStepGuidance(step: number, epicDir: string): StepGuid
           "lines. No UI flows, no technical design, no implementation details.",
           "",
           `After writing, invoke \`koan_review_artifact\` with the path to \`${epicDir}/brief.md\`.`,
-          "",
-          "If the user responds with \"Accept\", call koan_complete_step.",
-          "If the user provides feedback, revise brief.md to address the feedback,",
-          "then invoke koan_review_artifact again.",
         ],
       };
 

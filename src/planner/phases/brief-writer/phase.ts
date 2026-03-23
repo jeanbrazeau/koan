@@ -3,19 +3,19 @@
 //
 //   Step 1 (Read)          — comprehend landscape.md; no file writes
 //   Step 2 (Draft & Review) — write brief.md, invoke koan_review_artifact;
-//                             revise on feedback; advance only after "Accept"
+//                             revise on feedback; advance only after acceptance
 //   Step 3 (Finalize)      — phase complete
 //
 // Step 2 is the review gate. The LLM loops within step 2 by calling
-// koan_review_artifact multiple times before advancing with koan_complete_step.
-// validateStepCompletion() enforces that at least one review call occurs before
-// the phase can advance past step 2.
+// koan_review_artifact until the user accepts. validateStepCompletion()
+// enforces this mechanically — koan_complete_step is rejected unless
+// the last review response was ACCEPTED.
 //
-// Review call tracking: the phase registers an additional tool_call listener
-// (after BasePhase's permission listener) to increment a counter each time
-// koan_review_artifact is called. The counter persists across the session —
-// it does not need to reset because step 2 is entered exactly once in a linear
-// workflow; the LLM loops by making multiple review calls before advancing.
+// Review outcome tracking: a tool_call listener marks lastReviewAccepted=false
+// when koan_review_artifact is called; a tool_result listener checks the
+// response text for the "ACCEPTED" prefix and sets lastReviewAccepted=true.
+// This two-phase tracking means the gate cannot be fooled by calling
+// koan_complete_step before the review response arrives.
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 
@@ -30,9 +30,12 @@ export class BriefWriterPhase extends BasePhase {
   protected readonly role = "brief-writer";
   protected readonly totalSteps = 3;
 
-  // Counts koan_review_artifact calls during this phase session.
-  // Used by validateStepCompletion to enforce at least one review before advancing.
-  private reviewCallCount = 0;
+  // Tracks whether the last koan_review_artifact call was accepted by the user.
+  // null = never reviewed; true = last review accepted; false = last review had feedback.
+  // validateStepCompletion gates on this: koan_complete_step is rejected unless
+  // the last review was accepted. This mechanically enforces the review loop
+  // described in the REVIEW_PROTOCOL system prompt.
+  private lastReviewAccepted: boolean | null = null;
 
   constructor(
     pi: ExtensionAPI,
@@ -42,15 +45,22 @@ export class BriefWriterPhase extends BasePhase {
   ) {
     super(pi, ctx, log ?? createLogger("BriefWriterPhase"), eventLog);
 
-    // Track koan_review_artifact invocations so validateStepCompletion can
-    // verify that the LLM presented brief.md for review before advancing.
-    // Always returns undefined — does not interfere with the base class
-    // permission fence registered by BasePhase.registerHandlers().
+    // When koan_review_artifact is called, mark as pending (not yet accepted).
     pi.on("tool_call", (event) => {
       if (event.toolName === "koan_review_artifact") {
-        this.reviewCallCount++;
+        this.lastReviewAccepted = false;
       }
       return undefined;
+    });
+
+    // When koan_review_artifact returns, check the response for ACCEPTED.
+    pi.on("tool_result", (event) => {
+      if (event.toolName === "koan_review_artifact" && !event.isError) {
+        const text = event.content?.[0];
+        if (text && "text" in text && typeof text.text === "string") {
+          this.lastReviewAccepted = text.text.startsWith("ACCEPTED");
+        }
+      }
     });
   }
 
@@ -66,13 +76,20 @@ export class BriefWriterPhase extends BasePhase {
     return briefWriterStepGuidance(step, this.ctx.epicDir!);
   }
 
-  // Pre-condition: require at least one koan_review_artifact call before
-  // advancing from step 2. The LLM must present brief.md for review before
-  // completing the Draft & Review step.
+  // Pre-condition: the last koan_review_artifact call must have been accepted.
+  // This mechanically enforces the review loop — the LLM cannot skip past
+  // user feedback by calling koan_complete_step.
   protected async validateStepCompletion(step: number): Promise<string | null> {
-    if (step === 2 && this.reviewCallCount === 0) {
-      return "You must call koan_review_artifact on brief.md before completing this step. " +
-        "Write brief.md, then invoke koan_review_artifact to present it for review.";
+    if (step === 2) {
+      if (this.lastReviewAccepted === null) {
+        return "You must call koan_review_artifact on brief.md before completing this step. " +
+          "Write brief.md, then invoke koan_review_artifact to present it for review.";
+      }
+      if (!this.lastReviewAccepted) {
+        return "The user provided feedback on your artifact — you must address it. " +
+          "Revise brief.md based on the feedback, then call koan_review_artifact again. " +
+          "You cannot complete this step until the user accepts.";
+      }
     }
     return null;
   }

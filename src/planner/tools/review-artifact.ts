@@ -33,13 +33,12 @@ type ReviewArtifactParams = Static<typeof ReviewArtifactSchema>;
 // -- Tool description --
 
 const REVIEW_ARTIFACT_DESCRIPTION = `
-Present a written artifact (markdown file) for human review and collect feedback.
+Present a written artifact (markdown file) for human review.
 
-Use this after writing an artifact file to get human approval before proceeding.
-
-The user will see the rendered artifact content and can either:
-- Accept it — call koan_complete_step after receiving "Accept"
-- Provide feedback — revise the artifact and call koan_review_artifact again
+The user will see the rendered artifact content and can either accept it
+or provide feedback. The tool returns ACCEPTED or REVISION REQUESTED with
+the user's feedback text. See the review protocol in your system prompt
+for how to handle each response.
 
 Parameters:
 - path: the file path of the artifact to review
@@ -104,8 +103,18 @@ export async function executeReviewArtifact(
     case "answered": {
       const artifactIpc = answeredIpc as ArtifactReviewIpcFile;
       const feedback = artifactIpc.response?.feedback || "(no feedback)";
+      const accepted = feedback.trim().toLowerCase() === "accept";
+
+      if (accepted) {
+        return {
+          content: [{ type: "text" as const, text: "ACCEPTED — The user approved this artifact." }],
+          details: undefined,
+        };
+      }
+
       return {
-        content: [{ type: "text" as const, text: `User feedback:\n${feedback}` }],
+        content: [{ type: "text" as const, text:
+          "REVISION REQUESTED — The user provided feedback:\n\n" + feedback }],
         details: undefined,
       };
     }

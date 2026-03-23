@@ -72,9 +72,10 @@ export class IntakePhase extends BasePhase {
 
   private readonly conversationPath: string;
 
-  // Counts koan_review_artifact calls during this phase session.
-  // Used by validateStepCompletion to enforce at least one review before advancing.
-  private reviewCallCount = 0;
+  // Tracks whether the last koan_review_artifact call was accepted by the user.
+  // null = never reviewed; true = last review accepted; false = last review had feedback.
+  // validateStepCompletion gates on this for step 5. See REVIEW_PROTOCOL.
+  private lastReviewAccepted: boolean | null = null;
 
   constructor(
     pi: ExtensionAPI,
@@ -91,15 +92,22 @@ export class IntakePhase extends BasePhase {
       setConfidence(level: ConfidenceLevel) { state.confidence = level; },
     };
 
-    // Track koan_review_artifact invocations so validateStepCompletion can
-    // verify that the LLM presented landscape.md for review before advancing.
-    // Always returns undefined — does not interfere with the base class
-    // permission fence registered by BasePhase.registerHandlers().
+    // When koan_review_artifact is called, mark as pending (not yet accepted).
     pi.on("tool_call", (event) => {
       if (event.toolName === "koan_review_artifact") {
-        this.reviewCallCount++;
+        this.lastReviewAccepted = false;
       }
       return undefined;
+    });
+
+    // When koan_review_artifact returns, check the response for ACCEPTED.
+    pi.on("tool_result", (event) => {
+      if (event.toolName === "koan_review_artifact" && !event.isError) {
+        const text = event.content?.[0];
+        if (text && "text" in text && typeof text.text === "string") {
+          this.lastReviewAccepted = text.text.startsWith("ACCEPTED");
+        }
+      }
     });
   }
 
@@ -177,9 +185,16 @@ export class IntakePhase extends BasePhase {
         "Assess your confidence level based on the verification questions you answered, " +
         "then call koan_set_confidence, then call koan_complete_step.";
     }
-    if (step === 5 && this.reviewCallCount === 0) {
-      return "You must call koan_review_artifact on landscape.md before completing this step. " +
-        "Write landscape.md, then invoke koan_review_artifact to present it for review.";
+    if (step === 5) {
+      if (this.lastReviewAccepted === null) {
+        return "You must call koan_review_artifact on landscape.md before completing this step. " +
+          "Write landscape.md, then invoke koan_review_artifact to present it for review.";
+      }
+      if (!this.lastReviewAccepted) {
+        return "The user provided feedback on your artifact — you must address it. " +
+          "Revise landscape.md based on the feedback, then call koan_review_artifact again. " +
+          "You cannot complete this step until the user accepts.";
+      }
     }
     return null;
   }
@@ -201,12 +216,12 @@ export class IntakePhase extends BasePhase {
   protected override onStepUpdated(step: number): void {
     this.ctx.intakeStep = step;
 
-    // Reset reviewCallCount when entering step 5 so only step-5 review calls
-    // count toward the validateStepCompletion gate.  Without this, a spurious
+    // Reset lastReviewAccepted when entering step 5 so only step-5 reviews
+    // count toward the validateStepCompletion gate. Without this, a spurious
     // koan_review_artifact call during the confidence loop (steps 2–4) would
     // satisfy the gate before the LLM has written landscape.md.
     if (step === 5) {
-      this.reviewCallCount = 0;
+      this.lastReviewAccepted = null;
     }
 
     if (step === 2 && this.intakeState.iteration === 1) {

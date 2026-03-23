@@ -20,6 +20,7 @@
 //   genuinely isolated reasoning for each phase of the loop.
 
 import type { StepGuidance } from "../../lib/step.js";
+import { REVIEW_PROTOCOL } from "../review-protocol.js";
 
 export const INTAKE_STEP_NAMES: Record<number, string> = {
   1: "Extract",
@@ -66,7 +67,9 @@ One file: **landscape.md** in the epic directory.
 - \`koan_set_confidence\` — declare your confidence level.
 - \`koan_review_artifact\` — present landscape.md for user review (final step only).
 - \`write\` / \`edit\` — for writing landscape.md (final step only).
-- \`koan_complete_step\` — signal step completion.`;
+- \`koan_complete_step\` — signal step completion.
+
+${REVIEW_PROTOCOL}`;
 }
 
 export function intakeStepGuidance(step: number, conversationPath?: string, iteration = 1, epicDir?: string): StepGuidance {
@@ -432,8 +435,6 @@ export function intakeStepGuidance(step: number, conversationPath?: string, iter
           epicDir
             ? `Call \`koan_review_artifact\` with the path \`${epicDir}/landscape.md\` and description "Landscape document — background information for downstream planning".`
             : "Call `koan_review_artifact` with the path to landscape.md and description \"Landscape document — background information for downstream planning\".",
-          "If the user provides feedback, revise landscape.md to address the feedback, then call `koan_review_artifact` again.",
-          "When the user accepts, call `koan_complete_step`.",
         ],
       };
 
