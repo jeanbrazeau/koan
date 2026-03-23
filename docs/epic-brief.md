@@ -132,10 +132,10 @@ ensures agents see current file content rather than a spawn-time snapshot.
 
 ## Design Rationale
 
-### Traycer-inspired artifact cascade
+### Artifact cascade
 
-The brief is modeled on Traycer's product brief pattern: each phase produces
-an artifact that downstream phases consult. The cascade in this pipeline:
+Each phase produces an artifact that downstream phases consult. The cascade
+in this pipeline:
 
 ```
 landscape.md        (intake synthesis)
