@@ -11,8 +11,8 @@
 // discoverStoryIds scans the filesystem instead of reading a driver-maintained
 // list because the decomposer LLM writes story.md files using the Write tool —
 // it has no reason to know the JSON state format, and requiring it to update
-// epic-state.json would force an LLM to write JSON, violating the core invariant
-// (§10.2). The driver discovers what the LLM created by scanning stories/*/story.md,
+// epic-state.json would force an LLM to write JSON, violating the core invariant.
+// See docs/subagents.md "Why not CLI flags". The driver discovers what the LLM created by scanning stories/*/story.md,
 // then populates the JSON story list itself.
 
 import { promises as fs } from "node:fs";

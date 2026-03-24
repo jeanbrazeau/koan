@@ -20,7 +20,7 @@ js/
   sse.js           SSE connection + store updates
   lib/utils.js     formatTokens, formatElapsed, shortenModel
   lib/api.js       submitAnswers, submitReview (fetch wrappers)
-  components/      Preact component tree (see §Component tree below)
+  components/      Preact component tree (see Component tree below)
 ```
 
 ---

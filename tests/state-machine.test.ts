@@ -1,6 +1,6 @@
 // Property-based state machine tests for koan.
 // Verifies:
-//   - All valid story status transitions (§11.4 table)
+//   - All valid story status transitions (story lifecycle state machine)
 //   - Routing decisions for all state combinations
 //   - Permission matrices (role × tool × expected result)
 
@@ -35,7 +35,7 @@ async function withEpicDir<T>(fn: (epicDir: string) => Promise<T>): Promise<T> {
 }
 
 // ---------------------------------------------------------------------------
-// State machine: valid transitions (§11.4)
+// State machine: valid transitions (story lifecycle)
 // ---------------------------------------------------------------------------
 
 describe("state machine: valid transitions", () => {
@@ -201,7 +201,7 @@ describe("assertStatus enforcement", () => {
 });
 
 // ---------------------------------------------------------------------------
-// State machine: tool source validation (§11.4 / §11.12)
+// State machine: valid source status enforcement per story lifecycle
 // ---------------------------------------------------------------------------
 
 describe("state machine: tool source validation", () => {

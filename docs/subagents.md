@@ -185,12 +185,33 @@ in-process, rather than terminating the subagent process.
 
 ## Step-First Workflow (BasePhase)
 
-`BasePhase` is the abstract superclass for all six phase classes. It manages:
+`BasePhase` is the abstract superclass for all phase classes. It manages:
 
 - **Step counter** — starts at 0 (boot state), increments monotonically
 - **System prompt injection** — via `before_agent_start` event handler
 - **Permission fence** — via `tool_call` event handler (default-deny)
 - **Step transition** — via `handleStepComplete()` callback
+
+Class hierarchy:
+
+```
+BasePhase
+├── ReviewablePhase (abstract)
+│   ├── IntakePhase
+│   └── BriefWriterPhase
+├── ScoutPhase
+├── DecomposerPhase
+├── OrchestratorPhase
+├── PlannerPhase
+└── ExecutorPhase
+```
+
+**`ReviewablePhase`** is an abstract subclass of `BasePhase` used by phases that
+require artifact review acceptance before advancing. It owns the
+`koan_review_artifact` listener registration, the `lastReviewAccepted` gate
+state, and a `validateStepCompletion` override that enforces the gate.
+`IntakePhase` and `BriefWriterPhase` extend `ReviewablePhase`; the remaining
+five phases extend `BasePhase` directly.
 
 ### Step progression state machine
 

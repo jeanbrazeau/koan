@@ -1,10 +1,9 @@
 // Orchestrator phase prompts.
-// Pre-execution (2 steps): dependency analysis → story selection.
-// Post-execution (4 steps): verify → verdict → propagate → select next.
+// Pre-execution (2 steps): dependency analysis -> story selection.
+// Post-execution (4 steps): verify -> verdict -> propagate -> select next.
 //
-// koan_escalate is eliminated per §11.3.1. When the orchestrator needs human
-// input, it uses koan_ask_question to get clarification, then decides what
-// to do (retry, skip, etc.) and calls the appropriate state-transition tool.
+// User communication uses koan_ask_question for clarification, after which the
+// orchestrator decides the next action (retry, skip, etc.) via state-transition tools.
 
 import type { StepGuidance } from "../../lib/step.js";
 

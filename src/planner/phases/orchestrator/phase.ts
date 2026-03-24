@@ -1,7 +1,6 @@
 // Orchestrator phase: judgment calls at execution boundaries.
 // Two step sequences: pre-execution (2 steps) and post-execution (4 steps).
-// koan_escalate is eliminated — orchestrator uses koan_ask_question for all
-// user communication and then calls appropriate state-transition tools.
+// Orchestrator uses koan_ask_question for all user communication. See docs/state.md -- "No escalated status".
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 

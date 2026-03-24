@@ -1,21 +1,22 @@
 // Core types for the koan epic/story orchestrator.
 // Shared across driver, phases, tools, and spawn infrastructure.
 
-// No `escalated` status: escalation is asking a question (§11.3.1). The orchestrator
+// No `escalated` status -- see docs/state.md "No escalated status". The orchestrator
 // calls `koan_ask_question` when it needs human input, then decides via retry/skip.
 // A separate status created a dead routing path — the driver had nowhere clean to
 // send it without duplicating the ask UI flow that IPC already handles.
 //
 // No `scouting` EpicPhase: scouts are spawned inside the IPC responder during
 // intake/decomposer/planner phases, not as a top-level driver phase. Adding
-// "scouting" to EpicPhase would imply a driver state that never exists (§12.2.2).
+// "scouting" to EpicPhase would imply a driver state that never exists.
 // If a top-level scouting phase is added later, re-add the value then.
 //
 // StepSequence exists for the orchestrator, which has two distinct step counts
 // depending on where in the story lifecycle it runs: pre-execution (2 steps:
 // dependency analysis + select) vs post-execution (4 steps: verify + verdict +
 // propagate + select next). A single OrchestratorPhase class reads this value
-// in begin() to configure its total steps and guidance functions (§9.1).
+// in begin() to configure its total steps and guidance functions.
+// See docs/subagents.md for orchestrator step sequence details.
 
 // Subagent roles — the seven LLM roles in the pipeline.
 export type SubagentRole = "intake" | "scout" | "decomposer" | "orchestrator" | "planner" | "executor" | "brief-writer";

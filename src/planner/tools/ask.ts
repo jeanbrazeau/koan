@@ -179,7 +179,7 @@ Scouts run in parallel. The tool returns the file paths to read.
 
 // -- Extracted execute logic --
 
-type ToolResult = { content: Array<{ type: "text"; text: string }>; details: undefined };
+import type { ToolResult } from "./types.js";
 
 export async function executeAskQuestion(
   params: AskParams,

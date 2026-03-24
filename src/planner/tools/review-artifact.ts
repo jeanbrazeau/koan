@@ -47,7 +47,7 @@ Parameters:
 
 // -- Execute logic --
 
-type ToolResult = { content: Array<{ type: "text"; text: string }>; details: undefined };
+import type { ToolResult } from "./types.js";
 
 export async function executeReviewArtifact(
   params: ReviewArtifactParams,

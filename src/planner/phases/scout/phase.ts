@@ -1,7 +1,7 @@
 // Scout phase: answers one narrow codebase question and writes findings.
 // Four-step workflow (orient → investigate → verify → report), cheap model, no user interaction.
-// Task context (question, outputFile, role) is received via CLI flags and
-// delivered to the LLM through step guidance (returned by koan_complete_step).
+// Task context (question, outputFile, investigatorRole) is received via task.json
+// (directory-as-contract) and delivered to the LLM through step guidance.
 
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
 

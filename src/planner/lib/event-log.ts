@@ -41,9 +41,7 @@ const HEARTBEAT_MS = 10_000;
 
 // -- Helpers --
 
-function now(): string {
-  return new Date().toISOString();
-}
+import { now } from "./time.js";
 
 // -- Extractors --
 // Transform pi's raw hook events into our audit event types.

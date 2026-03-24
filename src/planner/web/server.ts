@@ -1094,7 +1094,7 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
 }
 
 // ---------------------------------------------------------------------------
-// Open browser helper (§12.2)
+// Open browser helper
 // ---------------------------------------------------------------------------
 
 export async function openBrowser(pi: ExtensionAPI, url: string): Promise<void> {

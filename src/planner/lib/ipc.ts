@@ -2,7 +2,7 @@
 // A single ipc.json file per subagent directory holds the current request and
 // its response. Atomic writes (tmp-rename) prevent partial reads.
 //
-// IPC protocol supports three message types (§11.2.4):
+// IPC protocol supports three message types (see docs/subagents.md):
 //   "ask"             — subagent asks the user a question
 //   "scout-request"   — subagent requests parallel codebase scout spawning
 //   "artifact-review" — subagent presents a written artifact for human review

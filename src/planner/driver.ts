@@ -120,52 +120,20 @@ async function spawnTracked(
 // Phase A helpers
 // ---------------------------------------------------------------------------
 
-async function runIntake(
+async function runSimplePhase(
+  role: "intake" | "brief-writer" | "decomposer",
   epicDir: string,
-  cwd: string,
-  extensionPath: string,
-  log: Logger,
   webServer: WebServerHandle | null,
-): Promise<boolean> {
-  const subagentDir = await ensureSubagentDirectory(epicDir, "intake");
-  const opts: SpawnOptions = { cwd, extensionPath, log, webServer: webServer ?? undefined };
-  const result = await spawnTracked("intake", "intake", "intake", { role: "intake", epicDir }, subagentDir, undefined, opts, webServer);
-  if (result.exitCode !== 0) {
-    log("Intake failed", { exitCode: result.exitCode });
-    return false;
-  }
-  return true;
-}
-
-async function runBriefWriter(
-  epicDir: string,
-  cwd: string,
   extensionPath: string,
-  log: Logger,
-  webServer: WebServerHandle | null,
-): Promise<boolean> {
-  const subagentDir = await ensureSubagentDirectory(epicDir, "brief-writer");
-  const opts: SpawnOptions = { cwd, extensionPath, log, webServer: webServer ?? undefined };
-  const result = await spawnTracked("brief-writer", "brief-writer", "brief-writer", { role: "brief-writer", epicDir }, subagentDir, undefined, opts, webServer);
-  if (result.exitCode !== 0) {
-    log("Brief writer failed", { exitCode: result.exitCode });
-    return false;
-  }
-  return true;
-}
-
-async function runDecomposer(
-  epicDir: string,
   cwd: string,
-  extensionPath: string,
   log: Logger,
-  webServer: WebServerHandle | null,
 ): Promise<boolean> {
-  const subagentDir = await ensureSubagentDirectory(epicDir, "decomposer");
+  const subagentDir = await ensureSubagentDirectory(epicDir, role);
   const opts: SpawnOptions = { cwd, extensionPath, log, webServer: webServer ?? undefined };
-  const result = await spawnTracked("decomposer", "decomposer", "decomposer", { role: "decomposer", epicDir }, subagentDir, undefined, opts, webServer);
+  const task = { role, epicDir } as SubagentTask;
+  const result = await spawnTracked(role, role, role, task, subagentDir, undefined, opts, webServer);
   if (result.exitCode !== 0) {
-    log("Decomposer failed", { exitCode: result.exitCode });
+    log(`${role} phase failed`, { exitCode: result.exitCode });
     return false;
   }
   return true;
@@ -369,7 +337,7 @@ export async function runPipeline(
   await saveEpicState(epicDir, { ...epicState, phase: "intake" });
   webServer?.pushPhase("intake");
 
-  const intakeOk = await runIntake(epicDir, cwd, extensionPath, log, webServer);
+  const intakeOk = await runSimplePhase("intake", epicDir, webServer, extensionPath, cwd, log);
   if (!intakeOk) return { success: false, summary: "Intake phase failed" };
 
   // Brief phase: distill intake context into a compact epic brief.
@@ -377,7 +345,7 @@ export async function runPipeline(
   await saveEpicState(epicDir, { ...afterIntake, phase: "brief" });
   webServer?.pushPhase("brief");
 
-  const briefOk = await runBriefWriter(epicDir, cwd, extensionPath, log, webServer);
+  const briefOk = await runSimplePhase("brief-writer", epicDir, webServer, extensionPath, cwd, log);
   if (!briefOk) return { success: false, summary: "Brief generation failed" };
 
   // Decomposition phase: split the epic into story sketches.
@@ -385,7 +353,7 @@ export async function runPipeline(
   await saveEpicState(epicDir, { ...afterBrief, phase: "decomposition" });
   webServer?.pushPhase("decomposition");
 
-  const decompOk = await runDecomposer(epicDir, cwd, extensionPath, log, webServer);
+  const decompOk = await runSimplePhase("decomposer", epicDir, webServer, extensionPath, cwd, log);
   if (!decompOk) return { success: false, summary: "Decomposition phase failed" };
 
   // Discover stories by scanning the filesystem — the decomposer LLM wrote

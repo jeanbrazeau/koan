@@ -1,5 +1,5 @@
 // Decomposer phase prompts — 2 steps: analysis → decomposition.
-// Story IDs use S-NNN-slug format per §11.5.5 (e.g., S-001-auth-provider).
+// Story IDs use S-NNN-slug format (e.g., S-001-auth-provider).
 
 import type { StepGuidance } from "../../lib/step.js";
 

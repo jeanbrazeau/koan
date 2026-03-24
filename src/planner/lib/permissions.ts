@@ -2,7 +2,7 @@
 //
 // Permission model overview:
 //   1. READ_TOOLS (bash, read, grep, glob, find, ls) are always allowed for all
-//      roles. This is an accepted limitation (§11.9, §12.5): distinguishing
+//      roles. This is an accepted limitation: distinguishing
 //      "read bash" from "write bash" is intractable at the permission layer.
 //      Prompt engineering constrains intended bash use; enforcement does not.
 //      Do not assume bash is restricted to roles that list it explicitly.

@@ -1,11 +1,11 @@
 // Orchestrator tools: four tools for the orchestrator subagent to advance
-// story lifecycle state. koan_escalate is eliminated per §11.3.1 — the
-// orchestrator uses koan_ask_question for all user communication.
+// story lifecycle state. The orchestrator uses koan_ask_question for all
+// user communication -- see docs/state.md "No escalated status".
 //
 // Each tool:
-//  1. Validates that the story is in the correct source state (§11.4/§11.12)
+//  1. Validates that the story is in the correct source state
 //  2. Writes JSON state (for driver polling)
-//  3. Writes templated markdown status.md (for LLM reads, §11.5.4)
+//  3. Writes templated markdown status.md (for LLM reads)
 
 import { Type } from "@sinclair/typebox";
 import type { ExtensionAPI } from "@mariozechner/pi-coding-agent";
@@ -14,14 +14,12 @@ import type { RuntimeContext } from "../lib/runtime-context.js";
 import { loadStoryState, saveStoryState } from "../epic/state.js";
 import { writeArtifact } from "../epic/artifacts.js";
 import type { StoryStatus } from "../types.js";
+import { now } from "../lib/time.js";
+import type { ToolResult } from "./types.js";
 
 // -- Helpers --
 
-function now(): string {
-  return new Date().toISOString();
-}
-
-// §11.5.4 templated status.md format.
+// Templated status.md format -- see docs/state.md for the status file contract.
 function statusMd(
   storyId: string,
   status: StoryStatus,
@@ -62,8 +60,6 @@ export function assertStatus(storyId: string, current: StoryStatus, allowed: Sto
 }
 
 // -- Extracted execute logic --
-
-type ToolResult = { content: Array<{ type: "text"; text: string }>; details: undefined };
 
 export async function executeSelectStory(epicDir: string, storyId: string): Promise<ToolResult> {
   const ts = now();
@@ -174,7 +170,7 @@ export async function executeSkipStory(
 
 export function registerOrchestratorTools(pi: ExtensionAPI, ctx: RuntimeContext): void {
   // -- koan_select_story --
-  // Valid source statuses: pending, retry (§11.4)
+  // Valid source statuses: pending, retry -- see story lifecycle in docs/state.md.
 
   pi.registerTool({
     name: "koan_select_story",
@@ -190,7 +186,7 @@ export function registerOrchestratorTools(pi: ExtensionAPI, ctx: RuntimeContext)
   });
 
   // -- koan_complete_story --
-  // Valid source status: verifying (§11.4)
+  // Valid source status: verifying -- see story lifecycle in docs/state.md.
 
   pi.registerTool({
     name: "koan_complete_story",
@@ -212,7 +208,7 @@ export function registerOrchestratorTools(pi: ExtensionAPI, ctx: RuntimeContext)
   });
 
   // -- koan_retry_story --
-  // Valid source status: verifying (§11.4)
+  // Valid source status: verifying -- see story lifecycle in docs/state.md.
 
   pi.registerTool({
     name: "koan_retry_story",
@@ -231,7 +227,7 @@ export function registerOrchestratorTools(pi: ExtensionAPI, ctx: RuntimeContext)
   });
 
   // -- koan_skip_story --
-  // Valid source statuses: pending, retry (§11.4)
+  // Valid source statuses: pending, retry -- see story lifecycle in docs/state.md.
 
   pi.registerTool({
     name: "koan_skip_story",
