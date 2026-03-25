@@ -386,9 +386,9 @@ export function ActivityFeed({ token }) {
     <div class="activity-feed-scroll" ref={containerRef} onScroll={onScroll}>
       <div class="activity-feed-inner">
 
-        {/* Zone 1: frozen phase activity — dimmed to indicate completed work */}
+        {/* Zone 1: frozen phase activity — rendered identically to live activity */}
         {hasOrchestratorSession && frozenLogs.map((line, i) =>
-          renderLine(line, false, false, `frozen-${i}`, true, '')
+          renderLine(line, false, false, `frozen-${i}`, false, '')
         )}
 
         {/* Zone 2: orchestrator session separator */}
