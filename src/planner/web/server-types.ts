@@ -212,17 +212,9 @@ export interface PipelineEndEvent {
   summary: string;
 }
 
-// Confidence level type for the intake confidence loop.
-export type IntakeConfidenceLevel = "exploring" | "low" | "medium" | "high" | "certain" | null;
-
 export interface IntakeProgressEvent {
   subPhase: string | null;
   intakeDone: boolean;
-  // The most recent confidence level declared by koan_set_confidence.
-  // Null before the first Reflect step completes.
-  confidence: IntakeConfidenceLevel;
-  // The current loop iteration (1-based). Zero before the loop begins.
-  iteration: number;
 }
 
 export interface ScoutState {

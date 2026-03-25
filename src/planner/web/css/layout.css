@@ -323,40 +323,12 @@
   margin-bottom: var(--gap-xs);
 }
 
-/* Five-segment confidence bar */
-.sidebar-segments {
-  display: flex;
-  gap: 3px;
-  margin-bottom: var(--gap-xs);
-}
-
-.sidebar-segment {
-  flex: 1;
-  height: 8px;
-  border-radius: 4px;
-  transition: background 300ms ease;
-}
-
-/* Value line beneath a segment bar or dots */
+/* Value line beneath a section */
 .sidebar-value {
   font-family: var(--font-mono);
   font-size: 13px;
   font-weight: 500;
   color: var(--text-muted);
-}
-
-/* Four-dot iteration indicator */
-.sidebar-dots {
-  display: flex;
-  gap: 4px;
-  margin-bottom: var(--gap-xs);
-}
-
-.sidebar-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  transition: background 300ms ease;
 }
 
 .sidebar-divider {

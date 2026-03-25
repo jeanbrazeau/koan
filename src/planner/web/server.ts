@@ -204,7 +204,7 @@ interface AgentInfoInternal {
   eventCount: number;
   completionSummary: string | null;
   // Cached most-recent projection from pollAgent(), used by the polling timer
-  // to read confidence/iteration without issuing a second readProjection call.
+  // to read sub-phase without issuing a second readProjection call.
   lastProjection?: import("../lib/audit.js").Projection;
 }
 
@@ -258,14 +258,11 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
   // subagent transitions (trackSubagent / clearSubagent).
   let streamingText = "";
 
-  // Denormalized intake progress buffer. Includes confidence and iteration from
-  // the intake agent's projection so the UI can visualize loop progress.
+  // Denormalized intake progress buffer.
   // Typed as IntakeProgressEvent so the SSE payload is compile-time verified.
   let currentIntakeProgress: IntakeProgressEvent = {
     subPhase: null,
     intakeDone: false,
-    confidence: null,
-    iteration: 0,
   };
 
   // SSE clients
@@ -373,7 +370,7 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
     const scoutArray = buildScoutsArray();
     if (scoutArray.length > 0) write("scouts", { scouts: scoutArray });
 
-    if (currentIntakeProgress.subPhase !== null || currentIntakeProgress.intakeDone || currentIntakeProgress.confidence !== null) {
+    if (currentIntakeProgress.subPhase !== null || currentIntakeProgress.intakeDone) {
       write("intake-progress", currentIntakeProgress);
     }
 
@@ -475,7 +472,7 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
         agent.tokensSent = projection.tokensSent;
         agent.tokensReceived = projection.tokensReceived;
         agent.eventCount = projection.eventCount;
-        // Cache the latest projection so polling timers can read confidence/iteration
+        // Cache the latest projection so polling timers can read sub-phase
         // without issuing a second readProjection call for the same file in the same tick.
         agent.lastProjection = projection;
         if (projection.status !== "running") {
@@ -484,11 +481,10 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
         if (agent.role === "intake") {
           const hasPendingAsk = Array.from(pendingInputs.values()).some((p) => p.type === "ask");
           // Map intake step numbers to display sub-phase names.
-          // Steps 2-4 repeat across iterations; show "questions" when user input is pending.
           const STEP_PHASE: Record<number, string> = {
             0: "extract", 1: "extract",
-            2: "scout", 3: "deliberate", 4: "reflect",
-            5: "synthesize",
+            2: "scout", 3: "ask", 4: "reflect",
+            5: "write",
           };
           agent.subPhase = hasPendingAsk ? "questions" : (STEP_PHASE[projection.step] ?? "reflect");
         }
@@ -521,20 +517,13 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
       // Push intake-progress event if the intake agent's sub-phase changed
       const intake = Array.from(agents.values()).find(a => a.role === "intake");
       if (intake) {
-        // Use the projection already read by pollAgent (cached on agent.lastProjection)
-        // to avoid a redundant readProjection call for the same file in the same tick.
-        const intakeProjection = intake.lastProjection ?? null;
         const next: IntakeProgressEvent = {
           subPhase: intake.subPhase,
           intakeDone: currentPhase !== "intake" && currentPhase !== null,
-          confidence: intakeProjection?.intakeConfidence ?? null,
-          iteration: intakeProjection?.intakeIteration ?? 0,
         };
         const changed =
           next.subPhase !== currentIntakeProgress.subPhase ||
-          next.intakeDone !== currentIntakeProgress.intakeDone ||
-          next.confidence !== currentIntakeProgress.confidence ||
-          next.iteration !== currentIntakeProgress.iteration;
+          next.intakeDone !== currentIntakeProgress.intakeDone;
         if (changed) {
           currentIntakeProgress = next;
           pushEvent("intake-progress", currentIntakeProgress);

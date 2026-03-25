@@ -13,23 +13,14 @@ import { useState, useEffect } from 'preact/hooks'
 import { useStore } from '../store.js'
 import { shortenModel, formatTokens, formatElapsed } from '../lib/utils.js'
 
-// Maps confidence level to number of filled segments (out of 5) and accent colour.
-const CONFIDENCE_DISPLAY = {
-  exploring: { segments: 1, color: 'var(--blue)' },
-  low:       { segments: 1, color: 'var(--red)' },
-  medium:    { segments: 3, color: 'var(--orange)' },
-  high:      { segments: 4, color: 'var(--green)' },
-  certain:   { segments: 5, color: 'var(--green)' },
-}
-
 // Default summary text per sub-phase shown while the agent is working.
 const SUBPHASE_SUMMARY = {
-  extract:    'Reading conversation to understand the task…',
-  scout:      'Exploring codebase via parallel scouts…',
-  deliberate: 'Analyzing findings, preparing questions…',
-  reflect:    'Verifying completeness of understanding…',
-  questions:  'Waiting for user response…',
-  synthesize: 'Writing landscape.md…',
+  extract:   'Reading conversation to understand the task…',
+  scout:     'Exploring codebase via parallel scouts…',
+  ask:       'Analyzing findings, preparing questions…',
+  reflect:   'Verifying completeness of understanding…',
+  questions: 'Waiting for user response…',
+  write:     'Writing landscape.md…',
 }
 
 export function StatusSidebar() {
@@ -103,44 +94,13 @@ function PhaseStatus({ phase, intakeProgress, stories }) {
   }
 }
 
-// -- Intake-specific status: confidence meter, iteration dots, sub-phase, summary --
+// -- Intake-specific status: sub-phase and summary --
 
 function IntakeStatus({ progress }) {
-  const { confidence, iteration, subPhase, intakeDone } = progress
-  const conf = CONFIDENCE_DISPLAY[confidence] ?? CONFIDENCE_DISPLAY.exploring
+  const { subPhase, intakeDone } = progress
 
   return (
     <>
-      <SidebarSection label="Confidence">
-        <div class="sidebar-segments">
-          {Array.from({ length: 5 }, (_, i) => (
-            <div
-              key={i}
-              class="sidebar-segment"
-              style={{ background: i < conf.segments ? conf.color : 'var(--text-ghost)' }}
-            />
-          ))}
-        </div>
-        <div class="sidebar-value" style={{ color: conf.color }}>
-          {confidence ?? 'exploring'}
-        </div>
-      </SidebarSection>
-
-      {iteration > 0 && (
-        <SidebarSection label="Iteration">
-          <div class="sidebar-dots">
-            {Array.from({ length: 4 }, (_, i) => (
-              <div
-                key={i}
-                class="sidebar-dot"
-                style={{ background: i < iteration ? 'var(--blue)' : 'var(--border)' }}
-              />
-            ))}
-          </div>
-          <div class="sidebar-value">Round {iteration} of 4</div>
-        </SidebarSection>
-      )}
-
       {subPhase && (
         <SidebarSection label="Sub-phase">
           <div class="sidebar-value" style={{ color: 'var(--purple)' }}>{subPhase}</div>
