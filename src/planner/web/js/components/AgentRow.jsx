@@ -73,6 +73,11 @@ function AgentTimer({ agent }) {
     if (agent.startedAt && agent.completedAt) {
       return <span class="agent-timer">{formatElapsedShort(agent.completedAt - agent.startedAt)}</span>
     }
+    // completedAt not yet populated — snapshot elapsed from startedAt to now
+    // so the timer doesn't briefly flash "—" during the status transition.
+    if (agent.startedAt) {
+      return <span class="agent-timer">{formatElapsedShort(Date.now() - agent.startedAt)}</span>
+    }
     return <span class="agent-timer">—</span>
   }
   if (agent.status === 'running' && agent.startedAt) {
