@@ -64,17 +64,16 @@ clear and complete.
 
 Examples of target density (WRONG → RIGHT):
 
-Synthesizing scout findings:
-  WRONG: "The scouts found that the CUDA kernels live in src/kernels/ and use
-  shared memory for the parallel reduction step. The host code allocates device
-  memory with cudaMalloc and copies results back with cudaMemcpy. I notice that
-  none of the kernels handle the case where input size isn't a multiple of the
-  block size, which could cause out-of-bounds reads. The build uses CMake with
-  FindCUDAToolkit."
-  RIGHT: "- kernels: src/kernels/, shared mem for reductions
-  - host: cudaMalloc → cudaMemcpy pattern
-  - ⚡ no bounds guard when input_sz % block_sz != 0 → OOB reads
-  - build: CMake + FindCUDAToolkit"
+Processing scout reports:
+  WRONG: "The kernel-structure scout found that CUDA kernels live in src/kernels/
+  and use shared memory for the parallel reduction step. The build-system scout
+  found CMake with FindCUDAToolkit. The host-code scout reports that device memory
+  is allocated with cudaMalloc and copied back with cudaMemcpy. This answers my
+  questions about project structure. Nothing unexpected so far."
+  RIGHT: "kernel-structure scout: src/kernels/, shared mem for reductions
+  build-system scout: CMake + FindCUDAToolkit
+  host-code scout: cudaMalloc → cudaMemcpy pattern
+  All three answered ✓; no unexpected findings"
 
 Resolving conflicting information:
   WRONG: "There's a conflict between what the user said and what the code
@@ -83,17 +82,20 @@ Resolving conflicting information:
   correct. Since the user is describing the desired behavior and the code
   shows the current behavior, this is likely a change they want to make. I
   should note this as an existing gap and ask the user to confirm."
-  RIGHT: "⚡ user says hourly ↔ scheduler.py cron = daily@midnight
-  user = desired vs code = current ∴ likely a requested change; confirm w/ user"
+  RIGHT: "⚡ conversation: pipeline runs hourly ↔ scout: scheduler.py cron = daily@midnight
+  conversation = desired vs code = current ∴ likely a requested change → ASK user to confirm"
 
-Deciding next action:
+Classifying unknowns:
   WRONG: "Looking at what I've gathered so far, I think I have a good
   understanding of the database schema and the CLI argument parsing. But I
-  still don't know how the plugin system loads extensions at runtime, and the
-  user mentioned a config file format that I haven't been able to locate in
-  the codebase. I should dispatch scouts for both of these areas."
+  still don't know how the plugin system loads extensions at runtime — if we
+  get that wrong it could affect story boundaries. The user also mentioned a
+  config file format I haven't found, but that's just an implementation detail.
+  I should dispatch a scout for the plugin system and ask the user about the
+  config format."
   RIGHT: "✓ db schema, CLI arg parsing
-  ✗ plugin loading mechanism, cfg file format (user-mentioned, not found) → scout both"
+  ✗ plugin loading — wrong assumption changes story boundaries → SCOUT
+  ✗ cfg file format — impl detail, no scope impact → SAFE"
 
 ## Workflow
 
