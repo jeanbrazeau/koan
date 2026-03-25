@@ -103,7 +103,7 @@ function IntakeStatus({ progress }) {
     <>
       {subPhase && (
         <SidebarSection label="Sub-phase">
-          <div class="sidebar-value" style={{ color: 'var(--purple)' }}>{subPhase}</div>
+          <div class="sidebar-value" style={{ color: 'var(--plum)' }}>{subPhase}</div>
         </SidebarSection>
       )}
 

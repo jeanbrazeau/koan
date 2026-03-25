@@ -18,7 +18,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 var(--gap-xl);
+  padding: 0 var(--space-6);
   background: var(--bg);
   border-bottom: 1px solid var(--border);
 }
@@ -26,15 +26,15 @@
 .header-left {
   display: flex;
   align-items: center;
-  gap: var(--gap-lg);
+  gap: var(--space-4);
 }
 
 .logo {
-  font-family: var(--font-mono);
-  font-size: 18px;
-  font-weight: 600;
+  font-family: var(--font-sans);
+  font-size: 20px;
+  font-weight: 800;
   color: var(--text-strong);
-  letter-spacing: 0.05em;
+  letter-spacing: -0.03em;
 }
 
 /* Main panel — fills all remaining vertical space */
@@ -50,7 +50,7 @@
   flex: 1 1 0;
   min-height: 0;
   overflow-y: auto;
-  padding: var(--gap-xl);
+  padding: var(--space-6);
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -66,7 +66,7 @@
   flex: 1 1 0;
   min-height: 0;
   overflow-y: overlay;
-  padding: var(--gap-md) var(--gap-xl);
+  padding: var(--space-4) var(--space-6);
   /* Subtle fade at top when scrolled */
   mask-image: linear-gradient(to bottom, transparent, black 8px, black);
   -webkit-mask-image: linear-gradient(to bottom, transparent, black 8px, black);
@@ -82,22 +82,22 @@
 /* ---- Activity cards (thinking, future: tool results) ---- */
 
 .activity-card {
-  background: var(--bg-surface);
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
-  margin: var(--gap-xs) 0;
+  border-radius: var(--radius-lg);
+  margin: var(--space-1) 0;
   overflow: hidden;
 }
 
 .activity-card-active {
-  border-color: var(--blue-border);
+  border-color: var(--terracotta-border);
 }
 
 .activity-card-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: var(--gap-xs) var(--gap-md);
+  padding: var(--space-2) var(--space-4);
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
 }
@@ -107,11 +107,11 @@
 }
 
 .activity-card-thinking .activity-card-tool {
-  color: var(--purple);
+  color: var(--plum);
 }
 
 .activity-card-meta {
-  color: var(--text-dim);
+  color: var(--text-muted);
   font-size: var(--font-size-xs);
 }
 
@@ -120,10 +120,10 @@
 }
 
 .activity-card-body {
-  padding: 0 var(--gap-md) var(--gap-sm);
+  padding: 0 var(--space-4) var(--space-2);
   font-family: var(--font-mono);
   font-size: 13px;
-  color: var(--text-dim);
+  color: var(--text-muted);
   white-space: pre-wrap;
   word-break: break-word;
   line-height: 1.5;
@@ -137,10 +137,10 @@
 }
 
 .activity-card-more {
-  padding: 2px var(--gap-md) var(--gap-sm);
+  padding: 2px var(--space-4) var(--space-2);
   font-family: var(--font-mono);
   font-size: var(--font-size-xs);
-  color: var(--blue);
+  color: var(--terracotta);
   cursor: pointer;
   user-select: none;
 }
@@ -148,21 +148,21 @@
 /* ---- Scout dispatch card ---- */
 
 .activity-card-scouts .activity-card-tool {
-  color: var(--blue);
+  color: var(--terracotta);
 }
 
 .scout-list {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  padding: 0 var(--gap-md) var(--gap-sm);
+  padding: 0 var(--space-4) var(--space-2);
 }
 
 .scout-entry {
   display: flex;
   align-items: baseline;
   gap: 10px;
-  padding: 5px var(--gap-sm);
+  padding: 5px var(--space-2);
   font-family: var(--font-mono);
   font-size: var(--font-size-xs);
   border-left: 2px solid var(--border);
@@ -170,10 +170,10 @@
 }
 
 /* Status-based accent bar colors — synced with agent status convention */
-.scout-queued    { border-left-color: var(--text-dim); }
-.scout-running   { border-left-color: var(--blue);     background: var(--blue-bg); }
-.scout-completed { border-left-color: var(--green);    background: var(--green-bg); }
-.scout-failed    { border-left-color: var(--red);      background: var(--red-bg); }
+.scout-queued    { border-left-color: var(--text-muted); }
+.scout-running   { border-left-color: var(--terracotta); background: var(--terracotta-bg); }
+.scout-completed { border-left-color: var(--green);      background: var(--green-bg); }
+.scout-failed    { border-left-color: var(--red);        background: var(--red-bg); }
 
 .scout-name {
   color: var(--text-muted);
@@ -192,10 +192,10 @@
 
 .activity-line {
   display: flex;
-  gap: var(--gap-sm);
+  gap: var(--space-2);
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
-  color: var(--text-dim);
+  color: var(--text-muted);
   padding: 2px 0;
   line-height: 1.4;
 }
@@ -211,7 +211,7 @@
 }
 
 .activity-high .activity-tool {
-  color: var(--blue);
+  color: var(--terracotta);
 }
 
 .activity-summary {
@@ -225,17 +225,14 @@
   padding-left: 12px;
 }
 
-/* Monitor — sticky bottom, sizes to content, centered like activity feed */
+/* Monitor — sticky bottom, sizes to content, centered like activity feed.
+ * No border-top or mask fade — it connects seamlessly with the sidebars. */
 .monitor {
   flex: 0 0 auto;
   max-height: 40vh;
   overflow-y: overlay;
-  border-top: 1px solid var(--border);
-  background: var(--bg-elevated);
-  padding: var(--gap-md) var(--gap-xl);
-  /* Fade at top edge when scrollable */
-  mask-image: linear-gradient(to bottom, transparent, black 12px, black);
-  -webkit-mask-image: linear-gradient(to bottom, transparent, black 12px, black);
+  background: var(--bg-surface);
+  padding: var(--space-4) var(--space-6);
 }
 
 .monitor-inner {
@@ -246,21 +243,21 @@
 .agent-table-header {
   display: flex;
   align-items: center;
-  gap: var(--gap-md);
-  margin-bottom: var(--gap-sm);
+  gap: var(--space-4);
+  margin-bottom: var(--space-2);
 }
 
 .monitor-label {
   font-family: var(--font-mono);
   font-size: var(--font-size-xs);
-  color: var(--text-dim);
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.08em;
 }
 
 .agent-badges {
   display: flex;
-  gap: var(--gap-xs);
+  gap: var(--space-1);
 }
 
 .token-totals {
@@ -299,32 +296,32 @@
 .status-sidebar {
   width: clamp(240px, 20vw, 300px);
   flex-shrink: 0;
-  background: var(--bg-elevated);
+  background: var(--bg-surface);
   border-right: 1px solid var(--border);
   overflow-y: auto;
-  padding: var(--gap-md) var(--gap-lg);
+  padding: var(--space-4);
 }
 
 .sidebar-heading {
   font-family: var(--font-mono);
   font-size: 12px;
-  color: var(--text-dim);
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.08em;
-  margin-bottom: var(--gap-md);
+  margin-bottom: var(--space-4);
 }
 
 .sidebar-section {
-  margin-bottom: var(--gap-md);
+  margin-bottom: var(--space-4);
 }
 
 .sidebar-label {
   font-family: var(--font-mono);
   font-size: 12px;
-  color: var(--text-ghost);
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  margin-bottom: var(--gap-xs);
+  margin-bottom: var(--space-1);
 }
 
 /* Value line beneath a section */
@@ -338,24 +335,24 @@
 .sidebar-divider {
   height: 1px;
   background: var(--border);
-  margin: var(--gap-md) 0;
+  margin: var(--space-4) 0;
 }
 
 .sidebar-summary {
   font-family: var(--font-mono);
   font-size: 13px;
-  color: var(--text-dim);
+  color: var(--text-muted);
   line-height: 1.4;
 }
 
 /* Agent identity section */
 .sidebar-agent {
-  margin-bottom: var(--gap-md);
+  margin-bottom: var(--space-4);
   font-family: var(--font-mono);
 }
 
 .sidebar-agent-role {
-  color: var(--blue);
+  color: var(--terracotta);
   font-weight: 600;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -376,7 +373,7 @@
 .sidebar-agent-stats {
   display: flex;
   justify-content: space-between;
-  color: var(--text-dim);
+  color: var(--text-muted);
   font-size: 13px;
   margin-top: 2px;
 }
@@ -401,21 +398,21 @@
 .artifacts-sidebar {
   width: clamp(240px, 20vw, 300px);
   flex-shrink: 0;
-  background: var(--bg-elevated);
+  background: var(--bg-surface);
   border-left: 1px solid var(--border);
   overflow-y: auto;
-  padding: var(--gap-md) var(--gap-lg);
+  padding: var(--space-4);
   display: flex;
   flex-direction: column;
 }
-
 
 .artifacts-empty {
   color: var(--text-ghost);
   font-family: var(--font-mono);
   font-size: 12px;
-  padding: var(--gap-md) 0;
+  padding: var(--space-4) 0;
 }
+
 /* ---- Artifact tree ---- */
 
 .tree-folder {
@@ -426,7 +423,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  color: var(--text-dim);
+  color: var(--text-muted);
   padding: 3px 4px;
   cursor: pointer;
   font-family: var(--font-mono);
@@ -436,8 +433,8 @@
 }
 
 .tree-folder-label:hover {
-  color: var(--text-muted);
-  background: var(--bg-surface);
+  color: var(--text-strong);
+  background: var(--bg-inset);
 }
 
 .tree-children {
@@ -454,11 +451,11 @@
 }
 
 .tree-hover {
-  background: var(--bg-surface);
+  background: var(--bg-inset);
 }
 
 .tree-file-name {
-  color: var(--blue);
+  color: var(--terracotta);
   font-family: var(--font-mono);
   font-size: 12px;
 }
@@ -485,7 +482,7 @@
 .artifact-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.7);
+  background: rgba(42, 31, 20, 0.5);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -495,7 +492,7 @@
 .artifact-overlay-panel {
   background: var(--bg-elevated);
   border: 1px solid var(--border);
-  border-radius: var(--radius-md);
+  border-radius: var(--radius-lg);
   width: 860px;
   max-width: 92vw;
   max-height: 88vh;

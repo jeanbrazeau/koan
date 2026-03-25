@@ -1,62 +1,71 @@
 :root {
   /* Background layers */
-  --bg:          #0d1117;
-  --bg-surface:  #161b22;
-  --bg-elevated: #0c0f14;
+  --bg:          #FAF5EE;   /* cream base — "the desk" */
+  --bg-surface:  #F0E8DA;   /* panels, sidebars — "paper on desk" */
+  --bg-elevated: #FFFFFF;   /* cards, overlays — "paper on paper" */
+  --bg-inset:    #E8DFD0;   /* pressed/inset areas */
 
   /* Borders */
-  --border:       #21262d;
-  --border-light: #161b22;
+  --border:        #E2D6C6;
+  --border-strong: #D4C6B4;
 
   /* Text hierarchy */
-  --text:        #d6dde5;
-  --text-strong: #f0f3f6;
-  --text-muted:  #9da7b3;
-  --text-dim:    #727d8a;
-  --text-ghost:  #444d56;
+  --text:        #5E4E3C;   /* Walnut — default body */
+  --text-strong: #2A1F14;   /* Espresso — headings */
+  --text-muted:  #957E68;   /* Driftwood — metadata */
+  --text-ghost:  #C0AD98;   /* Sand — disabled/placeholder */
 
-  /* Status colors */
-  --green:        #7ee787;
-  --green-bg:     rgba(35, 134, 54, 0.06);
-  --green-border: #238636;
-  --blue:         #58a6ff;
-  --blue-bg:      rgba(31, 111, 235, 0.06);
-  --blue-border:  #1f6feb;
-  --purple:       #d2a8ff;
-  --orange:       #ffa657;
-  --red:          #f85149;
-  --red-bg:       rgba(248, 81, 73, 0.06);
-  --red-border:   #da3633;
-  --yellow:       #e3b341;
-  --pink:         #f778ba;
+  /* Status — the ONLY saturated colors */
+  --green:             #4E7A42;
+  --green-bg:          #EDF4EB;
+  --green-border:      #4E7A42;
+  --terracotta:        #C2694B;
+  --terracotta-bg:     #FDF0E6;
+  --terracotta-border: #C2694B;
+  --red:               #A83E36;
+  --red-bg:            #F8EAEA;
+  --red-border:        #A83E36;
+  --ochre:             #B8953A;
+  --ochre-bg:          #F8F0E0;
+  --ochre-border:      #B8953A;
+  --plum:              #7C4A5A;
+  --plum-bg:           #F4ECF0;
 
   /* Typography */
-  --font-mono: 'SF Mono', 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'SF Mono', 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace;
 
   /* Font sizes */
-  --font-size-xs: 12px;
-  --font-size-sm: 14px;
+  --font-size-xs: 11px;
+  --font-size-sm: 13px;
   --font-size-md: 15px;
-  --font-size-lg: 16px;
+  --font-size-lg: 17px;
+  --font-size-xl: 22px;
+  --font-size-display: 28px;
 
-  /* Spacing */
-  --gap-xs: 4px;
-  --gap-sm: 8px;
-  --gap-md: 12px;
-  --gap-lg: 16px;
-  --gap-xl: 20px;
+  /* Spacing (base unit 4px) */
+  --space-1:  4px;
+  --space-2:  8px;
+  --space-4:  16px;
+  --space-6:  24px;
+  --space-8:  32px;
+  --space-12: 48px;
+  --space-16: 64px;
 
-  /* Header */
-  --header-height: 52px;
+  /* Shape */
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
 
-  /* Monitor */
+  /* Motion */
+  --duration-fast:   150ms;
+  --duration-normal: 250ms;
+  --duration-slow:   400ms;
+  --ease-default:    ease-out;
+
+  /* Layout */
+  --header-height:      56px;
   --monitor-min-height: 120px;
-
-  /* Radius */
-  --radius-sm: 4px;
-  --radius-md: 6px;
-  --radius-lg: 8px;
 }
 
 *, *::before, *::after {
@@ -71,22 +80,17 @@ html, body {
   color: var(--text);
   font-family: var(--font-sans);
   font-size: var(--font-size-md);
-  line-height: 1.5;
+  line-height: 1.6;
 }
 
-/* Global scrollbar styling — applied via * so every scrollable region (activity
- * feed, sidebar, monitor) inherits the same dark appearance without per-element
- * rules. Uses both the standard Firefox property and the webkit pseudo-elements
- * for cross-browser coverage. Thumb colour matches --border; hover lightens to
- * --text-ghost to indicate interactivity without drawing attention. */
 * {
   scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--border-strong) transparent;
 }
 
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
 }
 
 ::-webkit-scrollbar-track {
@@ -94,10 +98,10 @@ html, body {
 }
 
 ::-webkit-scrollbar-thumb {
-  background: var(--border);
+  background: var(--border-strong);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--text-ghost);
+  background: var(--text-muted);
 }
