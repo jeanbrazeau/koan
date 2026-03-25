@@ -65,14 +65,16 @@ clear and complete.
 Examples of target density (WRONG → RIGHT):
 
 Synthesizing scout findings:
-  WRONG: "Now I have the scout results. The React app uses Redux for state
-  management with 12 slice files. The API calls go through a custom fetch
-  wrapper in lib/api.ts. I notice there are no tests for any of the slices,
-  which is concerning. The styling uses Tailwind with a custom theme defined
-  in tailwind.config.js."
-  RIGHT: "- state: Redux, 12 slices; tests ✗ — gap
-  - API: custom fetch wrapper lib/api.ts
-  - styling: Tailwind + custom theme cfg"
+  WRONG: "The scouts found that the CUDA kernels live in src/kernels/ and use
+  shared memory for the parallel reduction step. The host code allocates device
+  memory with cudaMalloc and copies results back with cudaMemcpy. I notice that
+  none of the kernels handle the case where input size isn't a multiple of the
+  block size, which could cause out-of-bounds reads. The build uses CMake with
+  FindCUDAToolkit."
+  RIGHT: "- kernels: src/kernels/, shared mem for reductions
+  - host: cudaMalloc → cudaMemcpy pattern
+  - ⚡ no bounds guard when input_sz % block_sz != 0 → OOB reads
+  - build: CMake + FindCUDAToolkit"
 
 Resolving conflicting information:
   WRONG: "There's a conflict between what the user said and what the code
