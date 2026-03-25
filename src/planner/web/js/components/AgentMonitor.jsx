@@ -42,6 +42,7 @@ export function AgentMonitor() {
               <th class="col-model">model</th>
               <th class="col-tokens">↑ sent</th>
               <th class="col-tokens">↓ recv</th>
+              <th class="col-time">time</th>
               <th class="col-doing">doing</th>
             </tr>
           </thead>

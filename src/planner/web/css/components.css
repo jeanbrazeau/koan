@@ -83,6 +83,7 @@
 .col-agent  { width: 170px; }
 .col-model  { width: 170px; }
 .col-tokens { width: 70px; text-align: right; }
+.col-time   { width: 70px; text-align: right; }
 .col-doing  { /* takes remaining */ }
 
 .agent-table td,
@@ -108,6 +109,8 @@
 
 .agent-model-cell  { font-family: var(--font-mono); color: var(--text-muted); }
 .agent-tokens-cell { font-family: var(--font-mono); color: var(--text-muted); }
+.agent-time-cell   { font-family: var(--font-mono); color: var(--text-muted); }
+.agent-timer       { font-size: var(--font-size-xs); }
 
 .agent-doing-dim   { font-family: var(--font-mono); font-size: var(--font-size-xs); color: var(--text-dim); }
 .agent-doing-failed { color: var(--red); }

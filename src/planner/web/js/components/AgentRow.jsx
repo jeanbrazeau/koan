@@ -1,6 +1,14 @@
 import { useState, useEffect } from 'preact/hooks'
 import { shortenModel, formatTokens } from '../lib/utils.js'
 
+function formatElapsedShort(ms) {
+  const sec = Math.floor(ms / 1000)
+  if (sec < 60) return `${sec}s`
+  const min = Math.floor(sec / 60)
+  const rem = sec % 60
+  return rem > 0 ? `${min}m ${rem}s` : `${min}m`
+}
+
 function ThinkingTimer({ since }) {
   const [elapsed, setElapsed] = useState(0)
 
@@ -17,6 +25,18 @@ function ThinkingTimer({ since }) {
     : `${Math.floor(elapsed / 60)}m ${elapsed % 60}s`
 
   return <span class="thinking-timer">{text}</span>
+}
+
+/** Live-ticking timer that counts up from a start timestamp. */
+function RunningTimer({ since }) {
+  const [now, setNow] = useState(Date.now())
+
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [since])
+
+  return <span class="agent-timer">{formatElapsedShort(now - since)}</span>
 }
 
 const STATUS = {
@@ -38,11 +58,27 @@ export function AgentRow({ agent, maxLines = 5 }) {
       <td class="col-model agent-model-cell">{shortenModel(agent.model)}</td>
       <td class="col-tokens agent-tokens-cell">{formatTokens(agent.tokensSent || 0)}</td>
       <td class="col-tokens agent-tokens-cell">{formatTokens(agent.tokensReceived || 0)}</td>
+      <td class="col-time agent-time-cell">
+        <AgentTimer agent={agent} />
+      </td>
       <td class="col-doing">
         <DoingCell status={agent.status} actions={actions} start={start} />
       </td>
     </tr>
   )
+}
+
+function AgentTimer({ agent }) {
+  if (agent.status === 'completed' || agent.status === 'failed') {
+    if (agent.startedAt && agent.completedAt) {
+      return <span class="agent-timer">{formatElapsedShort(agent.completedAt - agent.startedAt)}</span>
+    }
+    return <span class="agent-timer">—</span>
+  }
+  if (agent.status === 'running' && agent.startedAt) {
+    return <RunningTimer since={agent.startedAt} />
+  }
+  return <span class="agent-timer">—</span>
 }
 
 function DoingCell({ status, actions, start }) {
