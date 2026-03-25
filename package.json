@@ -25,7 +25,7 @@
   "scripts": {
     "check": "tsc --noEmit",
     "build:web": "esbuild src/planner/web/js/app.jsx --bundle --format=esm --jsx=automatic --jsx-import-source=preact --alias:react=preact/compat --alias:react-dom=preact/compat --outfile=src/planner/web/dist/app.js --minify",
-    "build": "npm run build:web && tsc --project tsconfig.build.json",
+    "build": "npm run build:web && tsc --project tsconfig.build.json && cp -r src/planner/web/css src/planner/web/html build/src/planner/web/",
     "pretest": "npm run build",
     "test": "node --test --test-concurrency=1 build/tests"
   },
