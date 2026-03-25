@@ -187,6 +187,7 @@ function renderLine(line, isInFlight, isFlashing, key, dimmed = false, streaming
 function WorkflowChat({ turns, token }) {
   const [input, setInput] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [selectedPhase, setSelectedPhase] = useState(null)
 
   const lastTurn = turns[turns.length - 1]
   const awaitingUser = lastTurn?.role === 'orchestrator'
@@ -194,6 +195,7 @@ function WorkflowChat({ turns, token }) {
   function selectPhase(phase) {
     // Pre-fill rather than auto-submit. Lets the user add context before
     // sending: "Proceed with core-flows, but focus on auth requirements"
+    setSelectedPhase(phase.phase)
     setInput(`Proceed with ${phase.label}`)
   }
 
@@ -207,6 +209,7 @@ function WorkflowChat({ turns, token }) {
       workflowChat: [...s.workflowChat, { role: 'user', text: userText, pending: true }]
     }))
     setInput('')
+    setSelectedPhase(null)
 
     try {
       await fetch('/api/workflow-decision', {
@@ -218,12 +221,10 @@ function WorkflowChat({ turns, token }) {
           feedback: userText,
         }),
       })
-      // Mark the user turn as delivered.
-      useStore.setState(s => ({
-        workflowChat: s.workflowChat.map(t =>
-          t.role === 'user' && t.pending ? { ...t, pending: false } : t
-        )
-      }))
+      // Clear the workflow chat — the decision has been submitted and the
+      // orchestrator will proceed. The next phase event (or a new
+      // workflow-decision event) will re-populate if needed.
+      useStore.setState({ workflowChat: [] })
     } catch (err) {
       // Mark turn as failed so user can retry. Without this, the pipeline
       // hangs at pollIpcUntilResponse() indefinitely.
@@ -249,7 +250,8 @@ function WorkflowChat({ turns, token }) {
       {turns.map((turn, i) => (
         turn.role === 'orchestrator'
           ? <OrchestratorTurn key={i} turn={turn} onSelect={selectPhase}
-                              isLatest={i === turns.length - 1} />
+                              isLatest={i === turns.length - 1}
+                              selectedPhase={selectedPhase} />
           : <UserTurn key={i} turn={turn} onRetry={(text) => { setInput(text) }} />
       ))}
 
@@ -276,7 +278,7 @@ function WorkflowChat({ turns, token }) {
   )
 }
 
-function OrchestratorTurn({ turn, onSelect, isLatest }) {
+function OrchestratorTurn({ turn, onSelect, isLatest, selectedPhase }) {
   const renderedHtml = marked.parse(turn.statusReport)
   return (
     <div class="workflow-turn workflow-turn-orchestrator">
@@ -288,14 +290,17 @@ function OrchestratorTurn({ turn, onSelect, isLatest }) {
       {/* Only show phase options on the latest orchestrator turn */}
       {isLatest && (
         <div class="workflow-options">
-          {turn.recommendedPhases.map((p, i) => (
-            <button key={i}
-                    class={`workflow-option${p.recommended ? ' recommended' : ''}`}
-                    onClick={() => onSelect(p)}>
-              <span class="workflow-option-label">{p.label || p.phase}</span>
-              <span class="workflow-option-context">{p.context}</span>
-            </button>
-          ))}
+          {turn.recommendedPhases.map((p, i) => {
+            const isSelected = selectedPhase === p.phase
+            return (
+              <button key={i}
+                      class={`workflow-option${p.recommended && !selectedPhase ? ' recommended' : ''}${isSelected ? ' selected' : ''}`}
+                      onClick={() => onSelect(p)}>
+                <span class="workflow-option-label">{p.label || p.phase}</span>
+                <span class="workflow-option-context">{p.context}</span>
+              </button>
+            )
+          })}
         </div>
       )}
     </div>

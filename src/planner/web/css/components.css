@@ -1001,6 +1001,15 @@
   background: color-mix(in srgb, var(--blue-bg) 80%, var(--bg-surface));
 }
 
+.workflow-option.selected {
+  border-color: var(--blue-border);
+  background: var(--blue-bg);
+}
+
+.workflow-option.selected .workflow-option-label {
+  color: var(--blue);
+}
+
 .workflow-option-label {
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
