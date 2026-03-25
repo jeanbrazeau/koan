@@ -64,34 +64,34 @@ clear and complete.
 
 Examples of target density (WRONG → RIGHT):
 
-Synthesizing findings:
-  WRONG: "Now I have the scout results. The auth module uses JWT tokens
-  validated by three middleware functions. The database layer uses PostgreSQL
-  with migrations managed by golang-migrate. I notice the auth tests don't
-  cover the refresh token flow, which could be important. I should also note
-  that the config is loaded via Viper from YAML files."
-  RIGHT: "- auth: JWT, 3 mw fns; tests ✗ refresh token flow — gap
-  - db: PostgreSQL + golang-migrate
-  - cfg: Viper → YAML"
+Synthesizing scout findings:
+  WRONG: "Now I have the scout results. The React app uses Redux for state
+  management with 12 slice files. The API calls go through a custom fetch
+  wrapper in lib/api.ts. I notice there are no tests for any of the slices,
+  which is concerning. The styling uses Tailwind with a custom theme defined
+  in tailwind.config.js."
+  RIGHT: "- state: Redux, 12 slices; tests ✗ — gap
+  - API: custom fetch wrapper lib/api.ts
+  - styling: Tailwind + custom theme cfg"
 
-Resolving a conflict:
-  WRONG: "There's a discrepancy between the spec and the implementation plan.
-  The spec says ETAGs should use gRPC metadata headers, but the plan explicitly
-  says to add it as a proto field. I need to figure out which takes precedence.
-  Since the plan was written after the spec and deliberately chose a different
-  approach, the plan should take precedence. I should document both approaches
-  and note where they differ."
-  RIGHT: "⚡ spec: ETAG via gRPC metadata ↔ plan: ETAG as proto field
-  plan is later + deliberate divergence ∴ plan takes precedence; document both"
+Resolving conflicting information:
+  WRONG: "There's a conflict between what the user said and what the code
+  shows. The user said the data pipeline runs hourly, but the cron expression
+  in scheduler.py is set to daily at midnight. I need to figure out which is
+  correct. Since the user is describing the desired behavior and the code
+  shows the current behavior, this is likely a change they want to make. I
+  should note this as an existing gap and ask the user to confirm."
+  RIGHT: "⚡ user says hourly ↔ scheduler.py cron = daily@midnight
+  user = desired vs code = current ∴ likely a requested change; confirm w/ user"
 
 Deciding next action:
-  WRONG: "Looking at what I've gathered so far, I think I have enough context
-  about the auth module and the database layer, but I still need to understand
-  how the CLI commands are structured. I should dispatch a scout to investigate
-  the cmd/ directory. I also want to verify whether the existing test helpers
-  can be reused for the new integration tests."
-  RIGHT: "✓ auth, db — sufficient
-  ✗ CLI cmd structure, test helper reusability → scout both"
+  WRONG: "Looking at what I've gathered so far, I think I have a good
+  understanding of the database schema and the CLI argument parsing. But I
+  still don't know how the plugin system loads extensions at runtime, and the
+  user mentioned a config file format that I haven't been able to locate in
+  the codebase. I should dispatch scouts for both of these areas."
+  RIGHT: "✓ db schema, CLI arg parsing
+  ✗ plugin loading mechanism, cfg file format (user-mentioned, not found) → scout both"
 
 ## Workflow
 
