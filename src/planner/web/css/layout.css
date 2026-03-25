@@ -149,21 +149,21 @@
 
 .scout-list {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--gap-xs);
+  flex-direction: column;
+  gap: 2px;
   padding: 0 var(--gap-md) var(--gap-sm);
 }
 
 .scout-entry {
   display: flex;
   align-items: baseline;
-  gap: var(--gap-sm);
-  padding: 3px var(--gap-sm);
+  gap: 10px;
+  padding: 5px var(--gap-sm);
   font-family: var(--font-mono);
   font-size: var(--font-size-xs);
-  background: var(--bg);
-  border-radius: var(--radius-sm);
-  border: 1px solid var(--border);
+  border-left: 2px solid var(--blue);
+  background: var(--blue-bg);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
 .scout-name {
