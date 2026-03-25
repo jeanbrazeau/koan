@@ -17,6 +17,7 @@ import { BriefWriterPhase } from "./brief-writer/phase.js";
 import { OrchestratorPhase } from "./orchestrator/phase.js";
 import { PlannerPhase } from "./planner/phase.js";
 import { ExecutorPhase } from "./executor/phase.js";
+import { WorkflowOrchestratorPhase } from "./workflow-orchestrator/phase.js";
 
 export async function dispatchPhase(
   pi: ExtensionAPI,
@@ -84,6 +85,19 @@ export async function dispatchPhase(
       const phase = new ExecutorPhase(
         pi,
         { epicDir: task.epicDir, storyId: task.storyId, retryContext: task.retryContext },
+        ctx, logger, eventLog,
+      );
+      await phase.begin();
+      break;
+    }
+
+    case "workflow-orchestrator": {
+      const phase = new WorkflowOrchestratorPhase(
+        pi,
+        {
+          completedPhase: task.completedPhase,
+          availablePhases: task.availablePhases,
+        },
         ctx, logger, eventLog,
       );
       await phase.begin();

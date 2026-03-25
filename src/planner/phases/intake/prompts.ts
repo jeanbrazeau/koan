@@ -72,7 +72,7 @@ One file: **landscape.md** in the epic directory.
 ${REVIEW_PROTOCOL}`;
 }
 
-export function intakeStepGuidance(step: number, conversationPath?: string, iteration = 1, epicDir?: string): StepGuidance {
+export function intakeStepGuidance(step: number, conversationPath?: string, iteration = 1, epicDir?: string, phaseInstructions?: string): StepGuidance {
   switch (step) {
     // -------------------------------------------------------------------------
     // Step 1: Extract — read the conversation, build a mental model.
@@ -112,6 +112,7 @@ export function intakeStepGuidance(step: number, conversationPath?: string, iter
           "- This step is read-only. Understand the conversation before acting on it.",
           "- Be faithful to what was said. Do not invent context or infer unstated decisions.",
           "- If the conversation references specific files or systems, note them — you will scout those next.",
+          ...(phaseInstructions ? ["", "## Additional Context from Workflow Orchestrator", "", phaseInstructions] : []),
         ],
       };
 

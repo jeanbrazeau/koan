@@ -11,7 +11,7 @@ Spoke documents:
 - [docs/artifact-review.md](docs/artifact-review.md) — artifact review IPC protocol, review loop, reusability
 - [docs/token-streaming.md](docs/token-streaming.md) — stdout JSONL parsing, pi `--mode json` integration, SSE delta path
 
-**Pipeline phases:** `intake` → `brief` → `decomposition` → `review` → `executing` → `completed`
+**Pipeline phases:** `intake` → `brief-generation` → `core-flows` → `tech-plan` → `ticket-breakdown` → `cross-artifact-validation` → `execution` → `implementation-validation` → `completed`
 
 ---
 

@@ -11,6 +11,12 @@
 //
 // isInteractive = !phase || pendingInput || showSettings || phase === 'completed'
 //
+// Note: workflowChat and frozenLogs are deliberately absent from isInteractive.
+// workflow-decision is the only interaction type that does NOT set pendingInput.
+// Setting it would toggle isInteractive=true, switching to PhaseContent and
+// hiding the ActivityFeed where WorkflowChat lives. The three-column workspace
+// stays active throughout the entire orchestrator session.
+//
 // AgentMonitor and Notifications are always mounted; they manage their own
 // visibility via internal selectors.
 
@@ -30,6 +36,7 @@ export function App({ token, topic }) {
 
   // Interactive mode: forms, settings overlay, loading screen, completion.
   // Live mode: active subagent activity feed with status sidebar.
+  // workflowChat does NOT affect isInteractive — see note above.
   const isInteractive = !phase || pending || showSettings || phase === 'completed'
 
   return (
@@ -44,7 +51,7 @@ export function App({ token, topic }) {
                 <PhaseContent token={token} topic={topic} />
               </div>
             ) : (
-              <ActivityFeed />
+              <ActivityFeed token={token} />
             )}
           </main>
         </div>

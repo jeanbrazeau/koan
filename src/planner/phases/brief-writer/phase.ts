@@ -43,7 +43,7 @@ export class BriefWriterPhase extends ReviewablePhase {
   }
 
   protected getStepGuidance(step: number): StepGuidance {
-    return briefWriterStepGuidance(step, this.ctx.epicDir!);
+    return briefWriterStepGuidance(step, this.ctx.epicDir!, this.ctx.phaseInstructions);
   }
 
 }

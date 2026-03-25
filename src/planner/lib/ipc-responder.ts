@@ -2,10 +2,11 @@
 // handles them, and writes responses back. Runs concurrently with subagent
 // process execution and terminates when the provided AbortSignal fires.
 //
-// Supports three request types:
-//   "ask"             → route to web server, write answer back
-//   "scout-request"   → spawn scouts via pool(), write findings paths back
-//   "artifact-review" → route to web server, write feedback back
+// Supports four request types:
+//   "ask"               → route to web server, write answer back
+//   "scout-request"     → spawn scouts via pool(), write findings paths back
+//   "artifact-review"   → route to web server, write feedback back
+//   "workflow-decision" → route to web server, write feedback back
 
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
@@ -20,6 +21,8 @@ import {
   type ScoutIpcFile,
   type ArtifactReviewIpcFile,
   type ArtifactReviewResponse,
+  type WorkflowDecisionIpcFile,
+  type WorkflowDecisionResponse,
 } from "./ipc.js";
 import type { ScoutTask } from "./task.js";
 import { pool } from "./pool.js";
@@ -154,6 +157,47 @@ async function handleArtifactReviewRequest(
   }
 }
 
+// Handles a pending workflow-decision request: routes to web server, writes feedback.
+async function handleWorkflowDecisionRequest(
+  subagentDir: string,
+  ipc: WorkflowDecisionIpcFile,
+  webServer: WebServerHandle,
+  signal: AbortSignal,
+): Promise<void> {
+  const { payload } = ipc;
+
+  let feedback: string;
+  try {
+    const result = await webServer.requestWorkflowDecision(payload, signal);
+    feedback = result.feedback;
+  } catch (err: unknown) {
+    if (err instanceof Error && (err.name === "AbortError" || signal.aborted)) {
+      const current = await readIpcFile(subagentDir);
+      if (current !== null && current.type === "workflow-decision" && current.response === null && current.id === ipc.id) {
+        const cancelledResponse: WorkflowDecisionResponse = {
+          id: ipc.id,
+          respondedAt: new Date().toISOString(),
+          feedback: "Decision cancelled.",
+        };
+        await writeIpcFile(subagentDir, { ...current, response: cancelledResponse });
+      }
+      return;
+    }
+    throw err;
+  }
+
+  const response: WorkflowDecisionResponse = {
+    id: ipc.id,
+    respondedAt: new Date().toISOString(),
+    feedback,
+  };
+  // Re-read and validate before writing — idempotence guard against stale requests.
+  const current = await readIpcFile(subagentDir);
+  if (current !== null && current.type === "workflow-decision" && current.response === null && current.id === ipc.id) {
+    await writeIpcFile(subagentDir, { ...current, response });
+  }
+}
+
 // Handles a pending scout-request: spawns scouts via pool(), writes findings.
 async function handleScoutRequest(
   subagentDir: string,
@@ -268,6 +312,8 @@ export async function runIpcResponder(
         await handleScoutRequest(subagentDir, ipc, scoutContext, webServer, signal);
       } else if (ipc.type === "artifact-review") {
         await handleArtifactReviewRequest(subagentDir, ipc, webServer, signal);
+      } else if (ipc.type === "workflow-decision") {
+        await handleWorkflowDecisionRequest(subagentDir, ipc, webServer, signal);
       }
     } catch {
       // Swallow all errors — transient filesystem issues must not abort the parent session.

@@ -3,7 +3,7 @@
 
 import type { LogLine } from "../lib/audit.js";
 import type { EpicPhase, StoryStatus } from "../types.js";
-import type { ArtifactReviewPayload } from "../lib/ipc.js";
+import type { ArtifactReviewPayload, WorkflowDecisionPayload, WorkflowPhaseOption } from "../lib/ipc.js";
 import type { ArtifactEntry } from "../epic/artifacts.js";
 
 export type { LogLine, EpicPhase, StoryStatus, ArtifactEntry };
@@ -96,17 +96,6 @@ export function buildMultiSelectionResult(
 // Result types
 // ---------------------------------------------------------------------------
 
-export interface ReviewStory {
-  storyId: string;
-  title: string;
-  content: string;
-}
-
-export interface ReviewResult {
-  approved: string[];
-  skipped: string[];
-}
-
 export type AnswerElement = AskSelection & { questionId: string };
 
 export interface AnswerResult {
@@ -131,6 +120,33 @@ export interface ArtifactReviewFeedback {
 
 // Re-export for use in ipc-responder.ts without double-importing ipc.ts
 export type { ArtifactReviewPayload };
+
+// ---------------------------------------------------------------------------
+// Workflow decision types
+// ---------------------------------------------------------------------------
+
+export interface FrozenLogsEvent {
+  lines: LogLine[];
+}
+
+/** SSE event payload pushed to clients when the orchestrator calls
+ *  koan_propose_workflow. Matches the subset of WorkflowDecisionPayload
+ *  the client needs for rendering. */
+export interface WorkflowDecisionEvent {
+  requestId: string;
+  statusReport: string;
+  recommendedPhases: WorkflowPhaseOption[];
+  completedPhase: string;
+}
+
+/** Response from the POST /api/workflow-decision endpoint.
+ *  Parallel to ArtifactReviewFeedback. */
+export interface WorkflowDecisionFeedback {
+  feedback: string;
+}
+
+// Re-export for use in ipc-responder.ts
+export type { WorkflowDecisionPayload, WorkflowPhaseOption };
 
 // ---------------------------------------------------------------------------
 // SSE event payload types (server → browser)
@@ -181,11 +197,6 @@ export interface NotificationEvent {
 export interface AskEvent {
   requestId: string;
   question: AskQuestion;
-}
-
-export interface ReviewEvent {
-  requestId: string;
-  stories: ReviewStory[];
 }
 
 export interface AskCancelledEvent {
@@ -274,7 +285,7 @@ export interface WebServerHandle {
   //
   // Concern 3 -- Blocking human input (returns a Promise that resolves when the
   //             user responds; must be called with an AbortSignal for cancellation)
-  //   requestReview, requestAnswer, requestModelConfig, requestArtifactReview
+  //   requestAnswer, requestModelConfig, requestArtifactReview, requestWorkflowDecision
   //
   // Note: this interface conflates three unrelated responsibilities. A future
   // split into three narrower interfaces (PushHandle, AgentHandle, InputHandle)
@@ -301,6 +312,10 @@ export interface WebServerHandle {
    * while the LLM is executing tools or waiting on IPC.
    */
   clearTokenStream(): void;
+  /** Snapshot current lastLogs into frozenLogs and push 'frozen-logs' SSE event.
+   *  Called by the driver before spawning the workflow orchestrator so that
+   *  trackSubagent()'s log replacement does not erase the phase's activity. */
+  freezeLogs(): void;
 
   // Concern 2 -- Agent lifecycle / observation
   registerAgent(info: {
@@ -320,10 +335,10 @@ export interface WebServerHandle {
   clearSubagent(): void;
 
   // Concern 3 -- Blocking human input
-  requestReview(stories: ReviewStory[], signal?: AbortSignal): Promise<ReviewResult>;
   requestAnswer(question: AskQuestion, signal: AbortSignal): Promise<AnswerResult>;
   requestModelConfig(): Promise<void>;
   requestArtifactReview(payload: ArtifactReviewPayload, signal: AbortSignal): Promise<ArtifactReviewFeedback>;
+  requestWorkflowDecision(payload: WorkflowDecisionPayload, signal: AbortSignal): Promise<WorkflowDecisionFeedback>;
 
   close(): void;
 }

@@ -1,7 +1,7 @@
 # Epic Brief
 
 The epic brief is a compact product-level artifact produced between intake and
-decomposition. It captures the **what and why** of an epic and serves as a
+core-flows. It captures the **what and why** of an epic and serves as a
 correctness anchor for all downstream phases.
 
 > Related: [artifact-review.md](./artifact-review.md) — the IPC mechanism used
@@ -18,8 +18,7 @@ correctness anchor for all downstream phases.
 | **Goals** | Numbered list of measurable objectives |
 | **Constraints** | Hard constraints from landscape.md (technical, timeline, compatibility) |
 
-**Size constraint:** Under 50 lines. The brief is consulted by the decomposer,
-planner, and orchestrator on every pipeline run — compact size ensures it
+**Size constraint:** Under 50 lines. The brief is consulted by the core-flows phase, planner, and orchestrator on every pipeline run — compact size ensures it
 remains a quick reference rather than a specification to read in full.
 
 The 50-line limit is a forcing function: a brief that requires 200 lines is
@@ -42,24 +41,23 @@ is deliberately non-technical so it remains stable as the pipeline progresses.
 ## Pipeline Position
 
 ```
-intake → brief → decomposition → review → executing → completed
+intake → brief-generation → core-flows → tech-plan → ticket-breakdown → cross-artifact-validation → execution → implementation-validation
 ```
 
-The brief sits between intake and decomposition:
+The brief sits between intake and core-flows:
 
 - **After intake:** `landscape.md` is complete — the LLM has investigated the
   codebase, asked all clarifying questions, and produced a synthesis of
   findings and decisions. The brief distills this into a problem statement.
-- **Before decomposition:** The decomposer reads `brief.md` to scope stories
-  against stated goals and constraints. Without the brief, the decomposer
+- **Before core-flows:** Downstream phases read `brief.md` to scope work
+  against stated goals and constraints. Without the brief, downstream phases
   would invent scope not present in the user's intent.
 
 ---
 
 ## Brief-Writer Subagent
 
-Role: `"brief-writer"`. Model tier: `"strong"` (same tier as intake and
-decomposer — synthesis from intake context requires genuine reasoning, not
+Role: `"brief-writer"`. Model tier: `"strong"` (same tier as intake — synthesis from intake context requires genuine reasoning, not
 mechanical transformation).
 
 ### Step Progression
@@ -116,7 +114,7 @@ All planning phases are prompted to read `brief.md` before acting:
 
 | Phase | Why |
 |-------|-----|
-| **Decomposer** | Scopes stories against brief goals; must not invent scope absent from brief |
+| **Core-flows and later phases** | Scope work against brief goals; must not invent scope absent from brief |
 | **Planner** | Plans must serve product-level goals and respect constraints |
 | **Orchestrator** | Validates story completion against product goals |
 
@@ -140,21 +138,22 @@ in this pipeline:
 ```
 landscape.md        (intake synthesis)
   → brief.md          (problem + goals + constraints)
-    → story.md × N  (decomposition)
+    → core-flows.md  (user journeys)
+      → story.md × N  (ticket-breakdown)
       → plan/context.md × N  (story plans)
 ```
 
 Each artifact is progressively more specific. The brief is the
-most-referenced — every phase from decomposition through execution can check
+most-referenced — every phase from core-flows through implementation-validation can check
 it to stay aligned with the original problem.
 
 ### Why a separate brief phase
 
-A merged "brief + decompose" agent would violate the single-cognitive-goal
-principle: writing a product brief and decomposing it into story sketches are
+A merged "brief + core-flows" agent would violate the single-cognitive-goal
+principle: writing a product brief and defining user journeys are
 distinct reasoning tasks. Separating them:
 
-- Forces the brief to be reviewed and accepted before decomposition begins
-- Prevents the decomposer from anchoring on its own interpretation of scope
+- Forces the brief to be reviewed and accepted before core-flows begins
+- Prevents downstream phases from anchoring on their own interpretation of scope
 - Creates a reviewable artifact that can be corrected before downstream work starts
-- Enables the decomposer's scope to be validated against an explicit human-approved brief
+- Enables downstream phase scope to be validated against an explicit human-approved brief

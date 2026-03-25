@@ -11,9 +11,9 @@
 //      Unknown roles are blocked under default-deny policy.
 //
 //   3. Planning roles (intake, scout, decomposer, brief-writer, orchestrator,
-//      planner) have write/edit access path-scoped to the epic directory. Only
-//      the executor role has unrestricted write access — it must modify the
-//      codebase.
+//      planner, workflow-orchestrator) have write/edit access path-scoped to
+//      the epic directory. Only the executor role has unrestricted write access
+//      — it must modify the codebase.
 
 import * as path from "node:path";
 
@@ -107,11 +107,30 @@ export const ROLE_PERMISSIONS: ReadonlyMap<string, ReadonlySet<string>> = new Ma
       "bash", // also in READ_TOOLS; explicit here for documentation
     ]),
   ],
+  [
+    "workflow-orchestrator",
+    new Set([
+      "koan_complete_step",
+      "koan_propose_workflow",
+      "koan_set_next_phase",
+      // No koan_ask_question — koan_propose_workflow handles user interaction
+      // No koan_request_scouts — orchestrator reads existing artifacts only
+      // No write/edit — orchestrator routes, it does not produce artifacts
+    ]),
+  ],
 ]);
 
 // Planning roles write only inside the epic directory.
 // Executor has unrestricted write access (must implement stories in the codebase).
-const PLANNING_ROLES = new Set(["intake", "scout", "decomposer", "brief-writer", "orchestrator", "planner"]);
+const PLANNING_ROLES = new Set([
+  "intake",
+  "scout",
+  "decomposer",
+  "brief-writer",
+  "orchestrator",
+  "planner",
+  "workflow-orchestrator",
+]);
 
 // STEP_1_BLOCKED_TOOLS: tools disallowed during the intake Extract step (step 1)
 // and brief-writer Read step (step 1). Step 1 is read-only comprehension.

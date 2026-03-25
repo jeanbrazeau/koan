@@ -18,13 +18,20 @@
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
 
-import type { SubagentRole, StepSequence } from "../types.js";
+import type { SubagentRole, StepSequence, EpicPhase } from "../types.js";
 
 // -- Task types --
 
 interface SubagentTaskBase {
   role: SubagentRole;
   epicDir: string;
+  /** Optional instructions from the workflow orchestrator's decision.
+   *  Injected into step 1 guidance of the next phase when the user provides
+   *  context during the workflow decision interaction. Absent when the
+   *  orchestrator is skipped or when the user gives no additional direction.
+   *  JSON.stringify omits undefined values, so existing construction sites
+   *  ({ role, epicDir }) remain valid subtypes. */
+  phaseInstructions?: string;
 }
 
 /** Task manifest for intake subagents. */
@@ -84,7 +91,16 @@ export interface ExecutorTask extends SubagentTaskBase {
   retryContext?: string;
 }
 
-// The union is exhaustive over all seven roles. TypeScript narrows task.role
+/** Task manifest for workflow-orchestrator subagents. */
+export interface WorkflowOrchestratorTask extends SubagentTaskBase {
+  role: "workflow-orchestrator";
+  /** The phase that just completed — used by the orchestrator as context. */
+  completedPhase: EpicPhase;
+  /** Valid successor phases from the DAG — orchestrator proposes from this list. */
+  availablePhases: EpicPhase[];
+}
+
+// The union is exhaustive over all roles. TypeScript narrows task.role
 // in switch/case so role-specific fields are accessible without casting.
 export type SubagentTask =
   | IntakeTask
@@ -93,7 +109,8 @@ export type SubagentTask =
   | BriefWriterTask
   | OrchestratorTask
   | PlannerTask
-  | ExecutorTask;
+  | ExecutorTask
+  | WorkflowOrchestratorTask;
 
 // -- File paths --
 

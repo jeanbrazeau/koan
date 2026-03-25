@@ -25,6 +25,7 @@ import {
   type EpicInfo,
   type EpicState,
   type StoryState,
+  type WorkflowDecisionState,
 } from "./types.js";
 
 export const KOAN_HOME = path.join(os.homedir(), ".koan");
@@ -144,6 +145,26 @@ export async function saveStoryState(epicDir: string, storyId: string, state: St
 export async function loadAllStoryStates(epicDir: string): Promise<StoryState[]> {
   const epicState = await loadEpicState(epicDir);
   return Promise.all(epicState.stories.map((id) => loadStoryState(epicDir, id)));
+}
+
+// ---------------------------------------------------------------------------
+// Workflow decision I/O
+// ---------------------------------------------------------------------------
+
+/** Read {subagentDir}/workflow-decision.json written by koan_set_next_phase.
+ *  Returns null if absent (orchestrator crashed before committing) or
+ *  malformed (should never happen — koan_set_next_phase writes valid JSON). */
+export async function readWorkflowDecision(
+  subagentDir: string,
+): Promise<WorkflowDecisionState | null> {
+  try {
+    const raw = await fs.readFile(
+      path.join(subagentDir, "workflow-decision.json"), "utf8",
+    );
+    return JSON.parse(raw) as WorkflowDecisionState;
+  } catch {
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------

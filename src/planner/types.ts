@@ -18,8 +18,16 @@
 // in begin() to configure its total steps and guidance functions.
 // See docs/subagents.md for orchestrator step sequence details.
 
-// Subagent roles — the seven LLM roles in the pipeline.
-export type SubagentRole = "intake" | "scout" | "decomposer" | "orchestrator" | "planner" | "executor" | "brief-writer";
+// Subagent roles — all LLM roles in the pipeline.
+export type SubagentRole =
+  | "intake"
+  | "scout"
+  | "decomposer"
+  | "orchestrator"
+  | "planner"
+  | "executor"
+  | "brief-writer"
+  | "workflow-orchestrator";
 
 // Model tiers — maps to three capability levels.
 export type ModelTier = "strong" | "standard" | "cheap";
@@ -33,6 +41,7 @@ export const ROLE_MODEL_TIER: Record<SubagentRole, ModelTier> = {
   orchestrator: "strong",
   planner: "strong",
   executor: "standard",
+  "workflow-orchestrator": "strong",
 };
 
 // Orchestrator step sequences — configures step count and guidance at spawn time.
@@ -51,8 +60,18 @@ export type StoryStatus =
   | "skipped";   // Orchestrator or driver: story bypassed (budget exhaustion or explicit skip)
 
 // Epic lifecycle phases (driver-managed, not LLM-visible directly).
+// Eight active phases plus the "completed" terminal marker.
 // Note: "scouting" is intentionally absent — scouts run within other phases via IPC.
-export type EpicPhase = "intake" | "brief" | "decomposition" | "review" | "executing" | "completed";
+export type EpicPhase =
+  | "intake"
+  | "brief-generation"
+  | "core-flows"
+  | "tech-plan"
+  | "ticket-breakdown"
+  | "cross-artifact-validation"
+  | "execution"
+  | "implementation-validation"
+  | "completed";
 
 // All model tiers as a runtime-iterable array.
 export const ALL_MODEL_TIERS: readonly ModelTier[] = ["strong", "standard", "cheap"];

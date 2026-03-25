@@ -97,13 +97,10 @@ function PhaseStatus({ phase, intakeProgress, stories }) {
       : <GenericStatus phase={phase} />
   }
   switch (phase) {
-    case 'brief':
+    case 'brief-generation':
       return <BriefStatus />
-    case 'decomposition':
-      return <DecomposeStatus stories={stories} />
-    case 'executing':
-      return <ExecuteStatus stories={stories} />
     default:
+      // Stub phases and any future phases without a dedicated widget
       return <GenericStatus phase={phase} />
   }
 }
@@ -165,7 +162,7 @@ function IntakeStatus({ progress }) {
   )
 }
 
-// -- Brief phase status --
+// -- Brief generation phase status --
 
 function BriefStatus() {
   return (
@@ -181,56 +178,10 @@ function BriefStatus() {
   )
 }
 
-// -- Decomposition phase status --
-
-function DecomposeStatus({ stories }) {
-  const count = stories ? stories.length : 0
-  return (
-    <>
-      <SidebarSection label="Status">
-        <div class="sidebar-value">
-          {count > 0 ? `${count} ${count === 1 ? 'story' : 'stories'} identified` : 'Decomposing…'}
-        </div>
-      </SidebarSection>
-      <div class="sidebar-divider" />
-      <SidebarSection label="Summary">
-        <div class="sidebar-summary">Breaking the epic into stories.</div>
-      </SidebarSection>
-    </>
-  )
-}
-
-// -- Execute phase status --
-
-function ExecuteStatus({ stories }) {
-  const total = stories ? stories.length : 0
-  const complete = stories ? stories.filter(s => s.status === 'done').length : 0
-  const active = stories ? stories.filter(s =>
-    s.status === 'selected' || s.status === 'planning' ||
-    s.status === 'executing' || s.status === 'verifying'
-  ).length : 0
-
-  return (
-    <>
-      <SidebarSection label="Progress">
-        <div class="sidebar-value">
-          {total > 0
-            ? `${complete}/${total} complete${active > 0 ? ` · ${active} active` : ''}`
-            : 'Executing stories…'}
-        </div>
-      </SidebarSection>
-      <div class="sidebar-divider" />
-      <SidebarSection label="Summary">
-        <div class="sidebar-summary">Implementing stories in parallel.</div>
-      </SidebarSection>
-    </>
-  )
-}
-
-// -- Generic status for phases without a dedicated widget --
+// -- Generic status for stub phases and any phase without a dedicated widget --
 
 function GenericStatus({ phase }) {
-  const label = phase === 'review' ? 'Review in progress' : phase ?? 'In progress'
+  const label = phase ?? 'In progress'
 
   return (
     <>

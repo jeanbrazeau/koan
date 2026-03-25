@@ -2,10 +2,11 @@
 // A single ipc.json file per subagent directory holds the current request and
 // its response. Atomic writes (tmp-rename) prevent partial reads.
 //
-// IPC protocol supports three message types (see docs/subagents.md):
-//   "ask"             — subagent asks the user a question
-//   "scout-request"   — subagent requests parallel codebase scout spawning
-//   "artifact-review" — subagent presents a written artifact for human review
+// IPC protocol supports four message types (see docs/subagents.md):
+//   "ask"               — subagent asks the user a question
+//   "scout-request"     — subagent requests parallel codebase scout spawning
+//   "artifact-review"   — subagent presents a written artifact for human review
+//   "workflow-decision" — workflow orchestrator requests user direction on next phase
 
 import { promises as fs } from "node:fs";
 import * as path from "node:path";
@@ -63,6 +64,27 @@ export interface ArtifactReviewResponse {
   feedback: string;       // "Accept" or free-form text
 }
 
+// -- Workflow decision types --
+
+export interface WorkflowPhaseOption {
+  phase: string;        // EpicPhase value
+  label: string;        // human-readable, e.g. "Write Epic Brief"
+  context: string;      // why this phase is useful right now
+  recommended?: boolean;
+}
+
+export interface WorkflowDecisionPayload {
+  statusReport: string;                   // markdown summary of current state
+  recommendedPhases: WorkflowPhaseOption[];
+  completedPhase: string;                 // the just-completed phase
+}
+
+export interface WorkflowDecisionResponse {
+  id: string;
+  respondedAt: string;
+  feedback: string;     // user's free-form text response
+}
+
 // -- IPC file union --
 
 export interface AskIpcFile {
@@ -89,7 +111,19 @@ export interface ArtifactReviewIpcFile {
   response: ArtifactReviewResponse | null;
 }
 
-export type IpcFile = AskIpcFile | ScoutIpcFile | ArtifactReviewIpcFile;
+export interface WorkflowDecisionIpcFile {
+  type: "workflow-decision";
+  id: string;
+  createdAt: string;
+  payload: WorkflowDecisionPayload;
+  response: WorkflowDecisionResponse | null;
+}
+
+export type IpcFile =
+  | AskIpcFile
+  | ScoutIpcFile
+  | ArtifactReviewIpcFile
+  | WorkflowDecisionIpcFile;
 
 // -- File paths --
 
@@ -170,6 +204,16 @@ export function createArtifactReviewRequest(payload: ArtifactReviewPayload): Art
   };
 }
 
+export function createWorkflowDecisionRequest(payload: WorkflowDecisionPayload): WorkflowDecisionIpcFile {
+  return {
+    type: "workflow-decision",
+    id: crypto.randomUUID(),
+    createdAt: new Date().toISOString(),
+    payload,
+    response: null,
+  };
+}
+
 export function createAskResponse(requestId: string, payload: AskAnswerPayload): AskResponse {
   return {
     id: requestId,
@@ -243,6 +287,12 @@ export async function pollIpcUntilResponse(
       }
 
       if (current.type === "artifact-review" && current.response !== null && current.id === ipc.id) {
+        outcome = "answered";
+        finalIpc = current;
+        break;
+      }
+
+      if (current.type === "workflow-decision" && current.response !== null && current.id === ipc.id) {
         outcome = "answered";
         finalIpc = current;
         break;

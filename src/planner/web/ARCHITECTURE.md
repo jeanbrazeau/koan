@@ -19,7 +19,7 @@ js/
   store.js         Zustand store (single source of truth)
   sse.js           SSE connection + store updates
   lib/utils.js     formatTokens, formatElapsed, shortenModel
-  lib/api.js       submitAnswers, submitReview (fetch wrappers)
+  lib/api.js       submitAnswers (fetch wrapper)
   components/      Preact component tree (see Component tree below)
 ```
 
@@ -72,10 +72,10 @@ user action  ◄──fetch──  lib/api.js  ◄──────────
 3. Components subscribe via `useStore(s => s.slice)`. Zustand shallow-merges
    `setState` calls and notifies only subscribers whose selected slice changed.
 4. User actions (form submit, heartbeat) call `lib/api.js` fetch wrappers
-   which POST to `/api/answer`, `/api/review`, or `/api/heartbeat`.
+   which POST to `/api/answer`, `/api/workflow-decision`, or `/api/heartbeat`.
 
 `pendingInput` is cleared by the server: a phase transition out of `intake`
-clears it in the `phase` handler; `ask-cancelled` / `review-cancelled` clear
+clears it in the `phase` handler; `ask-cancelled` / `workflow-decision-cancelled` clear
 it by request ID. `intakeProgress` is cleared when the phase transitions away
 from intake or when the pipeline ends.
 
@@ -118,9 +118,8 @@ App
 2. `pending.type === 'model-config'` → `<ModelConfig isGate={true}>`
 3. `!phase` → `<Loading topic>`
 4. `pending.type === 'ask'` → `<QuestionForm key={requestId}>`
-5. `pending.type === 'review'` → `<ReviewForm key={requestId}>`
-6. `phase === 'completed'` → `<Completion>`
-7. default → `null` (live mode renders the ActivityFeed instead)
+5. `phase === 'completed'` → `<Completion>`
+6. default → `null` (live mode renders the ActivityFeed instead)
 
 `key={requestId}` on forms forces a full remount when a new request arrives,
 resetting local selection state without any explicit cleanup.
@@ -150,10 +149,8 @@ omitted when `subagent` is null.
 
 - **intake** + `intakeProgress` → `IntakeStatus`: confidence meter (5 segments),
   iteration dots (4 rounds), sub-phase label, summary text per sub-phase
-- **brief** → `BriefStatus`: static "Drafting epic brief…" label
-- **decomposition** → `DecomposeStatus`: story count from `stories` slice
-- **executing** → `ExecuteStatus`: `done`/total complete count plus active count
-  (stories in `selected`, `planning`, `executing`, or `verifying` states)
+- **brief-generation** → `BriefStatus`: static "Drafting epic brief…" label
+- **stub phases** (`core-flows`, `tech-plan`, etc.) → `GenericStatus`: phase label + "Phase in progress…"
 - **fallback** → `GenericStatus`: phase label + "Phase in progress…"
 
 **Summary section** (bottom, below divider): static contextual message per phase.

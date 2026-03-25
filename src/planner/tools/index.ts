@@ -12,6 +12,7 @@ import { registerOrchestratorTools } from "./orchestrator.js";
 import { registerAskTools } from "./ask.js";
 import { registerConfidenceTool } from "./confidence.js";
 import { registerReviewArtifactTool } from "./review-artifact.js";
+import { registerWorkflowDecisionTools } from "./workflow-decision.js";
 
 export type { RuntimeContext } from "../lib/runtime-context.js";
 export { createRuntimeContext } from "../lib/runtime-context.js";
@@ -22,4 +23,5 @@ export function registerAllTools(pi: ExtensionAPI, ctx: RuntimeContext, confiden
   registerAskTools(pi, ctx);
   registerConfidenceTool(pi, confidenceRef, auditRef);
   registerReviewArtifactTool(pi, ctx);
+  registerWorkflowDecisionTools(pi, ctx);
 }

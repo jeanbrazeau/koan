@@ -45,7 +45,7 @@ phase and the list of story IDs.
 
 ```typescript
 interface EpicState {
-  phase: EpicPhase;     // intake → brief → decomposition → review → executing → completed
+  phase: EpicPhase;     // intake → brief-generation → core-flows → tech-plan → ticket-breakdown → cross-artifact-validation → execution → implementation-validation → completed
   stories: string[];    // populated by driver after filesystem scan
 }
 ```
@@ -55,11 +55,14 @@ interface EpicState {
 | Phase | What happens |
 |-------|-------------|
 | `intake` | Intake subagent reads conversation, scouts codebase, asks user questions |
-| `brief` | Brief-writer subagent distills landscape.md into brief.md; user reviews via artifact review |
-| `decomposition` | Decomposer subagent splits work into stories |
-| `review` | User reviews story sketches in web UI (approve/remove) |
-| `executing` | Story loop: orchestrator → planner → executor → orchestrator → next |
-| `completed` | All stories done or skipped |
+| `brief-generation` | Brief-writer subagent distills landscape.md into brief.md; user reviews via artifact review |
+| `core-flows` | Define user journeys with sequence diagrams (stub — auto-advances) |
+| `tech-plan` | Specify technical architecture (stub — auto-advances) |
+| `ticket-breakdown` | Generate story-sized implementation tickets (stub — auto-advances) |
+| `cross-artifact-validation` | Validate cross-boundary consistency (stub — auto-advances) |
+| `execution` | Implement tickets through supervised batch process (stub — auto-advances) |
+| `implementation-validation` | Post-execution alignment review (stub — auto-advances) |
+| `completed` | All phases done |
 
 **`scouting` is intentionally absent.** Scouts run inside the IPC responder
 during intake/decomposer/planner phases, not as a top-level phase. Adding it
@@ -197,10 +200,9 @@ confirms model tier selection. This happens before any subagent spawns.
 
 ### Spec review gate
 
-After decomposition, story sketches are presented for human review in the web
-UI. The user can approve or remove stories. Removed stories get
-`status: "skipped"`, `skipReason: "Removed during spec review"`. When no web
-server is running, the gate auto-approves.
+The spec review gate was removed as development scaffolding. Story review will
+be revisited in the `cross-artifact-validation` phase using a different
+mechanism. No web UI review gate exists in the current pipeline.
 
 ---
 
@@ -275,7 +277,7 @@ Key projection fields common to all roles:
 
 | Field | Type | Meaning |
 |-------|------|---------|
-| `phase` | string | Overall phase name (e.g., "intake", "decomposition") |
+| `phase` | string | Overall phase name (e.g., "intake", "brief-generation") |
 | `step` | number | Current step index within the phase |
 | `stepName` | string | Human-readable step label (e.g., "Scout (round 2)") |
 | `tokensSent` | number | Cumulative tokens in |

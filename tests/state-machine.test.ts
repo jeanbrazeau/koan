@@ -327,6 +327,7 @@ describe("permission matrix", () => {
     orchestrator: ["read", "bash", "grep", "glob", "find", "ls", "koan_complete_step", "koan_ask_question", "koan_select_story", "koan_complete_story", "koan_retry_story", "koan_skip_story", "edit", "write"],
     planner: ["read", "bash", "grep", "glob", "find", "ls", "koan_complete_step", "koan_ask_question", "koan_request_scouts", "edit", "write"],
     executor: ["read", "bash", "grep", "glob", "find", "ls", "koan_complete_step", "koan_ask_question", "edit", "write"],
+    "workflow-orchestrator": ["read", "bash", "grep", "glob", "find", "ls", "koan_complete_step", "koan_propose_workflow", "koan_set_next_phase"],
   };
 
   // Tools that must be blocked for each role.
@@ -337,6 +338,7 @@ describe("permission matrix", () => {
     orchestrator: ["koan_request_scouts", "koan_escalate"],
     planner: ["koan_select_story", "koan_complete_story", "koan_retry_story", "koan_skip_story", "koan_escalate"],
     executor: ["koan_select_story", "koan_complete_story", "koan_retry_story", "koan_skip_story", "koan_escalate", "koan_request_scouts"],
+    "workflow-orchestrator": ["koan_ask_question", "koan_request_scouts", "koan_select_story", "koan_complete_story", "koan_retry_story", "koan_skip_story", "koan_escalate", "edit", "write"],
   };
 
   for (const [role, allowed] of Object.entries(ROLE_ALLOWED)) {

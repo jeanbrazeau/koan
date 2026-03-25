@@ -19,16 +19,15 @@ import { loadKoanConfig, loadModelTierConfig, saveModelTierConfig, saveScoutConc
 import type {
   WebServerHandle,
   AskQuestion,
-  ReviewStory,
-  ReviewResult,
   AnswerResult,
   AnswerElement,
   LogLine,
   IntakeProgressEvent,
   ArtifactReviewFeedback,
+  WorkflowDecisionFeedback,
   TokenDeltaEvent,
 } from "./server-types.js";
-import type { ArtifactReviewPayload } from "../lib/ipc.js";
+import type { ArtifactReviewPayload, WorkflowDecisionPayload } from "../lib/ipc.js";
 import type { EpicPhase, StoryStatus } from "../types.js";
 
 // ---------------------------------------------------------------------------
@@ -247,6 +246,10 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
   let currentStories: Array<{ storyId: string; status: StoryStatus }> = [];
   let currentSubagent: unknown | null = null;
   let lastLogs: LogLine[] = [];
+  // Frozen snapshot of the completed phase's activity.
+  // Set by freezeLogs() before spawning the workflow orchestrator.
+  // Cleared by pushPhase() when the next real phase begins.
+  let frozenLogs: LogLine[] = [];
   let pipelineEnd: { success: boolean; summary: string } | null = null;
   let lastArtifacts: ArtifactEntry[] = [];
 
@@ -268,9 +271,9 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
   // SSE clients
   const sseClients = new Set<http.ServerResponse>();
 
-  // Pending inputs (requestReview / requestAnswer / requestModelConfig / requestArtifactReview)
+  // Pending inputs (requestAnswer / requestModelConfig / requestArtifactReview / requestWorkflowDecision)
   interface PendingEntry {
-    type: "review" | "ask" | "model-config" | "artifact-review";
+    type: "ask" | "model-config" | "artifact-review" | "workflow-decision";
     resolve: (result: unknown) => void;
     reject: (err: Error) => void;
     payload: unknown;
@@ -382,14 +385,13 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
     if (streamingText) {
       write("token-delta", { delta: streamingText } satisfies TokenDeltaEvent);
     }
+    if (frozenLogs.length > 0) write("frozen-logs", { lines: frozenLogs });
     if (lastLogs.length > 0) write("logs", { lines: lastLogs });
     if (lastArtifacts.length > 0) write("artifacts", { files: withFormattedSize(lastArtifacts) });
 
     for (const [requestId, entry] of pendingInputs) {
       if (entry.type === "ask") {
         write("ask", { requestId, question: entry.payload });
-      } else if (entry.type === "review") {
-        write("review", { requestId, stories: entry.payload });
       } else if (entry.type === "model-config") {
         write("model-config", entry.payload);
       } else if (entry.type === "artifact-review") {
@@ -399,6 +401,14 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
           artifactPath: p.artifactPath,
           content: p.content,
           description: p.description,
+        });
+      } else if (entry.type === "workflow-decision") {
+        const p = entry.payload as WorkflowDecisionPayload;
+        write("workflow-decision", {
+          requestId,
+          statusReport: p.statusReport,
+          recommendedPhases: p.recommendedPhases,
+          completedPhase: p.completedPhase,
         });
       }
     }
@@ -706,26 +716,6 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
         return;
       }
 
-      if (method === "POST" && pathname === "/api/review") {
-        const body = await readBody(req).catch(() => null);
-        const b = body as { token?: string; requestId?: string; approved?: string[]; skipped?: string[] } | null;
-        if (!b) { sendJson(res, 400, { ok: false, error: "Invalid body" }); return; }
-        if (b.token !== sessionToken) { sendJson(res, 403, { ok: false, error: "Invalid token" }); return; }
-        const { requestId, approved, skipped } = b;
-        if (!requestId || !Array.isArray(approved) || !Array.isArray(skipped)) {
-          sendJson(res, 400, { ok: false, error: "Missing fields" }); return;
-        }
-        const pending = pendingInputs.get(requestId);
-        if (!pending || pending.type !== "review") {
-          sendJson(res, 409, { ok: false, error: "No pending review with this requestId" }); return;
-        }
-        const result: ReviewResult = { approved, skipped };
-        pending.resolve(result);
-        pendingInputs.delete(requestId);
-        sendJson(res, 200, { ok: true });
-        return;
-      }
-
       if (method === "POST" && pathname === "/api/artifact-review") {
         const body = await readBody(req).catch(() => null);
         const b = body as { token?: string; requestId?: string; feedback?: string } | null;
@@ -741,6 +731,26 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
         }
         const artifactResult: ArtifactReviewFeedback = { feedback };
         pending.resolve(artifactResult);
+        pendingInputs.delete(requestId);
+        sendJson(res, 200, { ok: true });
+        return;
+      }
+
+      if (method === "POST" && pathname === "/api/workflow-decision") {
+        const body = await readBody(req).catch(() => null);
+        const b = body as { token?: string; requestId?: string; feedback?: string } | null;
+        if (!b) { sendJson(res, 400, { ok: false, error: "Invalid body" }); return; }
+        if (b.token !== sessionToken) { sendJson(res, 403, { ok: false, error: "Invalid token" }); return; }
+        const { requestId, feedback } = b;
+        if (!requestId || typeof feedback !== "string" || feedback.trim() === "") {
+          sendJson(res, 400, { ok: false, error: "Missing requestId or feedback" }); return;
+        }
+        const pending = pendingInputs.get(requestId);
+        if (!pending || pending.type !== "workflow-decision") {
+          sendJson(res, 409, { ok: false, error: "No pending workflow decision with this requestId" }); return;
+        }
+        const workflowResult: WorkflowDecisionFeedback = { feedback };
+        pending.resolve(workflowResult);
         pendingInputs.delete(requestId);
         sendJson(res, 200, { ok: true });
         return;
@@ -802,6 +812,10 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
 
         pushPhase(phase: EpicPhase): void {
           currentPhase = phase;
+          // Clear frozen logs — the orchestrator session has ended and the next
+          // phase is beginning. frozenLogs persists across the entire orchestrator
+          // session and is only cleared when the next phase starts.
+          frozenLogs = [];
           // Evict finished agents from the previous phase so the UI starts clean.
           // evictFinishedAgents pushes agents/scouts events only if something
           // changed, but we always push them here to ensure a clean broadcast.
@@ -816,6 +830,15 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
           pushEvent("phase", { phase });
           currentIntakeProgress = { ...currentIntakeProgress, intakeDone: phase !== "intake" };
           pushEvent("intake-progress", currentIntakeProgress);
+        },
+
+        freezeLogs(): void {
+          // Snapshot lastLogs into frozenLogs and push 'frozen-logs' SSE event.
+          // Shallow copy to decouple from any future mutation of lastLogs.
+          // Called by the driver before spawning the workflow orchestrator so that
+          // trackSubagent()'s log replacement does not erase the phase's activity.
+          frozenLogs = [...lastLogs];
+          pushEvent("frozen-logs", { lines: frozenLogs });
         },
 
         pushStories(stories: Array<{ storyId: string; status: StoryStatus }>): void {
@@ -943,37 +966,6 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
           });
         },
 
-        requestReview(stories: ReviewStory[], signal?: AbortSignal): Promise<ReviewResult> {
-          return new Promise<ReviewResult>((res, rej) => {
-            const requestId = randomUUID();
-            const abortHandler = () => {
-              pendingInputs.delete(requestId);
-              pushEvent("review-cancelled", { requestId });
-              const err = new Error(`Review cancelled: signal aborted`);
-              (err as NodeJS.ErrnoException).name = "AbortError";
-              rej(err);
-            };
-            pendingInputs.set(requestId, {
-              type: "review",
-              resolve: (result: unknown) => {
-                signal?.removeEventListener("abort", abortHandler);
-                res(result as ReviewResult);
-              },
-              reject: (err: Error) => {
-                signal?.removeEventListener("abort", abortHandler);
-                rej(err);
-              },
-              payload: stories,
-            });
-            pushEvent("review", { requestId, stories });
-            if (signal?.aborted) {
-              abortHandler();
-            } else {
-              signal?.addEventListener("abort", abortHandler, { once: true });
-            }
-          });
-        },
-
         requestAnswer(question: AskQuestion, signal: AbortSignal): Promise<AnswerResult> {
           return new Promise<AnswerResult>((res, rej) => {
             const requestId = randomUUID();
@@ -1047,6 +1039,42 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
               artifactPath: payload.artifactPath,
               content: payload.content,
               description: payload.description,
+            });
+            if (signal.aborted) {
+              abortHandler();
+            } else {
+              signal.addEventListener("abort", abortHandler, { once: true });
+            }
+          });
+        },
+
+        requestWorkflowDecision(payload: WorkflowDecisionPayload, signal: AbortSignal): Promise<WorkflowDecisionFeedback> {
+          return new Promise<WorkflowDecisionFeedback>((res, rej) => {
+            const requestId = randomUUID();
+            const abortHandler = () => {
+              pendingInputs.delete(requestId);
+              pushEvent("workflow-decision-cancelled", { requestId });
+              const err = new Error(`Workflow decision cancelled: signal aborted`);
+              (err as NodeJS.ErrnoException).name = "AbortError";
+              rej(err);
+            };
+            pendingInputs.set(requestId, {
+              type: "workflow-decision",
+              resolve: (result: unknown) => {
+                signal.removeEventListener("abort", abortHandler);
+                res(result as WorkflowDecisionFeedback);
+              },
+              reject: (err: Error) => {
+                signal.removeEventListener("abort", abortHandler);
+                rej(err);
+              },
+              payload,
+            });
+            pushEvent("workflow-decision", {
+              requestId,
+              statusReport: payload.statusReport,
+              recommendedPhases: payload.recommendedPhases,
+              completedPhase: payload.completedPhase,
             });
             if (signal.aborted) {
               abortHandler();

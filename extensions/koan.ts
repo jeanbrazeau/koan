@@ -117,6 +117,11 @@ export default function koan(pi: ExtensionAPI): void {
 
     ctx.epicDir = task.epicDir;
     ctx.subagentDir = subagentDir;
+    // Thread phaseInstructions from the workflow orchestrator's decision into context.
+    // Present only when the user provided focus instructions during the workflow
+    // decision interaction. Phases access this via this.ctx.phaseInstructions in
+    // their getStepGuidance() implementation.
+    ctx.phaseInstructions = task.phaseInstructions;
 
     const eventLog = new EventLog(
       subagentDir,

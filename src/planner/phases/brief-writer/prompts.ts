@@ -13,6 +13,9 @@
 //
 // The review gate logic (validateStepCompletion) lives in phase.ts, not here.
 // Prompts express intent; the mechanical gate catches non-compliance.
+//
+// phaseInstructions (optional) — context from the workflow orchestrator's
+// decision. Appended to step 1 guidance when present.
 
 import type { StepGuidance } from "../../lib/step.js";
 import { REVIEW_PROTOCOL } from "../review-protocol.js";
@@ -46,23 +49,28 @@ Keep the brief compact — under 50 lines. No UI flows, no technical design, no 
 ${REVIEW_PROTOCOL}`;
 }
 
-export function briefWriterStepGuidance(step: number, epicDir: string): StepGuidance {
+export function briefWriterStepGuidance(step: number, epicDir: string, phaseInstructions?: string): StepGuidance {
   switch (step) {
-    case 1:
+    case 1: {
+      const lines = [
+        `Read \`${epicDir}/landscape.md\`. Build a thorough mental model of:`,
+        "",
+        "- Task Summary — what is being built or changed",
+        "- Prior Art — previous attempts, related systems, or prior conversations",
+        "- Codebase findings — architecture, patterns, integration points",
+        "- Decisions — every question asked and the user's answer",
+        "- Constraints — technical, timeline, compatibility requirements",
+        "",
+        "Do NOT write any files in this step. Comprehend before drafting.",
+      ];
+      if (phaseInstructions) {
+        lines.push("", "## Additional Context from Workflow Orchestrator", "", phaseInstructions);
+      }
       return {
         title: BRIEF_WRITER_STEP_NAMES[1],
-        instructions: [
-          `Read \`${epicDir}/landscape.md\`. Build a thorough mental model of:`,
-          "",
-          "- Task Summary — what is being built or changed",
-          "- Prior Art — previous attempts, related systems, or prior conversations",
-          "- Codebase findings — architecture, patterns, integration points",
-          "- Decisions — every question asked and the user's answer",
-          "- Constraints — technical, timeline, compatibility requirements",
-          "",
-          "Do NOT write any files in this step. Comprehend before drafting.",
-        ],
+        instructions: lines,
       };
+    }
 
     case 2:
       return {

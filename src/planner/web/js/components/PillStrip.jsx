@@ -1,14 +1,21 @@
 import { useStore } from '../store.js'
 
 const PHASES = [
-  { id: 'intake',        label: 'intake' },
-  { id: 'brief',         label: 'brief' },
-  { id: 'decomposition', label: 'decompose' },
-  { id: 'review',        label: 'review' },
-  { id: 'executing',     label: 'execute' },
+  { id: 'intake',                    label: 'intake' },
+  { id: 'brief-generation',          label: 'brief' },
+  { id: 'core-flows',                label: 'core flows' },
+  { id: 'tech-plan',                 label: 'tech plan' },
+  { id: 'ticket-breakdown',          label: 'tickets' },
+  { id: 'cross-artifact-validation', label: 'validation' },
+  { id: 'execution',                 label: 'execute' },
+  { id: 'implementation-validation', label: 'verify' },
 ]
 
-const PHASE_ORDER = ['intake', 'brief', 'decomposition', 'review', 'executing', 'completed']
+const PHASE_ORDER = [
+  'intake', 'brief-generation', 'core-flows', 'tech-plan',
+  'ticket-breakdown', 'cross-artifact-validation', 'execution',
+  'implementation-validation', 'completed',
+]
 
 export function PillStrip() {
   const phase = useStore(s => s.phase)

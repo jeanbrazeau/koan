@@ -17,23 +17,6 @@ export async function submitAnswers({ token, requestId, answer }) {
   }
 }
 
-export async function submitReview({ token, requestId, approved, skipped }) {
-  try {
-    const resp = await fetch('/api/review', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, requestId, approved, skipped }),
-    })
-    if (resp.ok) {
-      useStore.setState({ pendingInput: null })
-    } else {
-      console.error('Failed to submit review:', await resp.text())
-    }
-  } catch (err) {
-    console.error('Failed to submit review:', err)
-  }
-}
-
 export async function fetchArtifacts(token) {
   const resp = await fetch(`/api/artifacts?session=${encodeURIComponent(token)}`)
   if (!resp.ok) throw new Error('Failed to fetch artifacts')

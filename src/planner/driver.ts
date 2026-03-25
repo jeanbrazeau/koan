@@ -19,12 +19,22 @@ import {
   ensureSubagentDirectory,
   ensureStoryDirectory,
   discoverStoryIds,
+  readWorkflowDecision,
 } from "./epic/state.js";
+import { listArtifacts } from "./epic/artifacts.js";
 import { spawnSubagent, type SpawnOptions, type SubagentResult } from "./subagent.js";
-import type { SubagentTask } from "./lib/task.js";
+import type { SubagentTask, WorkflowOrchestratorTask } from "./lib/task.js";
 import type { Logger } from "../utils/logger.js";
 import type { StoryState } from "./epic/types.js";
-import type { WebServerHandle, ReviewStory } from "./web/server-types.js";
+import type { WebServerHandle } from "./web/server-types.js";
+import type { SubagentRole, EpicPhase } from "./types.js";
+import {
+  getSuccessorPhases,
+  isAutoAdvance,
+  isStubPhase,
+  isValidTransition,
+  PHASE_DESCRIPTIONS,
+} from "./lib/phase-dag.js";
 
 // ---------------------------------------------------------------------------
 // readStoryTitle
@@ -46,7 +56,7 @@ async function readStoryTitle(epicDir: string, storyId: string): Promise<string>
 }
 
 // ---------------------------------------------------------------------------
-// Routing
+// Routing (dormant — used when execution phase is implemented)
 // ---------------------------------------------------------------------------
 
 interface RoutingDecision {
@@ -117,20 +127,34 @@ async function spawnTracked(
 }
 
 // ---------------------------------------------------------------------------
-// Phase A helpers
+// Phase role mapping
+// ---------------------------------------------------------------------------
+
+/** Maps implemented phases to the subagent role that executes them.
+ *  Stubs are not listed — they never spawn a subagent. */
+const PHASE_ROLE: Partial<Record<EpicPhase, SubagentRole>> = {
+  "intake":           "intake",
+  "brief-generation": "brief-writer",
+};
+
+// ---------------------------------------------------------------------------
+// Phase runners
 // ---------------------------------------------------------------------------
 
 async function runSimplePhase(
-  role: "intake" | "brief-writer" | "decomposer",
+  role: SubagentRole,
   epicDir: string,
-  webServer: WebServerHandle | null,
-  extensionPath: string,
   cwd: string,
+  extensionPath: string,
   log: Logger,
+  webServer: WebServerHandle | null,
+  phaseInstructions?: string,
 ): Promise<boolean> {
   const subagentDir = await ensureSubagentDirectory(epicDir, role);
   const opts: SpawnOptions = { cwd, extensionPath, log, webServer: webServer ?? undefined };
-  const task = { role, epicDir } as SubagentTask;
+  const task = (phaseInstructions
+    ? { role, epicDir, phaseInstructions }
+    : { role, epicDir }) as SubagentTask;
   const result = await spawnTracked(role, role, role, task, subagentDir, undefined, opts, webServer);
   if (result.exitCode !== 0) {
     log(`${role} phase failed`, { exitCode: result.exitCode });
@@ -139,8 +163,25 @@ async function runSimplePhase(
   return true;
 }
 
+async function runPhase(
+  phase: EpicPhase,
+  epicDir: string,
+  cwd: string,
+  extensionPath: string,
+  log: Logger,
+  webServer: WebServerHandle | null,
+  phaseInstructions?: string,
+): Promise<boolean> {
+  const role = PHASE_ROLE[phase];
+  if (!role) {
+    // Should never happen — isStubPhase() guards this in the loop above.
+    throw new Error(`No role mapping for implemented phase: ${phase}`);
+  }
+  return runSimplePhase(role, epicDir, cwd, extensionPath, log, webServer, phaseInstructions);
+}
+
 // ---------------------------------------------------------------------------
-// Phase B helpers
+// Story execution helpers (dormant — used when execution phase is implemented)
 // ---------------------------------------------------------------------------
 
 async function runStoryExecution(
@@ -316,6 +357,80 @@ async function runStoryLoop(
 }
 
 // ---------------------------------------------------------------------------
+// Workflow orchestrator helpers
+// ---------------------------------------------------------------------------
+
+/** Write {epicDir}/workflow-status.md — a markdown bridge from driver JSON
+ *  state to the orchestrator LLM's context. Called before orchestrator spawn.
+ *
+ *  completedPhase is the single just-completed phase (not a history).
+ *  The driver does not maintain a phase history array; the orchestrator
+ *  infers prior phases from the artifacts present in epicDir. */
+async function writeWorkflowStatus(
+  epicDir: string,
+  completedPhase: EpicPhase,
+  availablePhases: readonly EpicPhase[],
+): Promise<void> {
+  const artifacts = await listArtifacts(epicDir);
+  const lines = [
+    "# Workflow Status", "",
+    "## Current Position", "",
+    `The **${completedPhase}** phase has just completed.`, "",
+    "## Available Next Phases", "",
+    ...availablePhases.map((p) => `- **${p}** — ${PHASE_DESCRIPTIONS[p]}`),
+    "", "## Artifacts Available", "",
+    ...artifacts.map((a) => `- \`${a.path}\``),
+  ];
+  await fs.writeFile(path.join(epicDir, "workflow-status.md"), lines.join("\n"), "utf8");
+}
+
+async function runWorkflowOrchestrator(
+  completedPhase: EpicPhase,
+  availablePhases: readonly EpicPhase[],
+  epicDir: string,
+  cwd: string,
+  extensionPath: string,
+  log: Logger,
+  webServer: WebServerHandle,
+): Promise<{ nextPhase: EpicPhase; instructions?: string } | null> {
+  await writeWorkflowStatus(epicDir, completedPhase, availablePhases);
+
+  const task: WorkflowOrchestratorTask = {
+    role: "workflow-orchestrator",
+    epicDir,
+    completedPhase,
+    availablePhases: availablePhases as EpicPhase[],
+  };
+
+  // Timestamp ensures no stale workflow-decision.json from a crashed run
+  // is accidentally read on restart.
+  const dirLabel = `workflow-orch-${completedPhase}-${Date.now()}`;
+  const dir = await ensureSubagentDirectory(epicDir, dirLabel);
+  const id = `workflow-orchestrator-${completedPhase}`;
+  const opts: SpawnOptions = { cwd, extensionPath, log, webServer };
+  const result = await spawnTracked(id, id, "workflow-orchestrator", task, dir, undefined, opts, webServer);
+
+  if (result.exitCode !== 0) {
+    log("Workflow orchestrator failed", { exitCode: result.exitCode, completedPhase });
+    return null;
+  }
+
+  const decision = await readWorkflowDecision(dir);
+  if (!decision) {
+    log("Workflow orchestrator exited without committing a decision", { completedPhase });
+    return null;
+  }
+  if (!isValidTransition(completedPhase, decision.nextPhase as EpicPhase)) {
+    log("Workflow orchestrator committed an invalid transition", {
+      completedPhase, nextPhase: decision.nextPhase,
+    });
+    return null;
+  }
+
+  return { nextPhase: decision.nextPhase as EpicPhase, instructions: decision.instructions };
+}
+
+// ---------------------------------------------------------------------------
 // Public API
 // ---------------------------------------------------------------------------
 
@@ -333,98 +448,68 @@ export async function runPipeline(
     await webServer.requestModelConfig();
   }
 
-  // Phase A: Epic Creation.
-  await saveEpicState(epicDir, { ...epicState, phase: "intake" });
-  webServer?.pushPhase("intake");
+  let phase: EpicPhase = "intake";
+  let pendingInstructions: string | undefined;
 
-  const intakeOk = await runSimplePhase("intake", epicDir, webServer, extensionPath, cwd, log);
-  if (!intakeOk) return { success: false, summary: "Intake phase failed" };
+  while (phase !== "completed") {
+    await saveEpicState(epicDir, { ...epicState, phase });
+    webServer?.pushPhase(phase);
 
-  // Brief phase: distill intake context into a compact epic brief.
-  const afterIntake = await loadEpicState(epicDir);
-  await saveEpicState(epicDir, { ...afterIntake, phase: "brief" });
-  webServer?.pushPhase("brief");
-
-  const briefOk = await runSimplePhase("brief-writer", epicDir, webServer, extensionPath, cwd, log);
-  if (!briefOk) return { success: false, summary: "Brief generation failed" };
-
-  // Decomposition phase: split the epic into story sketches.
-  const afterBrief = await loadEpicState(epicDir);
-  await saveEpicState(epicDir, { ...afterBrief, phase: "decomposition" });
-  webServer?.pushPhase("decomposition");
-
-  const decompOk = await runSimplePhase("decomposer", epicDir, webServer, extensionPath, cwd, log);
-  if (!decompOk) return { success: false, summary: "Decomposition phase failed" };
-
-  // Discover stories by scanning the filesystem — the decomposer LLM wrote
-  // story.md files using the write tool; the driver discovers them here and
-  // populates the JSON story list (never asks the LLM to update JSON directly).
-  const storyIds = await discoverStoryIds(epicDir);
-  log("Discovered story IDs", { count: storyIds.length, ids: storyIds });
-
-  for (const storyId of storyIds) {
-    await ensureStoryDirectory(epicDir, storyId);
-  }
-
-  const afterDecomp = await loadEpicState(epicDir);
-  await saveEpicState(epicDir, { ...afterDecomp, stories: storyIds, phase: "review" });
-  webServer?.pushPhase("review");
-
-  if (webServer) {
-    const initialStories = await loadAllStoryStates(epicDir);
-    webServer.pushStories(initialStories.map((s) => ({ storyId: s.storyId, status: s.status })));
-  }
-
-  // Spec review gate — present story sketches for human approval.
-  // Auto-approves when no web server is running (CI/headless mode).
-  if (webServer && storyIds.length > 0) {
-    webServer.pushNotification("Decomposition complete. Review story sketches...", "info");
-
-    const storyData = await Promise.all(storyIds.map(async (id) => {
-      const storyPath = path.join(epicDir, "stories", id, "story.md");
-      try {
-        const raw = await fs.readFile(storyPath, "utf8");
-        const title = readStoryTitle(epicDir, id);
-        return { raw, title: await title };
-      } catch { return { raw: "", title: id }; }
-    }));
-    const reviewStories: ReviewStory[] = storyIds.map((storyId, i) => ({
-      storyId,
-      title: storyData[i].title ?? storyId,
-      content: storyData[i].raw,
-    }));
-
-    const reviewResult = await webServer.requestReview(reviewStories);
-    log("Spec review complete", { approved: reviewResult.approved.length, skipped: reviewResult.skipped.length });
-
-    for (const skippedId of reviewResult.skipped) {
-      const skippedStory = await loadStoryState(epicDir, skippedId);
-      await saveStoryState(epicDir, skippedId, {
-        ...skippedStory,
-        status: "skipped",
-        skipReason: "Removed during spec review",
-        updatedAt: new Date().toISOString(),
-      });
+    if (isStubPhase(phase)) {
+      // Stub phases register in the DAG but perform no subagent work.
+      // pendingInstructions are carried forward — stubs don't consume them.
+      log(`Phase "${phase}" is a placeholder — auto-advancing`, { phase });
+    } else {
+      const phaseOk = await runPhase(phase, epicDir, cwd, extensionPath, log, webServer, pendingInstructions);
+      // Consumed by the real phase — clear regardless of success.
+      pendingInstructions = undefined;
+      if (!phaseOk) return { success: false, summary: `Phase "${phase}" failed` };
     }
 
-    const reviewedState = await loadEpicState(epicDir);
-    await saveEpicState(epicDir, { ...reviewedState, stories: storyIds });
-  } else {
-    log("Spec review gate: auto-approving (no web server or no stories)");
+    const successors = getSuccessorPhases(phase);
+    if (successors.length === 0) {
+      // Terminal or unknown phase — break and let the completed handler run.
+      break;
+    }
+
+    if (isAutoAdvance(phase)) {
+      // Single successor — unambiguous, advance at zero cost.
+      phase = successors[0];
+      continue;
+    }
+
+    // Multiple successors: requires user direction.
+    // In headless mode (no webServer), the orchestrator cannot run because
+    // koan_propose_workflow requires requestWorkflowDecision() on the server
+    // and the IPC responder is not started. Auto-advance to the recommended
+    // (first) successor to preserve CI correctness.
+    if (!webServer) {
+      log("No web server — auto-advancing to recommended phase (headless mode)", {
+        from: phase, to: successors[0],
+      });
+      phase = successors[0];
+      continue;
+    }
+
+    // Snapshot the completed phase's activity before spawning the orchestrator.
+    // trackSubagent() for the orchestrator will replace the live log buffer;
+    // freezeLogs() preserves the phase's final state for the frozen zone in
+    // the ActivityFeed.
+    webServer.freezeLogs();
+
+    const decision = await runWorkflowOrchestrator(
+      phase, successors, epicDir, cwd, extensionPath, log, webServer,
+    );
+    if (!decision) {
+      return { success: false, summary: `Workflow orchestrator failed after "${phase}"` };
+    }
+    phase = decision.nextPhase;
+    pendingInstructions = decision.instructions;
   }
 
-  // Phase B: Execution.
-  const beforeExec = await loadEpicState(epicDir);
-  await saveEpicState(epicDir, { ...beforeExec, phase: "executing" });
-  webServer?.pushPhase("executing");
+  // Save "completed" as the final pipeline state.
+  await saveEpicState(epicDir, { ...epicState, phase: "completed" });
+  webServer?.pushPhase("completed");
 
-  const result = await runStoryLoop(epicDir, cwd, extensionPath, log, webServer);
-
-  if (result.success) {
-    const afterExec = await loadEpicState(epicDir);
-    await saveEpicState(epicDir, { ...afterExec, phase: "completed" });
-    webServer?.pushPhase("completed");
-  }
-
-  return result;
+  return { success: true, summary: "Pipeline completed successfully" };
 }

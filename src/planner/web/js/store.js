@@ -20,6 +20,16 @@ export const useStore = create((set) => ({
   intakeProgress: null,      // IntakeProgressEvent | null -- set during intake phase
   artifactFiles: [],         // ArtifactEntry[] -- epic artifact file listing
 
+  // Workflow orchestrator state
+  // frozenLogs: snapshot of the completed phase's activity, displayed dimmed
+  // above the orchestrator's live activity.
+  frozenLogs: [],
+  // workflowChat: multi-turn conversation history with the workflow orchestrator.
+  // Deliberately NOT in pendingInput — workflow-decision is the only interaction
+  // type that does NOT set pendingInput, because setting it would toggle
+  // isInteractive=true in App.jsx, hiding the ActivityFeed where WorkflowChat lives.
+  workflowChat: [],
+
   // Streaming token output from the active subagent
   streamingText: "",
 
@@ -41,6 +51,8 @@ export function handleInitEvent(d) {
 export function handlePhaseEvent(d) {
   set({
     phase: d.phase,
+    frozenLogs: [],       // phase's frozen activity no longer needed
+    workflowChat: [],     // conversation belongs to the previous transition
     // Clear interaction state and intake progress when leaving intake
     ...(d.phase !== 'intake' && { pendingInput: null, intakeProgress: null }),
   })
@@ -92,15 +104,13 @@ export function handlePipelineEndEvent(d) {
     phase: d.success ? 'completed' : s.phase,
     pipelineEnd: d,
     intakeProgress: null,
+    frozenLogs: [],
+    workflowChat: [],
   }))
 }
 
 export function handleAskEvent(d) {
   set({ pendingInput: { type: 'ask', requestId: d.requestId, payload: d.question } })
-}
-
-export function handleReviewEvent(d) {
-  set({ pendingInput: { type: 'review', requestId: d.requestId, payload: d.stories } })
 }
 
 export function handleModelConfigEvent(d) {
@@ -120,12 +130,6 @@ export function handleAskCancelledEvent(d) {
     : {})
 }
 
-export function handleReviewCancelledEvent(d) {
-  set(s => s.pendingInput?.requestId === d.requestId
-    ? { pendingInput: null, notifications: [...s.notifications, { id: Date.now(), message: 'The review was cancelled.', level: 'warning' }] }
-    : {})
-}
-
 export function handleArtifactReviewEvent(d) {
   set({
     pendingInput: {
@@ -140,6 +144,37 @@ export function handleArtifactReviewCancelledEvent(d) {
   set(s => s.pendingInput?.requestId === d.requestId
     ? { pendingInput: null, notifications: [...s.notifications, { id: Date.now(), message: 'The artifact review was cancelled.', level: 'warning' }] }
     : {})
+}
+
+export function handleFrozenLogsEvent(d) {
+  set({ frozenLogs: d.lines })
+}
+
+// workflow-decision does NOT set pendingInput. Setting it would toggle
+// isInteractive=true in App.jsx, switching to PhaseContent and hiding the
+// ActivityFeed where WorkflowChat lives. This is intentional and unlike all
+// other interaction types (ask, artifact-review, model-config).
+export function handleWorkflowDecisionEvent(d) {
+  set(s => ({
+    workflowChat: [
+      ...s.workflowChat,
+      {
+        role: 'orchestrator',
+        requestId: d.requestId,
+        statusReport: d.statusReport,
+        recommendedPhases: d.recommendedPhases,
+      }
+    ]
+  }))
+}
+
+export function handleWorkflowDecisionCancelledEvent(d) {
+  // Remove the pending orchestrator turn by requestId when cancelled
+  set(s => ({
+    workflowChat: s.workflowChat.filter(t =>
+      !(t.role === 'orchestrator' && t.requestId === d.requestId)
+    )
+  }))
 }
 
 export function handleArtifactsEvent(d) {

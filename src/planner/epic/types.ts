@@ -54,3 +54,13 @@ export function createInitialEpicState(epicId: string, stories: string[] = []): 
     stories,
   };
 }
+
+/** Written by koan_set_next_phase to {subagentDir}/workflow-decision.json.
+ *  Read by the driver after the orchestrator process exits.
+ *  nextPhase is string (not EpicPhase) because it's read from JSON
+ *  and validated via isValidTransition() before casting. */
+export interface WorkflowDecisionState {
+  nextPhase: string;
+  instructions?: string;
+  decidedAt: string;
+}
