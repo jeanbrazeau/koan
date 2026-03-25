@@ -24,6 +24,30 @@ import {
   type ScoutRequest,
 } from "../lib/ipc.js";
 
+// -- Batch coordinator --
+// When the LLM calls koan_ask_question multiple times in one turn, pi
+// executes those tool calls concurrently. The batch coordinator accumulates
+// them via a short debounce (50ms — enough for all concurrent calls to
+// arrive within the same event-loop turn) and writes a single batch IPC
+// file. Each tool call receives a Promise that resolves with its individual
+// answer once the batch response arrives.
+
+interface BatchEntry {
+  params: AskParams;
+  resolve: (result: ToolResult) => void;
+  reject: (error: Error) => void;
+}
+
+interface PendingBatch {
+  entries: BatchEntry[];
+  timer: ReturnType<typeof setTimeout>;
+}
+
+// One pending batch per subagent directory. Cleared on flush.
+const pendingBatches = new Map<string, PendingBatch>();
+
+const BATCH_DEBOUNCE_MS = 50;
+
 // -- Schemas --
 
 const OptionItemSchema = Type.Object({
@@ -186,55 +210,106 @@ export async function executeAskQuestion(
   subagentDir: string | null,
   signal?: AbortSignal | null,
 ): Promise<ToolResult> {
-  const dir = subagentDir;
-
-  if (!dir) {
+  if (!subagentDir) {
     return {
       content: [{ type: "text" as const, text: "Error: koan_ask_question is only available in subagent context." }],
       details: undefined,
     };
   }
 
-  if (await ipcFileExists(dir)) {
-    return {
+  return new Promise<ToolResult>((resolve, reject) => {
+    let batch = pendingBatches.get(subagentDir);
+    if (!batch) {
+      batch = { entries: [], timer: null as unknown as ReturnType<typeof setTimeout> };
+      pendingBatches.set(subagentDir, batch);
+    }
+
+    batch.entries.push({ params, resolve, reject });
+
+    // Reset debounce timer on each new question. The 50ms window ensures
+    // all concurrent tool calls from the same LLM turn are collected
+    // before flushing.
+    clearTimeout(batch.timer);
+    const dir = subagentDir;
+    const sig = signal;
+    const currentBatch = batch;
+    batch.timer = setTimeout(() => {
+      pendingBatches.delete(dir);
+      void flushBatch(dir, currentBatch.entries, sig);
+    }, BATCH_DEBOUNCE_MS);
+  });
+}
+
+async function flushBatch(
+  subagentDir: string,
+  entries: BatchEntry[],
+  signal?: AbortSignal | null,
+): Promise<void> {
+  // Guard: IPC file already exists (another request type is pending)
+  if (await ipcFileExists(subagentDir)) {
+    const errorResult: ToolResult = {
       content: [{ type: "text" as const, text: "Error: An IPC request is already pending." }],
       details: undefined,
     };
+    for (const entry of entries) entry.resolve(errorResult);
+    return;
   }
 
-  const ipc = createAskRequest(params);
-  await writeIpcFile(dir, ipc);
+  // Create batch IPC file with all questions
+  const questions = entries.map((e) => ({
+    id: e.params.id,
+    question: e.params.question,
+    context: e.params.context,
+    options: e.params.options,
+    multi: e.params.multi,
+    recommended: e.params.recommended,
+  }));
+  const ipc = createAskRequest(questions);
+  await writeIpcFile(subagentDir, ipc);
 
-  const { outcome, ipc: answeredIpc } = await pollIpcUntilResponse(dir, ipc, signal);
-  const answeredPayload: AskAnswerPayload | null =
-    outcome === "answered" && answeredIpc?.type === "ask"
-      ? (answeredIpc as AskIpcFile).response?.payload ?? null
-      : null;
+  // Poll for batch response
+  const { outcome, ipc: answeredIpc } = await pollIpcUntilResponse(subagentDir, ipc, signal);
 
   switch (outcome) {
     case "answered": {
-      const result = buildQuestionResult(params, answeredPayload);
-      return {
-        content: [{ type: "text" as const, text: buildSessionContent(result) }],
-        details: undefined,
-      };
+      const askIpc = answeredIpc as AskIpcFile;
+      const answers = askIpc.response?.answers ?? [];
+
+      for (const entry of entries) {
+        const answer = answers.find((a) => a.id === entry.params.id) ?? null;
+        const result = buildQuestionResult(entry.params, answer);
+        entry.resolve({
+          content: [{ type: "text" as const, text: buildSessionContent(result) }],
+          details: undefined,
+        });
+      }
+      return;
     }
-    case "cancelled":
-      return {
+    case "cancelled": {
+      const cancelledResult: ToolResult = {
         content: [{ type: "text" as const, text: "The user declined to answer. Proceed with your best judgment." }],
         details: undefined,
       };
-    case "aborted":
-      return {
+      for (const entry of entries) entry.resolve(cancelledResult);
+      return;
+    }
+    case "aborted": {
+      const abortedResult: ToolResult = {
         content: [{ type: "text" as const, text: "The question was aborted." }],
         details: undefined,
       };
+      for (const entry of entries) entry.resolve(abortedResult);
+      return;
+    }
     case "file-gone":
-    default:
-      return {
+    default: {
+      const goneResult: ToolResult = {
         content: [{ type: "text" as const, text: "The question was cancelled." }],
         details: undefined,
       };
+      for (const entry of entries) entry.resolve(goneResult);
+      return;
+    }
   }
 }
 

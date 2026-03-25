@@ -47,7 +47,7 @@ export interface AskResponse {
   id: string;
   respondedAt: string;
   cancelled: boolean;
-  payload: AskAnswerPayload | null;
+  answers: AskAnswerPayload[];
 }
 
 // -- Artifact review types --
@@ -91,7 +91,7 @@ export interface AskIpcFile {
   type: "ask";
   id: string;
   createdAt: string;
-  payload: AskQuestionPayload;
+  questions: AskQuestionPayload[];
   response: AskResponse | null;
 }
 
@@ -174,12 +174,12 @@ export async function deleteIpcFile(dir: string): Promise<void> {
 
 // -- Factory helpers --
 
-export function createAskRequest(payload: AskQuestionPayload): AskIpcFile {
+export function createAskRequest(questions: AskQuestionPayload[]): AskIpcFile {
   return {
     type: "ask",
     id: crypto.randomUUID(),
     createdAt: new Date().toISOString(),
-    payload,
+    questions,
     response: null,
   };
 }
@@ -214,12 +214,12 @@ export function createWorkflowDecisionRequest(payload: WorkflowDecisionPayload):
   };
 }
 
-export function createAskResponse(requestId: string, payload: AskAnswerPayload): AskResponse {
+export function createAskResponse(requestId: string, answers: AskAnswerPayload[]): AskResponse {
   return {
     id: requestId,
     respondedAt: new Date().toISOString(),
     cancelled: false,
-    payload,
+    answers,
   };
 }
 
@@ -228,7 +228,7 @@ export function createCancelledResponse(requestId: string): AskResponse {
     id: requestId,
     respondedAt: new Date().toISOString(),
     cancelled: true,
-    payload: null,
+    answers: [],
   };
 }
 

@@ -62,25 +62,19 @@ async function handleAskRequest(
   webServer: WebServerHandle,
   signal: AbortSignal,
 ): Promise<void> {
-  const { payload } = ipc;
-  const question: AskQuestion = {
-    id: payload.id,
-    question: payload.question,
-    context: payload.context,
-    options: payload.options.map((o) => ({ label: o.label })),
-    multi: payload.multi,
-    recommended: payload.recommended,
-  };
-
-  // Append "Other" option before presenting to the user.
-  const withOther: AskQuestion = {
-    ...question,
-    options: [...question.options, { label: OTHER_OPTION }],
-  };
+  // Build the batch of questions, appending "Other" to each.
+  const questions: AskQuestion[] = ipc.questions.map((q) => ({
+    id: q.id,
+    question: q.question,
+    context: q.context,
+    options: [...q.options.map((o) => ({ label: o.label })), { label: OTHER_OPTION }],
+    multi: q.multi,
+    recommended: q.recommended,
+  }));
 
   let result: AnswerResult;
   try {
-    result = await webServer.requestAnswer(withOther, signal);
+    result = await webServer.requestAnswer(questions, signal);
   } catch (err: unknown) {
     if (err instanceof Error && (err.name === "AbortError" || signal.aborted)) {
       const current = await readIpcFile(subagentDir);
@@ -100,16 +94,19 @@ async function handleAskRequest(
     return;
   }
 
-  const answer: AskAnswerPayload = {
-    id: result.answer.questionId,
-    selectedOptions: result.answer.selectedOptions,
-  };
-  if (result.answer.customInput !== undefined) {
-    answer.customInput = result.answer.customInput;
-  }
+  // Map each answer element to AskAnswerPayload
+  const answers: AskAnswerPayload[] = result.answers.map((a) => {
+    const answer: AskAnswerPayload = {
+      id: a.questionId,
+      selectedOptions: a.selectedOptions,
+    };
+    if (a.customInput !== undefined) {
+      answer.customInput = a.customInput;
+    }
+    return answer;
+  });
 
-  const response = createAskResponse(ipc.id, answer);
-  // Re-read and validate before writing — idempotence guard against stale requests.
+  const response = createAskResponse(ipc.id, answers);
   const current = await readIpcFile(subagentDir);
   if (current !== null && current.type === "ask" && current.response === null && current.id === ipc.id) {
     await writeIpcFile(subagentDir, { ...current, response });

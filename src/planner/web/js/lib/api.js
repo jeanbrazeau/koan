@@ -1,11 +1,11 @@
 import { useStore } from '../store.js'
 
-export async function submitAnswers({ token, requestId, answer }) {
+export async function submitAnswers({ token, requestId, answers }) {
   try {
     const resp = await fetch('/api/answer', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ token, requestId, answer }),
+      body: JSON.stringify({ token, requestId, answers }),
     })
     if (resp.ok) {
       useStore.setState({ pendingInput: null })

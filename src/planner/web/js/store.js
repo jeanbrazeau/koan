@@ -110,7 +110,7 @@ export function handlePipelineEndEvent(d) {
 }
 
 export function handleAskEvent(d) {
-  set({ pendingInput: { type: 'ask', requestId: d.requestId, payload: d.question } })
+  set({ pendingInput: { type: 'ask', requestId: d.requestId, questions: d.questions } })
 }
 
 export function handleModelConfigEvent(d) {

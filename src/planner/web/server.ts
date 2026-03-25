@@ -391,7 +391,7 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
 
     for (const [requestId, entry] of pendingInputs) {
       if (entry.type === "ask") {
-        write("ask", { requestId, question: entry.payload });
+        write("ask", { requestId, questions: entry.payload });
       } else if (entry.type === "model-config") {
         write("model-config", entry.payload);
       } else if (entry.type === "artifact-review") {
@@ -679,37 +679,42 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
 
       if (method === "POST" && pathname === "/api/answer") {
         const body = await readBody(req).catch(() => null);
-        const b = body as { token?: string; requestId?: string; answer?: unknown } | null;
+        const b = body as { token?: string; requestId?: string; answers?: unknown } | null;
         if (!b) { sendJson(res, 400, { ok: false, error: "Invalid body" }); return; }
         if (b.token !== sessionToken) { sendJson(res, 403, { ok: false, error: "Invalid token" }); return; }
-        const { requestId, answer } = b;
-        if (!requestId || !answer || typeof answer !== "object") {
-          sendJson(res, 400, { ok: false, error: "Missing requestId or answer" }); return;
+        const { requestId, answers } = b;
+        if (!requestId || !Array.isArray(answers)) {
+          sendJson(res, 400, { ok: false, error: "Missing requestId or answers array" }); return;
         }
-        const parsed = answer as {
-          questionId?: unknown;
-          selectedOptions?: unknown;
-          customInput?: unknown;
-        };
-        if (
-          typeof parsed.questionId !== "string" ||
-          !Array.isArray(parsed.selectedOptions) ||
-          parsed.selectedOptions.some((s) => typeof s !== "string") ||
-          (parsed.customInput !== undefined && typeof parsed.customInput !== "string")
-        ) {
-          sendJson(res, 400, { ok: false, error: "Invalid answer payload" }); return;
+
+        // Validate each answer element
+        for (const answer of answers) {
+          const parsed = answer as {
+            questionId?: unknown;
+            selectedOptions?: unknown;
+            customInput?: unknown;
+          };
+          if (
+            typeof parsed.questionId !== "string" ||
+            !Array.isArray(parsed.selectedOptions) ||
+            parsed.selectedOptions.some((s: unknown) => typeof s !== "string") ||
+            (parsed.customInput !== undefined && typeof parsed.customInput !== "string")
+          ) {
+            sendJson(res, 400, { ok: false, error: "Invalid answer payload in answers array" }); return;
+          }
         }
 
         const pending = pendingInputs.get(requestId);
         if (!pending || pending.type !== "ask") {
           sendJson(res, 409, { ok: false, error: "No pending ask with this requestId" }); return;
         }
-        const normalizedAnswer: AnswerElement = {
-          questionId: parsed.questionId,
-          selectedOptions: parsed.selectedOptions,
-          ...(parsed.customInput !== undefined ? { customInput: parsed.customInput } : {}),
-        };
-        const result: AnswerResult = { cancelled: false, answer: normalizedAnswer };
+
+        const normalizedAnswers: AnswerElement[] = (answers as Array<{ questionId: string; selectedOptions: string[]; customInput?: string }>).map((a) => ({
+          questionId: a.questionId,
+          selectedOptions: a.selectedOptions,
+          ...(a.customInput !== undefined ? { customInput: a.customInput } : {}),
+        }));
+        const result: AnswerResult = { cancelled: false, answers: normalizedAnswers };
         pending.resolve(result);
         pendingInputs.delete(requestId);
         sendJson(res, 200, { ok: true });
@@ -966,7 +971,7 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
           });
         },
 
-        requestAnswer(question: AskQuestion, signal: AbortSignal): Promise<AnswerResult> {
+        requestAnswer(questions: AskQuestion[], signal: AbortSignal): Promise<AnswerResult> {
           return new Promise<AnswerResult>((res, rej) => {
             const requestId = randomUUID();
             const abortHandler = () => {
@@ -986,9 +991,9 @@ export async function startWebServer(epicDir: string, opts?: WebServerOptions): 
                 signal.removeEventListener("abort", abortHandler);
                 rej(err);
               },
-              payload: question,
+              payload: questions,
             });
-            pushEvent("ask", { requestId, question });
+            pushEvent("ask", { requestId, questions });
             if (signal.aborted) {
               abortHandler();
             } else {

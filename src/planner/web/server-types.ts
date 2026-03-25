@@ -100,7 +100,7 @@ export type AnswerElement = AskSelection & { questionId: string };
 
 export interface AnswerResult {
   cancelled: boolean;
-  answer: AnswerElement;
+  answers: AnswerElement[];
 }
 
 // ---------------------------------------------------------------------------
@@ -196,7 +196,7 @@ export interface NotificationEvent {
 
 export interface AskEvent {
   requestId: string;
-  question: AskQuestion;
+  questions: AskQuestion[];
 }
 
 export interface AskCancelledEvent {
@@ -335,7 +335,7 @@ export interface WebServerHandle {
   clearSubagent(): void;
 
   // Concern 3 -- Blocking human input
-  requestAnswer(question: AskQuestion, signal: AbortSignal): Promise<AnswerResult>;
+  requestAnswer(questions: AskQuestion[], signal: AbortSignal): Promise<AnswerResult>;
   requestModelConfig(): Promise<void>;
   requestArtifactReview(payload: ArtifactReviewPayload, signal: AbortSignal): Promise<ArtifactReviewFeedback>;
   requestWorkflowDecision(payload: WorkflowDecisionPayload, signal: AbortSignal): Promise<WorkflowDecisionFeedback>;
