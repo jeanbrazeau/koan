@@ -48,9 +48,8 @@ const KOAN_SHAPES: Record<string, ToolShape> = {
   koan_retry_story: { keys: ["story_id", "failure_summary"], freeform: ["failure_summary"], highValue: true },
   koan_skip_story: { keys: ["story_id", "reason"], freeform: ["reason"], highValue: true },
   koan_ask_question: {
-    keys: ["id", "question", "context", "options", "multi", "recommended"],
-    arrays: ["options"],
-    freeform: ["question", "context"],
+    keys: ["questions"],
+    arrays: ["questions"],
     highValue: true,
   },
   koan_request_scouts: { keys: [], highValue: true },

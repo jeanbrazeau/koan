@@ -24,29 +24,9 @@ import {
   type ScoutRequest,
 } from "../lib/ipc.js";
 
-// -- Batch coordinator --
-// When the LLM calls koan_ask_question multiple times in one turn, pi
-// executes those tool calls concurrently. The batch coordinator accumulates
-// them via a short debounce (50ms — enough for all concurrent calls to
-// arrive within the same event-loop turn) and writes a single batch IPC
-// file. Each tool call receives a Promise that resolves with its individual
-// answer once the batch response arrives.
-
-interface BatchEntry {
-  params: AskParams;
-  resolve: (result: ToolResult) => void;
-  reject: (error: Error) => void;
-}
-
-interface PendingBatch {
-  entries: BatchEntry[];
-  timer: ReturnType<typeof setTimeout>;
-}
-
-// One pending batch per subagent directory. Cleared on flush.
-const pendingBatches = new Map<string, PendingBatch>();
-
-const BATCH_DEBOUNCE_MS = 50;
+// The tool accepts an array of questions in a single call. All questions are
+// written to a single IPC file and presented to the user one at a time.
+// The tool blocks until all answers arrive, then returns them together.
 
 // -- Schemas --
 
@@ -54,7 +34,7 @@ const OptionItemSchema = Type.Object({
   label: Type.String({ description: "Display label" }),
 });
 
-const AskParamsSchema = Type.Object({
+const QuestionSchema = Type.Object({
   id: Type.String({ description: "Question id (e.g. auth, cache, priority)" }),
   question: Type.String({ description: "Question text" }),
   context: Type.Optional(Type.String({ description: "Optional background/context to help the user answer." })),
@@ -66,6 +46,15 @@ const AskParamsSchema = Type.Object({
   recommended: Type.Optional(
     Type.Number({ description: "0-indexed recommended option." }),
   ),
+});
+
+type Question = Static<typeof QuestionSchema>;
+
+const AskParamsSchema = Type.Object({
+  questions: Type.Array(QuestionSchema, {
+    description: "Questions to ask the user. Presented one at a time.",
+    minItems: 1,
+  }),
 });
 
 type AskParams = Static<typeof AskParamsSchema>;
@@ -159,18 +148,18 @@ function buildSessionContent(result: AskResult): string {
 }
 
 function buildQuestionResult(
-  params: AskParams,
+  q: Question,
   answer: AskAnswerPayload | null,
 ): AskResult {
-  const selectedOptions = answer?.id === params.id ? answer.selectedOptions : [];
-  const customInput = answer?.id === params.id ? answer.customInput : undefined;
+  const selectedOptions = answer?.id === q.id ? answer.selectedOptions : [];
+  const customInput = answer?.id === q.id ? answer.customInput : undefined;
 
   return {
-    id: params.id,
-    question: params.question,
-    context: params.context,
-    options: params.options.map((o) => o.label),
-    multi: params.multi ?? false,
+    id: q.id,
+    question: q.question,
+    context: q.context,
+    options: q.options.map((o) => o.label),
+    multi: q.multi ?? false,
     selectedOptions,
     customInput,
   };
@@ -179,10 +168,10 @@ function buildQuestionResult(
 // -- Tool registration --
 
 const ASK_TOOL_DESCRIPTION = `
-Ask the user for clarification when a choice materially affects the outcome.
+Ask the user for clarification when choices materially affect the outcome.
 
-- Ask exactly one question per call.
-- Prefer 2-5 concise options.
+- Pass all questions in a single call. They are presented to the user one at a time.
+- Prefer 2-5 concise options per question.
 - Use multi=true when multiple answers are valid.
 - Use recommended=<index> (0-indexed) to mark the default option.
 - Optionally include context to give enough background for an informed answer.
@@ -217,57 +206,27 @@ export async function executeAskQuestion(
     };
   }
 
-  return new Promise<ToolResult>((resolve, reject) => {
-    let batch = pendingBatches.get(subagentDir);
-    if (!batch) {
-      batch = { entries: [], timer: null as unknown as ReturnType<typeof setTimeout> };
-      pendingBatches.set(subagentDir, batch);
-    }
-
-    batch.entries.push({ params, resolve, reject });
-
-    // Reset debounce timer on each new question. The 50ms window ensures
-    // all concurrent tool calls from the same LLM turn are collected
-    // before flushing.
-    clearTimeout(batch.timer);
-    const dir = subagentDir;
-    const sig = signal;
-    const currentBatch = batch;
-    batch.timer = setTimeout(() => {
-      pendingBatches.delete(dir);
-      void flushBatch(dir, currentBatch.entries, sig);
-    }, BATCH_DEBOUNCE_MS);
-  });
-}
-
-async function flushBatch(
-  subagentDir: string,
-  entries: BatchEntry[],
-  signal?: AbortSignal | null,
-): Promise<void> {
   // Guard: IPC file already exists (another request type is pending)
   if (await ipcFileExists(subagentDir)) {
-    const errorResult: ToolResult = {
+    return {
       content: [{ type: "text" as const, text: "Error: An IPC request is already pending." }],
       details: undefined,
     };
-    for (const entry of entries) entry.resolve(errorResult);
-    return;
   }
 
-  // Create batch IPC file with all questions
-  const questions = entries.map((e) => ({
-    id: e.params.id,
-    question: e.params.question,
-    context: e.params.context,
-    options: e.params.options,
-    multi: e.params.multi,
-    recommended: e.params.recommended,
+  // Write all questions to a single IPC file
+  const questions = params.questions.map((q) => ({
+    id: q.id,
+    question: q.question,
+    context: q.context,
+    options: q.options,
+    multi: q.multi,
+    recommended: q.recommended,
   }));
   const ipc = createAskRequest(questions);
   await writeIpcFile(subagentDir, ipc);
 
-  // Poll for batch response
+  // Poll until the user answers all questions
   const { outcome, ipc: answeredIpc } = await pollIpcUntilResponse(subagentDir, ipc, signal);
 
   switch (outcome) {
@@ -275,41 +234,34 @@ async function flushBatch(
       const askIpc = answeredIpc as AskIpcFile;
       const answers = askIpc.response?.answers ?? [];
 
-      for (const entry of entries) {
-        const answer = answers.find((a) => a.id === entry.params.id) ?? null;
-        const result = buildQuestionResult(entry.params, answer);
-        entry.resolve({
-          content: [{ type: "text" as const, text: buildSessionContent(result) }],
-          details: undefined,
-        });
+      const resultLines: string[] = [];
+      for (const q of params.questions) {
+        const answer = answers.find((a) => a.id === q.id) ?? null;
+        const result = buildQuestionResult(q, answer);
+        resultLines.push(buildSessionContent(result));
       }
-      return;
+
+      return {
+        content: [{ type: "text" as const, text: resultLines.join("\n\n---\n\n") }],
+        details: undefined,
+      };
     }
-    case "cancelled": {
-      const cancelledResult: ToolResult = {
+    case "cancelled":
+      return {
         content: [{ type: "text" as const, text: "The user declined to answer. Proceed with your best judgment." }],
         details: undefined,
       };
-      for (const entry of entries) entry.resolve(cancelledResult);
-      return;
-    }
-    case "aborted": {
-      const abortedResult: ToolResult = {
+    case "aborted":
+      return {
         content: [{ type: "text" as const, text: "The question was aborted." }],
         details: undefined,
       };
-      for (const entry of entries) entry.resolve(abortedResult);
-      return;
-    }
     case "file-gone":
-    default: {
-      const goneResult: ToolResult = {
+    default:
+      return {
         content: [{ type: "text" as const, text: "The question was cancelled." }],
         details: undefined,
       };
-      for (const entry of entries) entry.resolve(goneResult);
-      return;
-    }
   }
 }
 
