@@ -213,11 +213,45 @@
 
 .question-context p {
   margin: 0 0 var(--space-2) 0;
-  white-space: pre-wrap;
 }
 
 .question-context p:last-child {
   margin-bottom: 0;
+}
+
+.question-context code,
+.question-text code,
+.option-text code {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 1px 5px;
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+}
+
+.question-context strong,
+.question-text strong,
+.option-text strong {
+  color: var(--text-strong);
+  font-weight: 600;
+}
+
+.question-context a,
+.question-text a,
+.option-text a {
+  color: var(--terracotta);
+  text-decoration: underline;
+}
+
+.question-context ul,
+.question-context ol {
+  padding-left: var(--space-6);
+  margin: var(--space-2) 0;
+}
+
+.question-context li {
+  margin: 2px 0;
 }
 
 .question-text {

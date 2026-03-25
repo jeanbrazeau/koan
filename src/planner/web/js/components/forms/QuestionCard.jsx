@@ -1,4 +1,5 @@
 import { useState } from 'preact/hooks'
+import { Md, MdInline } from '../Markdown.jsx'
 
 export function QuestionCard({ question, onSelect }) {
   const [selectedIndexes, setSelectedIndexes] = useState(() => new Set())
@@ -7,11 +8,7 @@ export function QuestionCard({ question, onSelect }) {
   const options    = question.options || []
   const allOptions = options.map(o => o.label)
   const otherIndex = allOptions.findIndex(l => l === 'Other (type your own)')
-  const contextParagraphs = (question.context || '')
-    .trim()
-    .split(/\n\s*\n/g)
-    .map(p => p.trim())
-    .filter(Boolean)
+  const contextText = (question.context || '').trim()
 
   function buildSelection(indexes, otherVal) {
     if (question.multi) {
@@ -64,13 +61,9 @@ export function QuestionCard({ question, onSelect }) {
       <div class="question-header">{question.id}</div>
       {question.multi && <div class="question-multi-hint">select all that apply</div>}
 
-      {contextParagraphs.length > 0 && (
-        <div class="question-context">
-          {contextParagraphs.map((p, i) => <p key={i}>{p}</p>)}
-        </div>
-      )}
+      {contextText && <Md text={contextText} class="question-context" />}
 
-      <div class="question-text">{question.question}</div>
+      <div class="question-text"><MdInline text={question.question} /></div>
       <div class="options-list">
         {allOptions.map((label, i) => {
           const isSelected    = selectedIndexes.has(i)
@@ -78,7 +71,7 @@ export function QuestionCard({ question, onSelect }) {
           return (
             <div key={i} class={`option${i === otherIndex ? ' option-other' : ''}${isSelected ? ' selected' : ''}`} onClick={() => handleSelect(i)}>
               <span class={question.multi ? 'checkbox-dot' : 'radio-dot'} />
-              <span class="option-text">{label}</span>
+              <MdInline text={label} class="option-text" />
               {isRecommended && <span class="recommended-badge">recommended</span>}
             </div>
           )
