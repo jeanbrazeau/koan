@@ -281,14 +281,16 @@ function formatPairedResult(e: ToolResultEvent, input: Record<string, unknown>):
   return { tool: e.tool, summary: "", highValue: false, inFlight: false };
 }
 
-function formatLifecycleEvent(e: PhaseStartEvent | StepTransitionEvent | PhaseEndEvent): LogLine {
+function formatLifecycleEvent(e: PhaseStartEvent | StepTransitionEvent | PhaseEndEvent): LogLine | null {
   switch (e.kind) {
     case "phase_start":
-      return { tool: "phase", summary: `${e.phase} (${e.totalSteps} steps)`, highValue: false, inFlight: false };
+      // Phase labels removed — subagent activity flows seamlessly.
+      return null;
     case "step_transition":
-      return { tool: `step ${e.step}/${e.totalSteps}`, summary: e.name, highValue: false, inFlight: false };
+      return { tool: "step", summary: e.name, highValue: false, inFlight: false };
     case "phase_end":
-      return { tool: "phase", summary: e.detail ? `${e.outcome} · ${e.detail}` : e.outcome, highValue: false, inFlight: false };
+      // Phase end labels removed — subagent activity flows seamlessly.
+      return null;
   }
 }
 
@@ -407,7 +409,8 @@ function buildChronologicalLog(events: AuditEvent[], count: number): LogLine[] {
         thinkingStartTs = null;
       }
       if (e.kind === "phase_end") phaseEnded = true;
-      lines.push(formatLifecycleEvent(e));
+      const lifecycleLine = formatLifecycleEvent(e);
+      if (lifecycleLine) lines.push(lifecycleLine);
       thinkingStartTs = e.ts;
     }
   }
