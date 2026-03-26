@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import Response
-from starlette.routing import Route
+from starlette.routing import Mount, Route
 
 if TYPE_CHECKING:
     from ..state import AppState
@@ -24,10 +24,6 @@ async def landing_page(r: Request) -> Response:
 
 
 async def sse_stream(r: Request) -> Response:
-    return NOT_IMPL
-
-
-async def mcp_endpoint(r: Request) -> Response:
     return NOT_IMPL
 
 
@@ -57,6 +53,11 @@ async def static_files(r: Request) -> Response:
 
 # -- App factory --------------------------------------------------------------
 
+def _build_mcp(app_state: AppState):
+    from .mcp_endpoint import build_mcp_asgi_app
+    return build_mcp_asgi_app(app_state)
+
+
 def create_app(app_state: AppState) -> Starlette:
     async def startup_handler() -> None:
         from ..driver import driver_main
@@ -65,7 +66,7 @@ def create_app(app_state: AppState) -> Starlette:
     routes = [
         Route("/", landing_page),
         Route("/events", sse_stream),
-        Route("/mcp", mcp_endpoint, methods=["POST"]),
+        Mount("/mcp", app=_build_mcp(app_state)),
         Route("/api/start-run", api_start_run, methods=["POST"]),
         Route("/api/answer", api_answer, methods=["POST"]),
         Route("/api/artifact-review", api_artifact_review, methods=["POST"]),
