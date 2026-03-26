@@ -32,6 +32,19 @@ ModelTier = Literal["strong", "standard", "cheap"]
 
 ALL_MODEL_TIERS: tuple[ModelTier, ...] = ("strong", "standard", "cheap")
 
+StoryStatus = Literal[
+    "pending",
+    "selected",
+    "planning",
+    "executing",
+    "verifying",
+    "done",
+    "retry",
+    "skipped",
+]
+
+DEFAULT_MAX_RETRIES = 2
+
 ROLE_MODEL_TIER: dict[SubagentRole, ModelTier] = {
     "intake": "strong",
     "scout": "cheap",
