@@ -30,6 +30,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "koan_ask_question",
         "koan_request_scouts",
         "koan_review_artifact",
+        "koan_set_confidence",
         "edit",
         "write",
     }),
@@ -81,6 +82,20 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "koan_propose_workflow",
         "koan_set_next_phase",
     }),
+    "ticket-breakdown": frozenset({
+        "koan_complete_step",
+        "koan_ask_question",
+        "koan_request_scouts",
+        "edit",
+        "write",
+    }),
+    "cross-artifact-validator": frozenset({
+        "koan_complete_step",
+        "koan_ask_question",
+        "koan_request_scouts",
+        "edit",
+        "write",
+    }),
 }
 
 PLANNING_ROLES: frozenset[str] = frozenset({
@@ -91,6 +106,8 @@ PLANNING_ROLES: frozenset[str] = frozenset({
     "orchestrator",
     "planner",
     "workflow-orchestrator",
+    "ticket-breakdown",
+    "cross-artifact-validator",
 })
 
 STEP_1_BLOCKED_TOOLS: frozenset[str] = frozenset({

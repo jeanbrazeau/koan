@@ -24,6 +24,8 @@ SubagentRole = Literal[
     "executor",
     "brief-writer",
     "workflow-orchestrator",
+    "ticket-breakdown",
+    "cross-artifact-validator",
 ]
 
 ModelTier = Literal["strong", "standard", "cheap"]
@@ -39,4 +41,6 @@ ROLE_MODEL_TIER: dict[SubagentRole, ModelTier] = {
     "planner": "strong",
     "executor": "standard",
     "workflow-orchestrator": "strong",
+    "ticket-breakdown": "strong",
+    "cross-artifact-validator": "strong",
 }
