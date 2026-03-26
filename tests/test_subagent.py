@@ -299,6 +299,40 @@ class TestSpawnSubagent:
         state = json.loads((Path(subagent_dir) / "state.json").read_text())
         assert state["status"] == "completed"
 
+    @pytest.mark.anyio
+    async def test_model_field_propagated_to_agent_state(self, tmp_path):
+        """AgentState.model is set from config model_tiers via ROLE_MODEL_TIER."""
+        from koan.config import ModelTierConfig
+
+        app_state = FakeAppState(port=9999)
+        app_state.config = FakeConfig(
+            model_tiers=ModelTierConfig(strong="test-model"),
+        )
+
+        subagent_dir = str(tmp_path / "sub")
+        Path(subagent_dir).mkdir()
+
+        task = {
+            "role": "intake",
+            "epic_dir": str(tmp_path),
+            "subagent_dir": subagent_dir,
+        }
+
+        captured_model = []
+
+        def capture_sse(app, event_type, payload):
+            if event_type == "subagent" and isinstance(payload, dict):
+                captured_model.append(payload.get("model"))
+
+        with patch("koan.subagent.PHASE_MODULE_MAP", {"intake": _fake_phase_module()}), \
+             patch("koan.subagent._push_sse", side_effect=capture_sse):
+            from koan.subagent import spawn_subagent
+
+            await spawn_subagent(task, app_state, runner=FakeRunner())
+
+        assert any(m == "test-model" for m in captured_model), \
+            f"Expected 'test-model' in SSE payloads, got {captured_model}"
+
 
 # -- fold purity (supplementary) ----------------------------------------------
 

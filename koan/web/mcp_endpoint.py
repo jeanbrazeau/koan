@@ -248,7 +248,7 @@ async def koan_review_artifact(path: str = "", description: str = "") -> str:
     accepted = result.get("accepted", response == "" or response.strip().lower() in ("", "ok", "approved", "lgtm", "accept"))
     agent.phase_ctx.last_review_accepted = accepted
 
-    return response
+    return "ACCEPTED" if accepted else f"REVISION REQUESTED: {response}"
 
 
 @mcp.tool(name="koan_propose_workflow")

@@ -305,6 +305,7 @@ async def api_answer(r: Request) -> Response:
 async def api_artifact_review(r: Request) -> Response:
     body = await r.json()
     response = body.get("response", "")
+    accepted = body.get("accepted", False)
     token = body.get("token", "")
 
     st = _app_state(r)
@@ -314,7 +315,7 @@ async def api_artifact_review(r: Request) -> Response:
 
     interaction = active
     activate_next_interaction(st)
-    interaction.future.set_result({"response": response})
+    interaction.future.set_result({"response": response, "accepted": accepted})
     return JSONResponse({"ok": True})
 
 
@@ -328,6 +329,27 @@ async def api_workflow_decision(r: Request) -> Response:
     active = st.active_interaction
     if active is None or active.type != "workflow-decision" or active.token != token:
         return _stale_response()
+
+    # Extract valid phases from the active interaction payload
+    valid_phases: set[str] = set()
+    for turn in active.payload.get("chat_turns", []):
+        for rp in turn.get("recommended_phases", []):
+            p = rp.get("phase", "")
+            if p:
+                valid_phases.add(p)
+
+    if not phase:
+        return JSONResponse(
+            {"ok": False, "error": "empty_phase", "message": "A phase must be selected"},
+            status_code=422,
+        )
+
+    if valid_phases and phase not in valid_phases:
+        return JSONResponse(
+            {"ok": False, "error": "invalid_phase",
+             "message": f"Phase '{phase}' is not among the proposed options"},
+            status_code=422,
+        )
 
     interaction = active
     activate_next_interaction(st)

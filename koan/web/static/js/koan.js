@@ -130,6 +130,10 @@
           var el = document.getElementById(d.target);
           if (el) {
             el.outerHTML = d.html;
+            // Reset workflow state when a new workflow-decision interaction arrives
+            if (evt === "workflow-decision") {
+              selectedWorkflowPhase = null;
+            }
             // Re-bind event listeners after swap
             bindDynamicHandlers();
           }
@@ -340,7 +344,7 @@
 
     // Artifact review accept
     if (tgt.id === "btn-accept-artifact" || tgt.closest("#btn-accept-artifact")) {
-      submitArtifactReview("accept");
+      submitArtifactReview(null, true);
       return;
     }
 
@@ -502,12 +506,15 @@
       .catch(function () { notify("Network error", "error"); });
   }
 
-  function submitArtifactReview(response) {
+  function submitArtifactReview(response, accepted) {
     var token = ($("#artifact-review-form") || {}).getAttribute("data-token") || "";
+    var body = accepted
+      ? { accepted: true, token: token }
+      : { response: response, token: token };
     fetch("/api/artifact-review", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ response: response, token: token }),
+      body: JSON.stringify(body),
     })
       .then(function (r) { return r.json(); })
       .then(function (d) {
@@ -517,13 +524,17 @@
   }
 
   function submitWorkflowDecision() {
+    if (!selectedWorkflowPhase) {
+      notify("Please select a phase before continuing", "warning");
+      return;
+    }
     var token = ($("#workflow-form") || {}).getAttribute("data-token") || "";
     var ta = $("#workflow-textarea");
     fetch("/api/workflow-decision", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        phase: selectedWorkflowPhase || "",
+        phase: selectedWorkflowPhase,
         context: ta ? ta.value : "",
         token: token,
       }),

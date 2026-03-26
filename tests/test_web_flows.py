@@ -157,3 +157,29 @@ def test_live_page_when_running(client, app_state):
     assert resp.status_code == 200
     assert "pill-strip" in resp.text
     assert "activity-feed-inner" in resp.text
+
+
+# -- Workflow interaction SSE payload -----------------------------------------
+
+def test_workflow_interaction_sse_payload_shape(app_state):
+    from koan.driver import push_sse
+
+    push_sse(app_state, "interaction", {
+        "type": "workflow-decision",
+        "token": "tok",
+        "chat_turns": [{
+            "role": "orchestrator",
+            "status_report": "Done",
+            "recommended_phases": [{
+                "phase": "tech-plan",
+                "context": "next",
+                "recommended": True,
+            }],
+        }],
+    })
+
+    payload = app_state.last_sse_values["interaction"]
+    assert "html" in payload
+    assert payload["target"] == "workspace-main-content"
+    assert "workflow-option" in payload["html"]
+    assert 'data-phase="tech-plan"' in payload["html"]
