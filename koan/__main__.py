@@ -23,7 +23,7 @@ def main() -> None:
     setup_logging(args.log_level)
 
     config = asyncio.run(load_koan_config())
-    app_state = AppState(config=config)
+    app_state = AppState(config=config, port=args.port)
     app = create_app(app_state)
 
     host = "127.0.0.1"

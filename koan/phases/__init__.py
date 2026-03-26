@@ -47,3 +47,34 @@ class PhaseModule(Protocol):
     def get_next_step(self, step: int, ctx: PhaseContext) -> int | None: ...
     def validate_step_completion(self, step: int, ctx: PhaseContext) -> str | None: ...
     async def on_loop_back(self, from_step: int, to_step: int, ctx: PhaseContext) -> None: ...
+
+
+# -- Phase module registry ----------------------------------------------------
+# Maps each SubagentRole string to its phase module.
+
+from . import (
+    brief_writer,
+    core_flows,
+    cross_artifact_validation,
+    executor,
+    intake,
+    orchestrator,
+    scout,
+    tech_plan as planner,
+    ticket_breakdown,
+    workflow_orchestrator,
+)
+from typing import Any
+
+PHASE_MODULE_MAP: dict[str, Any] = {
+    "intake": intake,
+    "scout": scout,
+    "brief-writer": brief_writer,
+    "decomposer": core_flows,
+    "orchestrator": orchestrator,
+    "planner": planner,
+    "executor": executor,
+    "workflow-orchestrator": workflow_orchestrator,
+    "ticket-breakdown": ticket_breakdown,
+    "cross-artifact-validator": cross_artifact_validation,
+}

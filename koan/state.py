@@ -23,6 +23,7 @@ class AgentState:
     phase_module: Any = None
     phase_ctx: Any = None
     event_log: Any = None
+    handshake_observed: bool = False
     pending_tool: asyncio.Future | None = None
     token_count: dict = field(default_factory=lambda: {"sent": 0, "received": 0})
     started_at: datetime = field(default_factory=datetime.utcnow)
@@ -40,4 +41,5 @@ class AppState:
     interaction_queue_max: int = 8
     frozen_logs: list = field(default_factory=list)
     config: KoanConfig = field(default_factory=KoanConfig)
+    port: int = 8000
     last_sse_values: dict[str, Any] = field(default_factory=dict)

@@ -1,6 +1,6 @@
 # Driver FSM -- coordinates phase transitions for an epic run.
 # Pure routing logic (route_from_state) plus async orchestration helpers.
-# spawn_subagent is a T6 stub; push_sse is a T8 stub.
+# push_sse is a T8 stub.
 
 from __future__ import annotations
 
@@ -29,6 +29,7 @@ from .lib.phase_dag import (
     is_valid_transition,
 )
 from .logger import get_logger
+from .subagent import spawn_subagent
 from .types import DEFAULT_MAX_RETRIES, EpicPhase, SubagentRole
 
 if TYPE_CHECKING:
@@ -83,18 +84,12 @@ def route_from_state(stories: list[dict]) -> dict:
     return {"action": "error", "error": "no actionable stories found"}
 
 
-# -- Stubs (T6 / T8) ---------------------------------------------------------
+# -- Stubs (T8) ---------------------------------------------------------------
 
 def push_sse(app_state: AppState, event_type: str, payload: Any) -> None:
     """SSE push stub -- logs and no-ops. T8 will replace."""
     log.info("SSE [%s]: %s", event_type, payload)
 
-
-async def spawn_subagent(task: dict, app_state: AppState) -> int:
-    """Subagent spawn stub -- T6 will implement."""
-    raise NotImplementedError(
-        "spawn_subagent is a T6 stub; not yet implemented"
-    )
 
 
 # -- Workflow status ----------------------------------------------------------
