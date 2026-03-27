@@ -127,7 +127,11 @@ def _build_subagent_display(st: AppState) -> dict | None:
             "role": agent.role,
             "model": agent.model or "--",
             "step": agent.step,
-            "step_name": f"step {agent.step}",
+            "step_name": (
+                agent.phase_module.STEP_NAMES.get(agent.step, f"step {agent.step}")
+                if agent.phase_module and hasattr(agent.phase_module, "STEP_NAMES")
+                else f"step {agent.step}"
+            ),
             "tokens_display": _format_tokens(
                 agent.token_count.get("sent", 0),
                 agent.token_count.get("received", 0),
@@ -269,6 +273,10 @@ async def api_start_run(r: Request) -> Response:
     scout_concurrency = body.get("scout_concurrency")
     if isinstance(scout_concurrency, int) and scout_concurrency > 0:
         st.config.scout_concurrency = scout_concurrency
+
+    if model_tiers is not None or scout_concurrency is not None:
+        from ..config import save_koan_config
+        await save_koan_config(st.config)
 
     # Create epic directory
     epic_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"

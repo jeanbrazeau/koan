@@ -519,6 +519,9 @@ async def run_story_loop(app_state: AppState, instructions: str | None) -> dict:
             max_retries = story.get("maxRetries", DEFAULT_MAX_RETRIES)
             if retry_count >= max_retries:
                 log.warning("story %s exceeded retry budget, skipping", sid)
+                # save_story_state merges with existing state ({**existing, **updates}),
+                # so maxRetries and other fields not listed here are preserved from
+                # the prior write.
                 await save_story_state(
                     epic_dir, sid,
                     {
@@ -531,6 +534,9 @@ async def run_story_loop(app_state: AppState, instructions: str | None) -> dict:
                 push_sse(app_state, "story", {"storyId": sid, "status": "skipped"})
             else:
                 log.info("retrying story %s (attempt %d)", sid, retry_count + 1)
+                # save_story_state merges with existing state ({**existing, **updates}),
+                # so maxRetries and other fields not listed here are preserved from
+                # the prior write.
                 await save_story_state(
                     epic_dir, sid,
                     {

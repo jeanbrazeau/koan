@@ -53,7 +53,7 @@ def _build_phase_ctx(task: dict, subagent_dir: str) -> PhaseContext:
     return PhaseContext(
         epic_dir=task.get("epic_dir", ""),
         subagent_dir=subagent_dir,
-        phase_instructions=task.get("instructions") or task.get("phase_instructions"),
+        phase_instructions=task.get("instructions") or task.get("phase_instructions") or task.get("task"),
         story_id=task.get("story_id"),
         step_sequence=task.get("step_sequence"),
         completed_phase=task.get("completed_phase"),
@@ -192,7 +192,8 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
                         "agent_id": agent_id,
                     })
                 elif ev.type == "tool_call":
-                    agent.token_count["sent"] = agent.token_count.get("sent", 0) + len(ev.content or "")
+                    # tool_call events carry tool metadata (not input tokens),
+                    # so no token counter is incremented here.
                     # Close previous in-flight tool
                     if last_tool:
                         _push_sse(app_state, "logs", {
