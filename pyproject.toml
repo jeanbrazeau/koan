@@ -14,7 +14,7 @@ dependencies = [
 koan = "koan.__main__:main"
 
 [dependency-groups]
-dev = ["pytest", "anyio", "pytest-anyio"]
+dev = ["pytest>=8.0", "anyio>=4.0"]
 
 [build-system]
 requires = ["hatchling"]

@@ -1,6 +1,5 @@
 # Driver FSM -- coordinates phase transitions for an epic run.
 # Pure routing logic (route_from_state) plus async orchestration helpers.
-# push_sse is a T8 stub.
 
 from __future__ import annotations
 
