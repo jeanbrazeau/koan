@@ -6,6 +6,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, Protocol
 
+from ..types import AgentInstallation, ModelInfo, ThinkingMode
+
 
 @dataclass(kw_only=True)
 class StreamEvent:
@@ -33,7 +35,17 @@ class RunnerError(RuntimeError):
 
 class Runner(Protocol):
     name: str
+    supported_thinking_modes: frozenset[ThinkingMode]
 
-    def build_command(self, boot_prompt: str, mcp_url: str, model: str | None) -> list[str]: ...
+    def build_command(
+        self,
+        boot_prompt: str,
+        mcp_url: str,
+        installation: AgentInstallation,
+        model: str,
+        thinking: ThinkingMode,
+    ) -> list[str]: ...
+
+    def list_models(self, binary: str) -> list[ModelInfo]: ...
 
     def parse_stream_event(self, line: str) -> list[StreamEvent]: ...

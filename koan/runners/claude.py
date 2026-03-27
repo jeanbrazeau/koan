@@ -6,16 +6,56 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ..types import AgentInstallation, ModelInfo, ThinkingMode
 from .base import RunnerDiagnostic, RunnerError, StreamEvent
+
+THINKING_BUDGET: dict[ThinkingMode, int] = {
+    "low": 1024,
+    "medium": 8000,
+    "high": 16000,
+    "xhigh": 32000,
+}
 
 
 class ClaudeRunner:
     name = "claude"
+    supported_thinking_modes: frozenset[ThinkingMode] = frozenset(
+        {"disabled", "low", "medium", "high", "xhigh"}
+    )
 
     def __init__(self, *, subagent_dir: str) -> None:
         self.subagent_dir = subagent_dir
 
-    def build_command(self, boot_prompt: str, mcp_url: str, model: str | None) -> list[str]:
+    def list_models(self, binary: str) -> list[ModelInfo]:
+        all_modes: frozenset[ThinkingMode] = frozenset(
+            {"disabled", "low", "medium", "high", "xhigh"}
+        )
+        return [
+            ModelInfo(alias="opus", display_name="Opus", thinking_modes=all_modes, tier_hint="strong"),
+            ModelInfo(alias="sonnet", display_name="Sonnet", thinking_modes=all_modes, tier_hint="standard"),
+            ModelInfo(
+                alias="haiku", display_name="Haiku",
+                thinking_modes=frozenset({"disabled", "low"}),
+                tier_hint="cheap",
+            ),
+        ]
+
+    def build_command(
+        self,
+        boot_prompt: str,
+        mcp_url: str,
+        installation: AgentInstallation,
+        model: str,
+        thinking: ThinkingMode,
+    ) -> list[str]:
+        if thinking not in self.supported_thinking_modes:
+            raise RunnerError(RunnerDiagnostic(
+                code="unsupported_thinking_mode",
+                runner="claude",
+                stage="build_command",
+                message=f"Thinking mode '{thinking}' is not supported by claude",
+            ))
+
         config_dir = Path(self.subagent_dir)
         config_path = config_dir / "mcp-config.json"
         config_data = {"mcpServers": {"koan": {"type": "http", "url": mcp_url}}}
@@ -34,12 +74,14 @@ class ClaudeRunner:
             )) from e
 
         cmd = [
-            "claude", "-p", boot_prompt,
+            installation.binary, "-p", boot_prompt,
             "--output-format", "stream-json",
             "--mcp-config", str(config_path),
         ]
-        if model is not None:
-            cmd.extend(["--model", model])
+        if thinking != "disabled":
+            cmd.extend(["--thinking-budget-tokens", str(THINKING_BUDGET[thinking])])
+        cmd.extend(["--model", model])
+        cmd.extend(installation.extra_args)
         return cmd
 
     def parse_stream_event(self, line: str) -> list[StreamEvent]:

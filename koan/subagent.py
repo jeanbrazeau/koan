@@ -16,8 +16,9 @@ from .audit import EventLog
 from .epic_state import ensure_subagent_directory
 from .logger import get_logger
 from .phases import PHASE_MODULE_MAP, PhaseContext
-from .runners import RunnerDiagnostic, RunnerError, resolve_runner
-from .types import ROLE_MODEL_TIER
+from .config import load_koan_config
+from .runners import RunnerDiagnostic, RunnerError
+from .runners.registry import RunnerRegistry
 
 if TYPE_CHECKING:
     from .runners.base import Runner
@@ -81,15 +82,29 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
     else:
         Path(subagent_dir).mkdir(parents=True, exist_ok=True)
 
-    # Resolve runner
+    # Resolve runner via registry
     if runner is None:
-        runner = resolve_runner(role, app_state.config, subagent_dir)
+        config = await load_koan_config()
+        registry = RunnerRegistry()
+        installation, model_alias, thinking_mode = registry.resolve_agent_config(
+            role, config, balanced_profile=app_state.balanced_profile,
+        )
 
-    # Determine model from config
-    tier = ROLE_MODEL_TIER.get(role, "standard")
-    model = None
-    if app_state.config.model_tiers is not None:
-        model = getattr(app_state.config.model_tiers, tier, None)
+        # Fail fast on missing binary
+        if not Path(installation.binary).exists():
+            raise RunnerError(RunnerDiagnostic(
+                code="binary_not_found",
+                runner=installation.runner_type,
+                stage="spawn",
+                message=f"Binary not found: {installation.binary}",
+            ))
+
+        runner = registry.get_runner(installation.runner_type, subagent_dir)
+        model = model_alias
+    else:
+        model = None
+        installation = None
+        thinking_mode = None
 
     # Write task.json
     mcp_url = f"http://127.0.0.1:{app_state.port}/mcp?agent_id={agent_id}"
@@ -127,9 +142,15 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
     # Emit phase start
     await event_log.emit_phase_start(phase_module.TOTAL_STEPS)
 
-    # Build command
+    # Build command -- use full 5-arg signature when registry-resolved,
+    # fall back to legacy 3-arg for externally provided runners.
     try:
-        cmd = runner.build_command(boot_prompt(role), mcp_url, model)
+        if installation is not None and thinking_mode is not None:
+            cmd = runner.build_command(
+                boot_prompt(role), mcp_url, installation, model, thinking_mode,
+            )
+        else:
+            cmd = runner.build_command(boot_prompt(role), mcp_url, model)
     except RunnerError as e:
         await event_log.emit_runner_diagnostic(e.diagnostic)
         _push_sse(app_state, "notification", {

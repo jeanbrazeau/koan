@@ -6,16 +6,49 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from ..types import AgentInstallation, ModelInfo, ThinkingMode
 from .base import RunnerDiagnostic, RunnerError, StreamEvent
 
 
 class GeminiRunner:
     name = "gemini"
+    supported_thinking_modes: frozenset[ThinkingMode] = frozenset(
+        {"disabled", "low", "medium", "high"}
+    )
 
     def __init__(self, *, subagent_dir: str) -> None:
         self.subagent_dir = subagent_dir
 
-    def build_command(self, boot_prompt: str, mcp_url: str, model: str | None) -> list[str]:
+    def list_models(self, binary: str) -> list[ModelInfo]:
+        return [
+            ModelInfo(
+                alias="gemini-pro",
+                tier_hint="strong",
+                thinking_modes=frozenset({"disabled", "low", "medium", "high"}),
+            ),
+            ModelInfo(
+                alias="gemini-flash",
+                tier_hint="cheap",
+                thinking_modes=frozenset({"disabled", "low"}),
+            ),
+        ]
+
+    def build_command(
+        self,
+        boot_prompt: str,
+        mcp_url: str,
+        installation: AgentInstallation,
+        model: str,
+        thinking: ThinkingMode,
+    ) -> list[str]:
+        if thinking not in self.supported_thinking_modes:
+            raise RunnerError(RunnerDiagnostic(
+                code="unsupported_thinking_mode",
+                runner="gemini",
+                stage="build_command",
+                message=f"Thinking mode '{thinking}' is not supported by gemini",
+            ))
+
         gemini_dir = Path(self.subagent_dir) / ".gemini"
         settings_path = gemini_dir / "settings.json"
 
@@ -23,9 +56,11 @@ class GeminiRunner:
         self._merge_mcp(existing, mcp_url, settings_path)
         self._write_settings(existing, settings_path, gemini_dir)
 
-        cmd = ["gemini", "--output-format", "stream-json", "-p", boot_prompt]
-        if model is not None:
-            cmd.extend(["--model", model])
+        cmd = [installation.binary, "--output-format", "stream-json", "-p", boot_prompt]
+        if thinking != "disabled":
+            cmd.extend(["--thinking-mode", thinking])
+        cmd.extend(["--model", model])
+        cmd.extend(installation.extra_args)
         return cmd
 
     def parse_stream_event(self, line: str) -> list[StreamEvent]:

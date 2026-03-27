@@ -5,20 +5,51 @@ from __future__ import annotations
 
 import json
 
-from .base import StreamEvent
+from ..types import AgentInstallation, ModelInfo, ThinkingMode
+from .base import RunnerDiagnostic, RunnerError, StreamEvent
 
 
 class CodexRunner:
     name = "codex"
+    supported_thinking_modes: frozenset[ThinkingMode] = frozenset({"disabled"})
 
-    def build_command(self, boot_prompt: str, mcp_url: str, model: str | None) -> list[str]:
+    def list_models(self, binary: str) -> list[ModelInfo]:
+        return [
+            ModelInfo(
+                alias="gpt-5",
+                tier_hint="strong",
+                thinking_modes=frozenset({"disabled"}),
+            ),
+            ModelInfo(
+                alias="gpt-5-mini",
+                tier_hint="cheap",
+                thinking_modes=frozenset({"disabled"}),
+            ),
+        ]
+
+    def build_command(
+        self,
+        boot_prompt: str,
+        mcp_url: str,
+        installation: AgentInstallation,
+        model: str,
+        thinking: ThinkingMode,
+    ) -> list[str]:
+        if thinking != "disabled":
+            raise RunnerError(RunnerDiagnostic(
+                code="unsupported_thinking_mode",
+                runner="codex",
+                stage="build_command",
+                message=f"Thinking mode '{thinking}' is not supported by codex",
+            ))
+
         cmd = [
-            "codex", "exec", "--json",
+            installation.binary, "exec", "--json",
             "-c", f"mcp_servers.koan.url={mcp_url}",
             boot_prompt,
         ]
-        if model is not None:
-            cmd.extend(["--model", model])
+        cmd.extend(["--model", model])
+        cmd.extend(installation.extra_args)
         return cmd
 
     def parse_stream_event(self, line: str) -> list[StreamEvent]:

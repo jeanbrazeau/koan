@@ -172,15 +172,8 @@ async def landing_page(r: Request) -> Response:
 
     env = _get_jinja()
     tmpl = env.get_template("landing.html")
-    tiers = None
-    if st.config.model_tiers:
-        tiers = {
-            "strong": st.config.model_tiers.strong,
-            "standard": st.config.model_tiers.standard,
-            "cheap": st.config.model_tiers.cheap,
-        }
     html = tmpl.render(
-        tiers=tiers,
+        tiers=None,
         scout_concurrency=st.config.scout_concurrency,
     )
     return Response(html, media_type="text/html")
@@ -191,13 +184,6 @@ def _render_live(st: AppState) -> Response:
     tmpl = env.get_template("live.html")
 
     current_phase = st.phase or "intake"
-    tiers = None
-    if st.config.model_tiers:
-        tiers = {
-            "strong": st.config.model_tiers.strong,
-            "standard": st.config.model_tiers.standard,
-            "cheap": st.config.model_tiers.cheap,
-        }
 
     artifacts = []
     if st.epic_dir:
@@ -215,7 +201,7 @@ def _render_live(st: AppState) -> Response:
         agents=_build_agents_list(st),
         artifacts=artifacts,
         artifact_tree=_build_artifact_tree(artifacts),
-        tiers=tiers,
+        tiers=None,
         scout_concurrency=st.config.scout_concurrency,
     )
     return Response(html, media_type="text/html")
@@ -265,16 +251,9 @@ async def api_start_run(r: Request) -> Response:
     st = _app_state(r)
 
     # Apply optional overrides
-    model_tiers = body.get("model_tiers")
-    if model_tiers is not None:
-        from ..config import ModelTierConfig
-        st.config.model_tiers = ModelTierConfig(**model_tiers)
-
     scout_concurrency = body.get("scout_concurrency")
     if isinstance(scout_concurrency, int) and scout_concurrency > 0:
         st.config.scout_concurrency = scout_concurrency
-
-    if model_tiers is not None or scout_concurrency is not None:
         from ..config import save_koan_config
         await save_koan_config(st.config)
 
@@ -416,15 +395,8 @@ async def api_artifact_content(r: Request) -> Response:
 
 async def api_model_config_get(r: Request) -> Response:
     st = _app_state(r)
-    tiers = {"strong": "", "standard": "", "cheap": ""}
-    if st.config.model_tiers:
-        tiers = {
-            "strong": st.config.model_tiers.strong,
-            "standard": st.config.model_tiers.standard,
-            "cheap": st.config.model_tiers.cheap,
-        }
     return JSONResponse({
-        "tiers": tiers,
+        "activeProfile": st.config.active_profile,
         "scoutConcurrency": st.config.scout_concurrency,
     })
 
@@ -433,14 +405,6 @@ async def api_model_config_put(r: Request) -> Response:
     body = await r.json()
 
     st = _app_state(r)
-    mt = body.get("model_tiers")
-    if mt and isinstance(mt, dict):
-        from ..config import ModelTierConfig
-        st.config.model_tiers = ModelTierConfig(
-            strong=mt.get("strong", ""),
-            standard=mt.get("standard", ""),
-            cheap=mt.get("cheap", ""),
-        )
 
     sc = body.get("scout_concurrency")
     if isinstance(sc, int) and sc > 0:
@@ -463,6 +427,12 @@ def create_app(app_state: AppState) -> Starlette:
     @asynccontextmanager
     async def lifespan(app):
         from ..driver import driver_main
+        from ..probe import probe_all_runners
+        from ..runners.registry import compute_balanced_profile
+
+        app_state.probe_results = await probe_all_runners()
+        app_state.balanced_profile = compute_balanced_profile(app_state.probe_results)
+
         asyncio.create_task(driver_main(app_state))
         yield
 

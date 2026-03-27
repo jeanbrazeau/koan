@@ -11,7 +11,8 @@ from datetime import datetime
 from typing import Any, Literal
 
 from .config import KoanConfig
-from .types import EpicPhase, SubagentRole
+from .probe import ProbeResult
+from .types import EpicPhase, Profile, SubagentRole
 
 
 @dataclass
@@ -52,5 +53,7 @@ class AppState:
     interaction_queue_max: int = 8
     frozen_logs: list = field(default_factory=list)
     config: KoanConfig = field(default_factory=KoanConfig)
+    balanced_profile: Profile | None = None
+    probe_results: list[ProbeResult] = field(default_factory=list)
     port: int = 8000
     last_sse_values: dict[str, Any] = field(default_factory=dict)
