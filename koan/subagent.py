@@ -84,23 +84,45 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
 
     # Resolve runner via registry
     if runner is None:
-        config = await load_koan_config()
-        registry = RunnerRegistry()
-        installation, model_alias, thinking_mode = registry.resolve_agent_config(
-            role, config, balanced_profile=app_state.balanced_profile,
-        )
+        try:
+            config = await load_koan_config()
+            registry = RunnerRegistry()
+            installation, model_alias, thinking_mode = registry.resolve_agent_config(
+                role, config, balanced_profile=app_state.balanced_profile,
+            )
 
-        # Fail fast on missing binary
-        if not Path(installation.binary).exists():
-            raise RunnerError(RunnerDiagnostic(
-                code="binary_not_found",
-                runner=installation.runner_type,
-                stage="spawn",
-                message=f"Binary not found: {installation.binary}",
-            ))
+            # Fail fast on missing binary
+            if not Path(installation.binary).exists():
+                raise RunnerError(RunnerDiagnostic(
+                    code="binary_not_found",
+                    runner=installation.runner_type,
+                    stage="spawn",
+                    message=f"Binary not found: {installation.binary}",
+                ))
 
-        runner = registry.get_runner(installation.runner_type, subagent_dir)
-        model = model_alias
+            runner = registry.get_runner(installation.runner_type, subagent_dir)
+            model = model_alias
+        except RunnerError as e:
+            log.error("runner resolution failed for %s: %s", role, e.diagnostic.message)
+            # Emit diagnostics via EventLog if possible, otherwise emit pre-log diagnostic
+            try:
+                event_log = EventLog(subagent_dir, role, phase=role, model=None)
+                await event_log.open()
+                await event_log.emit_runner_diagnostic(e.diagnostic)
+                await event_log.close()
+            except Exception:
+                log.warning("failed to write diagnostic event log for %s", role)
+            _push_sse(app_state, "notification", {
+                "type": "runner_error",
+                "agent_id": agent_id,
+                "role": role,
+                "code": e.diagnostic.code,
+                "runner": e.diagnostic.runner,
+                "stage": e.diagnostic.stage,
+                "message": e.diagnostic.message,
+                "details": e.diagnostic.details,
+            })
+            return 1
     else:
         model = None
         installation = None

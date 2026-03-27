@@ -492,33 +492,3 @@ class TestGeminiRunnerExtraArgs:
         assert cmd[-1] == "--verbose"
 
 
-# -- spawn_subagent: binary not found ------------------------------------------
-
-class TestBinaryNotFound:
-    def test_binary_not_found_raises_runner_error(self, tmp_path, monkeypatch):
-        from unittest.mock import AsyncMock, patch
-
-        from koan.runners.base import RunnerDiagnostic, RunnerError
-        from koan.runners.registry import RunnerRegistry
-        from koan.types import AgentInstallation, ProfileTier
-
-        inst = AgentInstallation(
-            alias="bad-claude", runner_type="claude",
-            binary="/nonexistent/path/claude",
-        )
-        profile_tier = ProfileTier(runner_type="claude", model="opus", thinking="high")
-
-        # Verify the binary check would fail
-        from pathlib import Path
-        assert not Path(inst.binary).exists()
-
-        # The actual check lives in spawn_subagent; verify the pattern
-        with pytest.raises(RunnerError) as exc_info:
-            if not Path(inst.binary).exists():
-                raise RunnerError(RunnerDiagnostic(
-                    code="binary_not_found",
-                    runner=inst.runner_type,
-                    stage="spawn",
-                    message=f"Binary not found: {inst.binary}",
-                ))
-        assert exc_info.value.diagnostic.code == "binary_not_found"

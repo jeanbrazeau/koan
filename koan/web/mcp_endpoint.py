@@ -24,7 +24,6 @@ from ..lib.permissions import check_permission
 from ..lib.phase_dag import is_valid_transition
 from ..logger import get_logger
 from ..phases.format_step import format_step
-from ..runners import resolve_runner
 from .interactions import activate_next_interaction, enqueue_interaction
 
 if TYPE_CHECKING:
@@ -169,8 +168,7 @@ async def koan_request_scouts(questions: list[dict] | None = None) -> str:
         async with semaphore:
             from ..subagent import spawn_subagent
 
-            runner = resolve_runner("scout", _app_state.config, scout_task["subagent_dir"])
-            exit_code = await spawn_subagent(scout_task, _app_state, runner)
+            exit_code = await spawn_subagent(scout_task, _app_state)
 
             # Require state.json with status=="completed" (regardless of exit code)
             state_path = Path(scout_task["subagent_dir"]) / "state.json"

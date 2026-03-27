@@ -138,10 +138,13 @@ async def load_koan_config() -> KoanConfig:
     if not isinstance(active_profile, str) or not active_profile:
         active_profile = "balanced"
 
+    # Exclude "balanced" from persisted profiles -- it is recomputed at startup
+    profiles = [p for p in _parse_profiles(parsed.get("profiles", [])) if p.name != "balanced"]
+
     return KoanConfig(
         agent_installations=_parse_agent_installations(parsed.get("agentInstallations", [])),
         active_installations={str(k): str(v) for k, v in active_installations.items()},
-        profiles=_parse_profiles(parsed.get("profiles", [])),
+        profiles=profiles,
         active_profile=active_profile,
         scout_concurrency=_parse_scout_concurrency(parsed),
     )
@@ -195,6 +198,7 @@ async def save_koan_config(config: KoanConfig) -> None:
                 },
             }
             for p in config.profiles
+            if p.name != "balanced"
         ]
 
         existing["scoutConcurrency"] = config.scout_concurrency

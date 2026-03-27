@@ -416,7 +416,6 @@ class TestRequestScouts:
         token = _agent_ctx.set(agent)
         try:
             with patch("koan.web.mcp_endpoint._check_or_raise"), \
-                 patch("koan.web.mcp_endpoint.resolve_runner", return_value=FakeRunner()), \
                  patch("koan.subagent.spawn_subagent", side_effect=fake_spawn):
                 result = await koan_request_scouts(questions=[
                     {"id": "a", "prompt": "Q1"},
@@ -478,7 +477,6 @@ class TestRequestScouts:
         token = _agent_ctx.set(agent)
         try:
             with patch("koan.web.mcp_endpoint._check_or_raise"), \
-                 patch("koan.web.mcp_endpoint.resolve_runner", return_value=FakeRunner()), \
                  patch("koan.subagent.spawn_subagent", side_effect=fake_spawn):
                 await koan_request_scouts(questions=[
                     {"id": "x", "prompt": "Q1"},
@@ -522,7 +520,6 @@ class TestRequestScouts:
         token = _agent_ctx.set(agent)
         try:
             with patch("koan.web.mcp_endpoint._check_or_raise"), \
-                 patch("koan.web.mcp_endpoint.resolve_runner", return_value=FakeRunner()), \
                  patch("koan.subagent.spawn_subagent", side_effect=fake_spawn):
                 result = await koan_request_scouts(questions=[
                     {"id": "q", "prompt": "Q1"},
@@ -618,3 +615,67 @@ class TestDiagnosticFanout:
         assert r.diagnostic["stage"] == "handshake"
         assert r.diagnostic["details"] == {"stderr": "timeout"}
         assert r.status == "failed"
+
+
+# -- spawn_subagent: binary not found (real integration) ----------------------
+
+class TestBinaryNotFoundSpawn:
+    @pytest.mark.anyio
+    async def test_missing_binary_returns_controlled_failure(self, tmp_path):
+        """spawn_subagent with a nonexistent binary returns exit 1 with diagnostics."""
+        from koan.config import KoanConfig
+        from koan.types import AgentInstallation, Profile, ProfileTier
+
+        config = KoanConfig(
+            agent_installations=[
+                AgentInstallation(
+                    alias="bad-claude", runner_type="claude",
+                    binary="/nonexistent/path/claude",
+                ),
+            ],
+            profiles=[
+                Profile(name="test-profile", tiers={
+                    "strong": ProfileTier(runner_type="claude", model="opus", thinking="high"),
+                }),
+            ],
+            active_profile="test-profile",
+        )
+
+        app_state = FakeAppState(port=9999)
+        subagent_dir = str(tmp_path / "sub")
+        Path(subagent_dir).mkdir()
+
+        task = {
+            "role": "intake",
+            "epic_dir": str(tmp_path),
+            "subagent_dir": subagent_dir,
+        }
+
+        sse_payloads = []
+
+        def capture_sse(app, event_type, payload):
+            if event_type == "notification":
+                sse_payloads.append(payload)
+
+        with patch("koan.subagent.PHASE_MODULE_MAP", {"intake": _fake_phase_module()}), \
+             patch("koan.subagent._push_sse", side_effect=capture_sse), \
+             patch("koan.subagent.load_koan_config", return_value=config):
+            from koan.subagent import spawn_subagent
+
+            exit_code = await spawn_subagent(task, app_state)
+
+        assert exit_code == 1
+
+        # Verify SSE notification with diagnostic fields
+        runner_errors = [p for p in sse_payloads if p.get("code") == "binary_not_found"]
+        assert len(runner_errors) == 1
+        assert runner_errors[0]["stage"] == "spawn"
+        assert "/nonexistent/path/claude" in runner_errors[0]["message"]
+
+        # Verify events.jsonl contains a runner_diagnostic
+        events_path = Path(subagent_dir) / "events.jsonl"
+        assert events_path.exists()
+        lines = events_path.read_text().strip().split("\n")
+        diag_events = [json.loads(l) for l in lines if "runner_diagnostic" in l]
+        assert len(diag_events) >= 1
+        assert diag_events[0]["code"] == "binary_not_found"

@@ -56,4 +56,5 @@ class AppState:
     balanced_profile: Profile | None = None
     probe_results: list[ProbeResult] = field(default_factory=list)
     port: int = 8000
+    config_write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_sse_values: dict[str, Any] = field(default_factory=dict)
