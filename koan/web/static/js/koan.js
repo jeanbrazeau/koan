@@ -561,14 +561,15 @@
     var body = $("#settings-overlay-body");
     if (body) body.innerHTML = '<p class="settings-section-heading">Loading...</p>';
 
-    // Fetch probe data (for cascade dropdowns) and server-rendered body fragment
-    Promise.all([
-      fetch("/api/probe").then(function (r) { return r.json(); }),
-      fetch("/api/settings/body").then(function (r) { return r.text(); }),
-    ])
-      .then(function (results) {
-        cachedProbeData = results[0];
-        if (body) body.innerHTML = results[1];
+    // Sequential: refresh probe data first, then fetch the body fragment
+    fetch("/api/probe?refresh=1")
+      .then(function (r) { return r.json(); })
+      .then(function (probeData) {
+        cachedProbeData = probeData;
+        return fetch("/api/settings/body").then(function (r) { return r.text(); });
+      })
+      .then(function (html) {
+        if (body) body.innerHTML = html;
         bindSettingsHandlers();
       })
       .catch(function () {

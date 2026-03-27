@@ -469,6 +469,47 @@ def test_agents_create_and_delete(client, app_state):
     assert not any(i.alias == "test-agent" for i in app_state.config.agent_installations)
 
 
+# -- Probe refresh ------------------------------------------------------------
+
+class TestProbeRefresh:
+    def test_probe_refresh_triggers_restate(self, client, app_state):
+        fresh_probes = [
+            ProbeResult(runner_type="claude", available=True, binary_path="/usr/bin/claude", version="2.0"),
+            ProbeResult(runner_type="codex", available=True),
+        ]
+        fresh_profile = Profile(name="balanced", tiers={
+            "strong": ProfileTier(runner_type="codex", model="gpt-5", thinking="high"),
+        })
+
+        # Pre-populate with stale data
+        app_state.probe_results = _make_probe_results()
+        app_state.balanced_profile = None
+
+        with patch("koan.probe.probe_all_runners", new_callable=AsyncMock, return_value=fresh_probes) as mock_probe, \
+             patch("koan.runners.registry.compute_balanced_profile", return_value=fresh_profile) as mock_balanced:
+            resp = client.get("/api/probe?refresh=1")
+
+        assert resp.status_code == 200
+        mock_probe.assert_called_once()
+        mock_balanced.assert_called_once_with(fresh_probes)
+        assert app_state.probe_results is fresh_probes
+        assert app_state.balanced_profile is fresh_profile
+        data = resp.json()
+        assert len(data["runners"]) == 2
+
+    def test_probe_no_refresh_skips_restate(self, client, app_state):
+        app_state.probe_results = _make_probe_results()
+        app_state.balanced_profile = Profile(name="balanced", tiers={})
+
+        with patch("koan.probe.probe_all_runners", new_callable=AsyncMock) as mock_probe:
+            resp = client.get("/api/probe")
+
+        assert resp.status_code == 200
+        mock_probe.assert_not_called()
+        data = resp.json()
+        assert len(data["runners"]) == 3
+
+
 def test_agents_set_active(client, app_state):
     app_state.config.agent_installations.append(AgentInstallation(
         alias="my-claude", runner_type="claude", binary="/usr/bin/claude", extra_args=[],

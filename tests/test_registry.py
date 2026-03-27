@@ -114,6 +114,22 @@ class TestGetInstallation:
             reg.get_installation("claude", config)
         assert exc_info.value.diagnostic.code == "no_installation"
 
+    def test_active_alias_configured_but_missing_raises(self):
+        inst = AgentInstallation(alias="real-claude", runner_type="claude", binary="/usr/bin/claude")
+        config = self._make_config([inst], active={"claude": "ghost-alias"})
+        reg = RunnerRegistry()
+        with pytest.raises(RunnerError) as exc_info:
+            reg.get_installation("claude", config)
+        assert exc_info.value.diagnostic.code == "no_installation"
+        assert "ghost-alias" in exc_info.value.diagnostic.message
+
+    def test_fallback_only_when_no_active_alias(self):
+        inst = AgentInstallation(alias="default-codex", runner_type="codex", binary="/usr/bin/codex")
+        config = self._make_config([inst], active={})
+        reg = RunnerRegistry()
+        result = reg.get_installation("codex", config)
+        assert result is inst
+
 
 # -- save_koan_config write lock -----------------------------------------------
 

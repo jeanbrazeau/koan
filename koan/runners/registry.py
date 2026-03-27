@@ -73,8 +73,15 @@ class RunnerRegistry:
             for inst in config.agent_installations:
                 if inst.alias == alias and inst.runner_type == runner_type:
                     return inst
+            raise RunnerError(RunnerDiagnostic(
+                code="no_installation",
+                runner=runner_type,
+                stage="get_installation",
+                message=f"Active installation alias '{alias}' not found for runner '{runner_type}'",
+                details={"runner_type": runner_type, "alias": alias},
+            ))
 
-        # Fall back to first installation of this runner_type
+        # No active alias configured -- fall back to first installation of this type
         for inst in config.agent_installations:
             if inst.runner_type == runner_type:
                 return inst

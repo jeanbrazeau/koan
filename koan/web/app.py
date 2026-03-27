@@ -506,8 +506,18 @@ def _serialize_profile(p: Profile, read_only: bool) -> dict:
     }
 
 
+async def _refresh_probe_state(st: AppState) -> None:
+    from ..probe import probe_all_runners
+    from ..runners.registry import compute_balanced_profile
+
+    st.probe_results = await probe_all_runners()
+    st.balanced_profile = compute_balanced_profile(st.probe_results)
+
+
 async def api_probe(r: Request) -> Response:
     st = _app_state(r)
+    if r.query_params.get("refresh", "") in ("1", "true"):
+        await _refresh_probe_state(st)
     runners = [_serialize_probe_result(pr) for pr in st.probe_results]
     balanced = _serialize_profile(st.balanced_profile, True) if st.balanced_profile else None
     return JSONResponse({"runners": runners, "balanced_profile": balanced})
@@ -895,11 +905,7 @@ def create_app(app_state: AppState) -> Starlette:
     @asynccontextmanager
     async def lifespan(app):
         from ..driver import driver_main
-        from ..probe import probe_all_runners
-        from ..runners.registry import compute_balanced_profile
-
-        app_state.probe_results = await probe_all_runners()
-        app_state.balanced_profile = compute_balanced_profile(app_state.probe_results)
+        await _refresh_probe_state(app_state)
 
         asyncio.create_task(driver_main(app_state))
         yield
