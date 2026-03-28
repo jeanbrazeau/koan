@@ -21,15 +21,19 @@ class ProbeResult:
     models: list[ModelInfo] = field(default_factory=list)
 
 
-async def _run_cmd(args: list[str]) -> tuple[int, str]:
+async def _run_cmd(args: list[str]) -> tuple[int, str, str]:
     try:
         proc = await asyncio.create_subprocess_exec(
             *args,
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE,
         )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=PROBE_TIMEOUT_SECONDS)
-        return (proc.returncode or 0, stdout.decode("utf-8", errors="replace"))
+        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=PROBE_TIMEOUT_SECONDS)
+        return (
+            proc.returncode or 0,
+            stdout.decode("utf-8", errors="replace"),
+            stderr.decode("utf-8", errors="replace"),
+        )
     except asyncio.TimeoutError:
         try:
             proc.terminate()
@@ -40,9 +44,9 @@ async def _run_cmd(args: list[str]) -> tuple[int, str]:
                 await proc.wait()
         except OSError:
             pass
-        return (-1, "")
+        return (-1, "", "")
     except OSError:
-        return (-1, "")
+        return (-1, "", "")
 
 
 async def _probe_claude() -> ProbeResult:
@@ -50,7 +54,7 @@ async def _probe_claude() -> ProbeResult:
     if binary is None:
         return ProbeResult(runner_type="claude", available=False)
 
-    rc, out = await _run_cmd(["claude", "auth", "status", "--output-format", "json"])
+    rc, out, _ = await _run_cmd(["claude", "auth", "status"])
     if rc != 0:
         return ProbeResult(runner_type="claude", available=False, binary_path=binary)
     try:
@@ -60,7 +64,7 @@ async def _probe_claude() -> ProbeResult:
     except (json.JSONDecodeError, TypeError, AttributeError):
         return ProbeResult(runner_type="claude", available=False, binary_path=binary)
 
-    rc_v, out_v = await _run_cmd(["claude", "--version"])
+    rc_v, out_v, _ = await _run_cmd(["claude", "--version"])
     if rc_v != 0:
         return ProbeResult(runner_type="claude", available=False, binary_path=binary)
 
@@ -79,11 +83,12 @@ async def _probe_codex() -> ProbeResult:
     if binary is None:
         return ProbeResult(runner_type="codex", available=False)
 
-    rc, out = await _run_cmd(["codex", "login", "status"])
-    if rc != 0 or "Logged in" not in out:
+    rc, out, err = await _run_cmd(["codex", "login", "status"])
+    combined = out + err
+    if rc != 0 or "Logged in" not in combined:
         return ProbeResult(runner_type="codex", available=False, binary_path=binary)
 
-    rc_v, out_v = await _run_cmd(["codex", "--version"])
+    rc_v, out_v, _ = await _run_cmd(["codex", "--version"])
     if rc_v != 0:
         return ProbeResult(runner_type="codex", available=False, binary_path=binary)
 
@@ -102,9 +107,13 @@ async def _probe_gemini() -> ProbeResult:
     if binary is None:
         return ProbeResult(runner_type="gemini", available=False)
 
-    rc, out = await _run_cmd(["gemini", "--version"])
+    rc, out, _ = await _run_cmd(["gemini", "--version"])
     version = out.strip() if rc == 0 else None
 
+    # NOTE: gemini CLI has no lightweight auth-status command (unlike claude
+    # and codex).  We can only verify the binary exists and runs.  If the
+    # user has no Gemini subscription the balanced profile will still list
+    # gemini, but the run will fail at spawn time with a clear error.
     available = rc == 0
     models: list[ModelInfo] = []
     if available:

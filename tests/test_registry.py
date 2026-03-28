@@ -8,24 +8,66 @@ import pytest
 from koan.config import KoanConfig, save_koan_config
 from koan.probe import ProbeResult
 from koan.runners.base import RunnerError
-from koan.runners.registry import RunnerRegistry, compute_balanced_profile
-from koan.types import AgentInstallation, Profile, ProfileTier
+from koan.runners.registry import RunnerRegistry, compute_balanced_profile, _best_supported_thinking
+from koan.types import AgentInstallation, ModelInfo, Profile, ProfileTier
+
+
+# -- compute_balanced_profile --------------------------------------------------
+
+# -- helpers for building probe results with models ---------------------------
+
+def _codex_models() -> list[ModelInfo]:
+    return [
+        ModelInfo(alias="gpt-5", display_name="GPT-5", thinking_modes=frozenset({"disabled"}), tier_hint="strong"),
+        ModelInfo(alias="gpt-5-mini", display_name="GPT-5 Mini", thinking_modes=frozenset({"disabled"}), tier_hint="cheap"),
+    ]
+
+def _claude_models() -> list[ModelInfo]:
+    all_modes = frozenset({"disabled", "low", "medium", "high", "xhigh"})
+    return [
+        ModelInfo(alias="opus", display_name="Opus", thinking_modes=all_modes, tier_hint="strong"),
+        ModelInfo(alias="sonnet", display_name="Sonnet", thinking_modes=all_modes, tier_hint="standard"),
+        ModelInfo(alias="haiku", display_name="Haiku", thinking_modes=frozenset({"disabled", "low"}), tier_hint="cheap"),
+    ]
+
+def _gemini_models() -> list[ModelInfo]:
+    return [
+        ModelInfo(alias="gemini-pro", display_name="Gemini Pro", thinking_modes=frozenset({"disabled", "low", "medium", "high"}), tier_hint="strong"),
+        ModelInfo(alias="gemini-flash", display_name="Gemini Flash", thinking_modes=frozenset({"disabled", "low"}), tier_hint="cheap"),
+    ]
+
+
+# -- _best_supported_thinking --------------------------------------------------
+
+class TestBestSupportedThinking:
+    def test_desired_is_supported(self):
+        assert _best_supported_thinking(frozenset({"disabled", "high"}), "high") == "high"
+
+    def test_clamp_to_highest_below(self):
+        assert _best_supported_thinking(frozenset({"disabled", "low"}), "high") == "low"
+
+    def test_disabled_only(self):
+        assert _best_supported_thinking(frozenset({"disabled"}), "high") == "disabled"
+
+    def test_exact_medium(self):
+        assert _best_supported_thinking(frozenset({"disabled", "low", "medium"}), "medium") == "medium"
 
 
 # -- compute_balanced_profile --------------------------------------------------
 
 class TestComputeBalancedProfile:
-    def test_all_available(self):
+    def test_all_available_with_models(self):
         probes = [
-            ProbeResult(runner_type="claude", available=True),
-            ProbeResult(runner_type="codex", available=True),
-            ProbeResult(runner_type="gemini", available=True),
+            ProbeResult(runner_type="claude", available=True, models=_claude_models()),
+            ProbeResult(runner_type="codex", available=True, models=_codex_models()),
+            ProbeResult(runner_type="gemini", available=True, models=_gemini_models()),
         ]
         p = compute_balanced_profile(probes)
         assert p.name == "balanced"
         assert p.tiers["strong"].runner_type == "codex"
         assert p.tiers["strong"].model == "gpt-5"
-        assert p.tiers["strong"].thinking == "high"
+        # codex only supports disabled -- thinking is clamped
+        assert p.tiers["strong"].thinking == "disabled"
         assert p.tiers["standard"].runner_type == "claude"
         assert p.tiers["standard"].model == "sonnet"
         assert p.tiers["standard"].thinking == "medium"
@@ -33,15 +75,27 @@ class TestComputeBalancedProfile:
         assert p.tiers["cheap"].model == "haiku"
         assert p.tiers["cheap"].thinking == "disabled"
 
-    def test_only_claude_available(self):
+    def test_all_available_without_models_uses_defaults(self):
+        """When probe results lack model info, default thinking is kept."""
         probes = [
             ProbeResult(runner_type="claude", available=True),
+            ProbeResult(runner_type="codex", available=True),
+            ProbeResult(runner_type="gemini", available=True),
+        ]
+        p = compute_balanced_profile(probes)
+        assert p.tiers["strong"].runner_type == "codex"
+        assert p.tiers["strong"].thinking == "high"  # no model info -> default
+
+    def test_only_claude_available(self):
+        probes = [
+            ProbeResult(runner_type="claude", available=True, models=_claude_models()),
             ProbeResult(runner_type="codex", available=False),
             ProbeResult(runner_type="gemini", available=False),
         ]
         p = compute_balanced_profile(probes)
         assert p.tiers["strong"].runner_type == "claude"
         assert p.tiers["strong"].model == "opus"
+        assert p.tiers["strong"].thinking == "high"  # claude/opus supports high
         assert p.tiers["standard"].runner_type == "claude"
         assert p.tiers["standard"].model == "sonnet"
         assert p.tiers["cheap"].runner_type == "claude"
@@ -69,16 +123,16 @@ class TestComputeBalancedProfile:
 
     def test_codex_preferred_for_strong(self):
         probes = [
-            ProbeResult(runner_type="claude", available=True),
-            ProbeResult(runner_type="codex", available=True),
+            ProbeResult(runner_type="claude", available=True, models=_claude_models()),
+            ProbeResult(runner_type="codex", available=True, models=_codex_models()),
         ]
         p = compute_balanced_profile(probes)
         assert p.tiers["strong"].runner_type == "codex"
 
     def test_claude_preferred_for_standard(self):
         probes = [
-            ProbeResult(runner_type="claude", available=True),
-            ProbeResult(runner_type="codex", available=True),
+            ProbeResult(runner_type="claude", available=True, models=_claude_models()),
+            ProbeResult(runner_type="codex", available=True, models=_codex_models()),
         ]
         p = compute_balanced_profile(probes)
         assert p.tiers["standard"].runner_type == "claude"

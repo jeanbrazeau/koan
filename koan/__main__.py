@@ -18,12 +18,13 @@ def main() -> None:
     parser = argparse.ArgumentParser(prog="koan")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--log-level", type=str, default="INFO")
+    parser.add_argument("--no-open", action="store_true", help="Don't open browser on startup")
     args = parser.parse_args()
 
     setup_logging(args.log_level)
 
     config = asyncio.run(load_koan_config())
-    app_state = AppState(config=config, port=args.port)
+    app_state = AppState(config=config, port=args.port, open_browser=not args.no_open)
     app = create_app(app_state)
 
     host = "127.0.0.1"

@@ -9,6 +9,7 @@ from ..probe import ProbeResult
 from ..types import (
     ROLE_MODEL_TIER,
     AgentInstallation,
+    ModelInfo,
     ModelTier,
     Profile,
     ProfileTier,
@@ -49,6 +50,20 @@ _TIER_DEFAULT_THINKING: dict[ModelTier, ThinkingMode] = {
     "standard": "medium",
     "cheap": "disabled",
 }
+
+_THINKING_RANK: list[ThinkingMode] = ["disabled", "low", "medium", "high", "xhigh"]
+
+
+def _best_supported_thinking(
+    supported: frozenset[ThinkingMode], desired: ThinkingMode
+) -> ThinkingMode:
+    """Return the highest supported thinking mode at or below *desired*."""
+    desired_idx = _THINKING_RANK.index(desired) if desired in _THINKING_RANK else 0
+    best: ThinkingMode = "disabled"
+    for mode in _THINKING_RANK:
+        if mode in supported and _THINKING_RANK.index(mode) <= desired_idx:
+            best = mode
+    return best
 
 
 # -- RunnerRegistry ------------------------------------------------------------
@@ -138,13 +153,27 @@ class RunnerRegistry:
 def compute_balanced_profile(probe_results: list[ProbeResult]) -> Profile:
     available_runners = {pr.runner_type for pr in probe_results if pr.available}
 
+    # Build model lookup: (runner_type, alias) -> ModelInfo
+    model_lookup: dict[tuple[str, str], ModelInfo] = {}
+    for pr in probe_results:
+        if pr.available:
+            for m in pr.models:
+                model_lookup[(pr.runner_type, m.alias)] = m
+
     tiers: dict[str, ProfileTier] = {}
     for tier_name in ("strong", "standard", "cheap"):
         priority = _TIER_PRIORITY[tier_name]
-        thinking = _TIER_DEFAULT_THINKING[tier_name]
+        default_thinking = _TIER_DEFAULT_THINKING[tier_name]
         picked = False
         for runner_type, model in priority:
             if runner_type in available_runners:
+                # Resolve thinking: clamp to model capabilities when known
+                thinking = default_thinking
+                model_info = model_lookup.get((runner_type, model))
+                if model_info is not None and thinking not in model_info.thinking_modes:
+                    thinking = _best_supported_thinking(
+                        model_info.thinking_modes, thinking,
+                    )
                 tiers[tier_name] = ProfileTier(
                     runner_type=runner_type,
                     model=model,
@@ -160,6 +189,10 @@ def compute_balanced_profile(probe_results: list[ProbeResult]) -> Profile:
                 if rt == fallback_rt:
                     fallback_model = m
                     break
+            thinking = default_thinking
+            fb_info = model_lookup.get((fallback_rt, fallback_model))
+            if fb_info is not None and thinking not in fb_info.thinking_modes:
+                thinking = _best_supported_thinking(fb_info.thinking_modes, thinking)
             tiers[tier_name] = ProfileTier(
                 runner_type=fallback_rt,
                 model=fallback_model,
