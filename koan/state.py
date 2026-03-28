@@ -7,8 +7,12 @@ import asyncio
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Literal
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
 
 from .config import KoanConfig
 from .probe import ProbeResult
@@ -38,7 +42,8 @@ class AgentState:
     pending_tool: asyncio.Future | None = None
     model: str | None = None
     token_count: dict = field(default_factory=lambda: {"sent": 0, "received": 0})
-    started_at: datetime = field(default_factory=datetime.utcnow)
+    is_primary: bool = True
+    started_at: datetime = field(default_factory=_utcnow)
 
 
 @dataclass
@@ -56,5 +61,6 @@ class AppState:
     balanced_profile: Profile | None = None
     probe_results: list[ProbeResult] = field(default_factory=list)
     port: int = 8000
+    open_browser: bool = True
     config_write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     last_sse_values: dict[str, Any] = field(default_factory=dict)
