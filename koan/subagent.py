@@ -16,7 +16,6 @@ from .audit import EventLog
 from .epic_state import ensure_subagent_directory
 from .logger import get_logger
 from .phases import PHASE_MODULE_MAP, PhaseContext
-from .config import load_koan_config
 from .runners import RunnerDiagnostic, RunnerError
 from .runners.registry import RunnerRegistry
 
@@ -85,7 +84,7 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
     # Resolve runner via registry
     if runner is None:
         try:
-            config = await load_koan_config()
+            config = app_state.config
             registry = RunnerRegistry()
             installation, model_alias, thinking_mode = registry.resolve_agent_config(
                 role, config, balanced_profile=app_state.balanced_profile,
@@ -158,6 +157,7 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
         phase_ctx=phase_ctx,
         event_log=event_log,
         model=model,
+        is_primary=(role != "scout"),
     )
     app_state.agents[agent_id] = agent
 
@@ -227,7 +227,7 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
                 elif ev.type == "thinking":
                     _push_sse(app_state, "logs", {
                         "line": {
-                            "tool": "thinking",
+                            "tool": "",
                             "summary": "thinking...",
                             "inFlight": True,
                             "ts": _now_iso(),
@@ -352,6 +352,7 @@ def _cancel_pending_interactions(agent_id: str, app_state: AppState) -> None:
             _push_sse(app_state, "notification", {
                 "type": "interaction_cancelled",
                 "agent_id": agent_id,
+                "message": "Interaction cancelled: agent process exited",
             })
         else:
             remaining.append(item)
@@ -365,5 +366,6 @@ def _cancel_pending_interactions(agent_id: str, app_state: AppState) -> None:
         _push_sse(app_state, "notification", {
             "type": "interaction_cancelled",
             "agent_id": agent_id,
+            "message": "Interaction cancelled: agent process exited",
         })
         activate_next_interaction(app_state)
