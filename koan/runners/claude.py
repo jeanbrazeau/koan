@@ -76,6 +76,7 @@ class ClaudeRunner:
         cmd = [
             installation.binary, "-p", boot_prompt,
             "--output-format", "stream-json",
+            "--verbose",
             "--mcp-config", str(config_path),
         ]
         if thinking != "disabled":
