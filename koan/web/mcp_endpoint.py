@@ -308,11 +308,22 @@ async def koan_set_next_phase(phase: str = "", instructions: str = "") -> str:
 # -- ASGI wrapper --------------------------------------------------------------
 
 def build_mcp_asgi_app(app_state: AppState):
-    """Return an ASGI app that validates agent_id then delegates to fastmcp."""
+    """Return an ASGI app that validates agent_id then delegates to fastmcp.
+
+    Returns (asgi_wrapper, inner_app) where inner_app is the
+    StarletteWithLifespan from fastmcp.  The caller MUST enter
+    ``inner_app.lifespan`` inside the parent app's own lifespan so
+    that the StreamableHTTPSessionManager task-group is running before
+    the first MCP request arrives.
+
+    The inner app is created with ``path="/"`` because it is mounted
+    under ``Mount("/mcp", ...)``, which strips the ``/mcp`` prefix
+    before forwarding to us.
+    """
     global _app_state
     _app_state = app_state
 
-    inner = mcp.http_app()
+    inner = mcp.http_app(path="/")
 
     async def asgi_wrapper(scope, receive, send):
         if scope["type"] == "http":
@@ -345,4 +356,4 @@ def build_mcp_asgi_app(app_state: AppState):
         else:
             await inner(scope, receive, send)
 
-    return asgi_wrapper
+    return asgi_wrapper, inner
