@@ -54,6 +54,7 @@ class AgentProjection(BaseModel):
     model: str | None = None
     step: int = 0
     step_name: str = ""
+    started_at_ms: int = 0
     input_tokens: int = 0
     output_tokens: int = 0
 
@@ -127,6 +128,7 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                     role=payload.get("role", ""),
                     model=payload.get("model"),
                     step=0,
+                    started_at_ms=payload.get("started_at_ms", 0),
                 )
                 if payload.get("is_primary", True):
                     return projection.model_copy(update={"primary_agent": new_agent})

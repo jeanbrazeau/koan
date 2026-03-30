@@ -192,25 +192,44 @@
 
 .activity-line {
   display: flex;
-  gap: var(--space-2);
+  gap: var(--space-1);
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
   color: var(--text-muted);
-  padding: 2px 0;
+  padding: 3px 0;
   line-height: 1.4;
+  min-height: 20px;
 }
 
-.activity-line.activity-high {
-  color: var(--text-muted);
+.activity-line.activity-done {
+  color: var(--text-ghost);
+}
+
+.activity-status {
+  flex-shrink: 0;
+  width: 14px;
+  text-align: center;
+}
+
+.activity-inflight .activity-status {
+  color: var(--copper);
+}
+
+.activity-done .activity-status {
+  color: var(--green);
+  font-size: 10px;
 }
 
 .activity-tool {
-  color: var(--text-ghost);
-  min-width: 48px;
+  color: var(--text-muted);
   flex-shrink: 0;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.activity-high .activity-tool {
+.activity-inflight .activity-tool {
   color: var(--copper);
 }
 
@@ -218,6 +237,33 @@
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
+}
+
+/* Stream output -- wrapping text block for LLM text */
+.stream-output {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: var(--text);
+  line-height: 1.6;
+  white-space: pre-wrap;
+  word-break: break-word;
+  padding: var(--space-2) 0;
+  margin-top: var(--space-2);
+  border-top: 1px solid var(--border);
+}
+
+/* Thinking indicator */
+.activity-thinking-indicator {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+  padding: var(--space-2) 0;
+  margin-top: var(--space-2);
 }
 
 .activity-detail {

@@ -159,6 +159,7 @@ interface KoanState {
   // Activity feed
   activityLog: ActivityEntry[]
   streamBuffer: string
+  isThinking: boolean
 
   // Notifications
   notifications: NotificationEntry[]
@@ -215,6 +216,7 @@ export const useStore = create<KoanState>((set) => ({
   scouts: {},
   activityLog: [],
   streamBuffer: '',
+  isThinking: false,
   notifications: [],
   activeInteraction: null,
   artifacts: {},
@@ -306,10 +308,10 @@ export const useStore = create<KoanState>((set) => ({
     }))
 
     // Transform activity_log
-    // The backend fold appends both tool_called and tool_completed as raw entries.
-    // Reconstruct the collapsed one-entry-per-call view that the live applyEvent
-    // fold produces: exclude tool_completed entries and use them only to determine
-    // the inFlight state of their matching tool_called entry.
+    // The backend fold appends tool_called, tool_completed, and thinking as raw
+    // entries.  Reconstruct the collapsed one-entry-per-call view that the live
+    // applyEvent fold produces: exclude tool_completed (used only to determine
+    // inFlight state) and thinking (rendered separately as isThinking indicator).
     const rawLog = (state['activity_log'] ?? []) as Record<string, unknown>[]
     const completedCallIds = new Set(
       rawLog
@@ -318,7 +320,7 @@ export const useStore = create<KoanState>((set) => ({
         .filter(Boolean)
     )
     const activityLog: ActivityEntry[] = rawLog
-      .filter(e => e['event_type'] !== 'tool_completed')
+      .filter(e => e['event_type'] !== 'tool_completed' && e['event_type'] !== 'thinking')
       .map((e) => {
         const callId = e['call_id'] as string | undefined
         const isToolCall = e['event_type'] === 'tool_called'
@@ -347,6 +349,7 @@ export const useStore = create<KoanState>((set) => ({
       notifications,
       activityLog,
       streamBuffer: (state['stream_buffer'] as string) ?? '',
+      isThinking: false,
       completion: completion ?? null,
     })
   },
@@ -475,7 +478,7 @@ export const useStore = create<KoanState>((set) => ({
             callId:   event['call_id'] as string,
             ts:       new Date().toISOString(),
           }
-          return { ...base, activityLog: [...s.activityLog, entry] }
+          return { ...base, activityLog: [...s.activityLog, entry], isThinking: false }
         }
 
         case 'tool_completed': {
@@ -488,21 +491,14 @@ export const useStore = create<KoanState>((set) => ({
           }
         }
 
-        case 'thinking': {
-          const entry: ActivityEntry = {
-            tool:     '',
-            summary:  (event['delta'] as string) ?? 'thinking...',
-            inFlight: false,
-            ts:       new Date().toISOString(),
-          }
-          return { ...base, activityLog: [...s.activityLog, entry] }
-        }
+        case 'thinking':
+          return { ...base, isThinking: true }
 
         case 'stream_delta':
-          return { ...base, streamBuffer: s.streamBuffer + ((event['delta'] as string) ?? '') }
+          return { ...base, streamBuffer: s.streamBuffer + ((event['delta'] as string) ?? ''), isThinking: false }
 
         case 'stream_cleared':
-          return { ...base, streamBuffer: '' }
+          return { ...base, streamBuffer: '', isThinking: false }
 
         // ── Interactions ───────────────────────────────────────────────────
 

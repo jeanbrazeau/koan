@@ -94,7 +94,10 @@ class CodexRunner:
             if item_type == "agent_message":
                 text = item.get("text", "")
                 if text:
-                    return [StreamEvent(type="token_delta", content=text)]
+                    # Codex emits complete messages (not token-by-token).
+                    # Append a newline so consecutive messages don't run together
+                    # in the stream buffer.
+                    return [StreamEvent(type="token_delta", content=text + "\n")]
             elif item_type == "function_call":
                 raw_name = item.get("name") or item.get("call_id", "tool")
                 canonical = _normalize_tool_name(raw_name)
