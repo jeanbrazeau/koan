@@ -27,13 +27,12 @@ class FakeAppState:
     agents: dict = field(default_factory=dict)
     config: FakeConfig = field(default_factory=FakeConfig)
     port: int = 9999
-    sse_clients: list = field(default_factory=list)
     active_interaction: PendingInteraction | None = None
     interaction_queue: deque[PendingInteraction] = field(default_factory=deque)
     interaction_queue_max: int = 8
     frozen_logs: list = field(default_factory=list)
-    last_sse_values: dict = field(default_factory=dict)
     epic_dir: str | None = None
+    projection_store: object = field(default_factory=lambda: __import__('koan.projections', fromlist=['ProjectionStore']).ProjectionStore())
 
 
 def _make_interaction(
@@ -76,8 +75,7 @@ class TestQueueCap:
             subagent_dir="/tmp/test",
         )
 
-        with patch("koan.web.interactions._push_sse"):
-            with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(ToolError) as exc_info:
                 await enqueue_interaction(agent, app_state, "ask", {"questions": []})
 
         err = json.loads(str(exc_info.value))
@@ -102,8 +100,7 @@ class TestQueueCap:
             subagent_dir="/tmp/test",
         )
 
-        with patch("koan.web.interactions._push_sse"):
-            future = await enqueue_interaction(agent, app_state, "ask", {"questions": []})
+        future = await enqueue_interaction(agent, app_state, "ask", {"questions": []})
 
         assert not future.done()
         assert len(app_state.interaction_queue) == 8
@@ -193,10 +190,8 @@ class TestWorkflowDecisionValidation:
         )
         app_state.active_interaction = interaction
 
-        from unittest.mock import patch as _patch
-        with _patch("koan.web.interactions._push_sse"):
-            app = create_app(app_state)
-            client = TestClient(app, raise_server_exceptions=False)
+        app = create_app(app_state)
+        client = TestClient(app, raise_server_exceptions=False)
         return client, interaction
 
     @pytest.mark.anyio
@@ -252,22 +247,21 @@ class TestFIFOActivation:
         app_state.active_interaction = _make_interaction(agent_id="initial")
         app_state.interaction_queue.extend([a, b, c])
 
-        with patch("koan.web.interactions._push_sse"):
-            # Resolve initial -> A becomes active
-            activate_next_interaction(app_state)
-            assert app_state.active_interaction is a
+        # Resolve initial -> A becomes active
+        activate_next_interaction(app_state)
+        assert app_state.active_interaction is a
 
-            # Resolve A -> B becomes active
-            activate_next_interaction(app_state)
-            assert app_state.active_interaction is b
+        # Resolve A -> B becomes active
+        activate_next_interaction(app_state)
+        assert app_state.active_interaction is b
 
-            # Resolve B -> C becomes active
-            activate_next_interaction(app_state)
-            assert app_state.active_interaction is c
+        # Resolve B -> C becomes active
+        activate_next_interaction(app_state)
+        assert app_state.active_interaction is c
 
-            # Resolve C -> None
-            activate_next_interaction(app_state)
-            assert app_state.active_interaction is None
+        # Resolve C -> None
+        activate_next_interaction(app_state)
+        assert app_state.active_interaction is None
 
 
 # -- TestCancellationOnExit ---------------------------------------------------
@@ -281,9 +275,7 @@ class TestCancellationOnExit:
         interaction = _make_interaction(agent_id="agent-1")
         app_state.active_interaction = interaction
 
-        with patch("koan.subagent._push_sse"), \
-             patch("koan.web.interactions._push_sse"):
-            _cancel_pending_interactions("agent-1", app_state)
+        _cancel_pending_interactions("agent-1", app_state)
 
         assert interaction.future.done()
         assert interaction.future.result()["error"] == "agent_exited"
@@ -299,9 +291,7 @@ class TestCancellationOnExit:
         other = _make_interaction(agent_id="agent-2")
         app_state.interaction_queue.extend([mine_1, other, mine_2])
 
-        with patch("koan.subagent._push_sse"), \
-             patch("koan.web.interactions._push_sse"):
-            _cancel_pending_interactions("agent-1", app_state)
+        _cancel_pending_interactions("agent-1", app_state)
 
         assert mine_1.future.done()
         assert mine_1.future.result()["error"] == "agent_exited"
@@ -323,9 +313,7 @@ class TestCancellationOnExit:
         app_state.active_interaction = active_a
         app_state.interaction_queue.append(queued_b)
 
-        with patch("koan.subagent._push_sse"), \
-             patch("koan.web.interactions._push_sse"):
-            _cancel_pending_interactions("agent-A", app_state)
+        _cancel_pending_interactions("agent-A", app_state)
 
         assert active_a.future.done()
         assert app_state.active_interaction is queued_b
@@ -345,13 +333,12 @@ class TestArtifactReviewResolution:
         interaction = _make_interaction(interaction_type="artifact-review")
         app_state.active_interaction = interaction
 
-        with patch("koan.web.interactions._push_sse"):
-            app = create_app(app_state)
-            client = TestClient(app, raise_server_exceptions=False)
-            resp = client.post(
-                "/api/artifact-review",
-                json={"accepted": True, "token": interaction.token},
-            )
+        app = create_app(app_state)
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post(
+            "/api/artifact-review",
+            json={"accepted": True, "token": interaction.token},
+        )
 
         assert resp.status_code == 200
         result = interaction.future.result()
@@ -369,13 +356,12 @@ class TestArtifactReviewResolution:
         interaction = _make_interaction(interaction_type="artifact-review")
         app_state.active_interaction = interaction
 
-        with patch("koan.web.interactions._push_sse"):
-            app = create_app(app_state)
-            client = TestClient(app, raise_server_exceptions=False)
-            resp = client.post(
-                "/api/artifact-review",
-                json={"response": "Please add more detail", "token": interaction.token},
-            )
+        app = create_app(app_state)
+        client = TestClient(app, raise_server_exceptions=False)
+        resp = client.post(
+            "/api/artifact-review",
+            json={"response": "Please add more detail", "token": interaction.token},
+        )
 
         assert resp.status_code == 200
         result = interaction.future.result()

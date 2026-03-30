@@ -31,12 +31,12 @@ class FakeAppState:
     config: FakeConfig = field(default_factory=FakeConfig)
     balanced_profile: Any = None
     port: int = 9999
-    sse_clients: list = field(default_factory=list)
     active_interaction: Any = None
     interaction_queue: Any = field(default_factory=lambda: __import__("collections").deque())
+    interaction_queue_max: int = 8
     frozen_logs: list = field(default_factory=list)
-    last_sse_values: dict = field(default_factory=dict)
     epic_dir: str | None = None
+    projection_store: object = field(default_factory=lambda: __import__('koan.projections', fromlist=['ProjectionStore']).ProjectionStore())
 
 
 class FakeRunner:
@@ -248,8 +248,7 @@ class TestSpawnSubagent:
             "subagent_dir": subagent_dir,
         }
 
-        with patch("koan.subagent.PHASE_MODULE_MAP", {"intake": _fake_phase_module()}), \
-             patch("koan.subagent._push_sse"):
+        with patch("koan.subagent.PHASE_MODULE_MAP", {"intake": _fake_phase_module()}):
             from koan.subagent import spawn_subagent
 
             exit_code = await spawn_subagent(task, app_state, runner=FakeRunner())
@@ -288,7 +287,6 @@ class TestSpawnSubagent:
             return proc
 
         with patch("koan.subagent.PHASE_MODULE_MAP", {"intake": _fake_phase_module()}), \
-             patch("koan.subagent._push_sse"), \
              patch("asyncio.create_subprocess_exec", side_effect=patched_subprocess):
             from koan.subagent import spawn_subagent
 
@@ -330,21 +328,17 @@ class TestSpawnSubagent:
             "subagent_dir": subagent_dir,
         }
 
-        captured_model = []
-
-        def capture_sse(app, event_type, payload):
-            if event_type == "subagent" and isinstance(payload, dict):
-                captured_model.append(payload.get("model"))
-
-        with patch("koan.subagent.PHASE_MODULE_MAP", {"intake": _fake_phase_module()}), \
-             patch("koan.subagent._push_sse", side_effect=capture_sse):
+        with patch("koan.subagent.PHASE_MODULE_MAP", {"intake": _fake_phase_module()}):
             from koan.subagent import spawn_subagent
 
             await spawn_subagent(task, app_state, runner=FakeRunner())
 
         # When runner is provided directly, model is None (legacy path)
-        assert any(m is None for m in captured_model), \
-            f"Expected None model for direct-runner path, got {captured_model}"
+        events = app_state.projection_store.events
+        agent_spawned = [e for e in events if e.event_type == "agent_spawned"]
+        assert len(agent_spawned) >= 1
+        assert agent_spawned[0].payload.get("model") is None, \
+            f"Expected None model for direct-runner path, got {agent_spawned[0].payload}"
 
 
 # -- fold purity (supplementary) ----------------------------------------------
@@ -571,27 +565,20 @@ class TestDiagnosticFanout:
             "subagent_dir": subagent_dir,
         }
 
-        sse_payloads = []
-
-        def capture_sse(app, event_type, payload):
-            if event_type == "notification":
-                sse_payloads.append(payload)
-
-        with patch("koan.subagent.PHASE_MODULE_MAP", {"intake": _fake_phase_module()}), \
-             patch("koan.subagent._push_sse", side_effect=capture_sse):
+        with patch("koan.subagent.PHASE_MODULE_MAP", {"intake": _fake_phase_module()}):
             from koan.subagent import spawn_subagent
 
             await spawn_subagent(task, app_state, runner=FakeRunner())
 
-        # Should have at least the bootstrap_failure notification
-        boot_notifs = [p for p in sse_payloads if p.get("type") == "bootstrap_failure"]
-        assert len(boot_notifs) == 1
+        # Bootstrap failure is emitted as agent_exited with error="bootstrap_failure"
+        # and the fold populates projection.notifications.
+        notifs = app_state.projection_store.projection.notifications
+        boot_notifs = [n for n in notifs if n.get("error") == "bootstrap_failure"]
+        assert len(boot_notifs) >= 1
         notif = boot_notifs[0]
-        assert notif["code"] == "bootstrap_failure"
-        assert notif["runner"] == "fake"
-        assert notif["stage"] == "handshake"
-        assert "message" in notif
-        assert "details" in notif
+        assert notif["type"] == "agent_exited_error"
+        assert "agent_id" in notif
+        assert "exit_code" in notif
 
     def test_fold_populates_diagnostic_field(self):
         """fold() sets diagnostic dict on runner_diagnostic events."""
@@ -651,25 +638,19 @@ class TestBinaryNotFoundSpawn:
             "subagent_dir": subagent_dir,
         }
 
-        sse_payloads = []
-
-        def capture_sse(app, event_type, payload):
-            if event_type == "notification":
-                sse_payloads.append(payload)
-
-        with patch("koan.subagent.PHASE_MODULE_MAP", {"intake": _fake_phase_module()}), \
-             patch("koan.subagent._push_sse", side_effect=capture_sse):
+        with patch("koan.subagent.PHASE_MODULE_MAP", {"intake": _fake_phase_module()}):
             from koan.subagent import spawn_subagent
 
             exit_code = await spawn_subagent(task, app_state)
 
         assert exit_code == 1
 
-        # Verify SSE notification with diagnostic fields
-        runner_errors = [p for p in sse_payloads if p.get("code") == "binary_not_found"]
-        assert len(runner_errors) == 1
-        assert runner_errors[0]["stage"] == "spawn"
-        assert "/nonexistent/path/claude" in runner_errors[0]["message"]
+        # Verify agent_spawn_failed event in projection notifications
+        notifs = app_state.projection_store.projection.notifications
+        spawn_fails = [n for n in notifs if n.get("type") == "agent_spawn_failed"]
+        assert len(spawn_fails) >= 1
+        assert spawn_fails[0]["error_code"] == "binary_not_found"
+        assert "/nonexistent/path/claude" in spawn_fails[0]["message"]
 
         # Verify events.jsonl contains a runner_diagnostic
         events_path = Path(subagent_dir) / "events.jsonl"

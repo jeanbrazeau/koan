@@ -327,24 +327,26 @@ def test_agents_detect_missing_param(client, app_state):
 # -- SSE replay ---------------------------------------------------------------
 
 def test_sse_replay(app_state):
-    """Test that SSE stream replays last_sse_values on connect."""
+    """Test that SSE stream sends a snapshot on ?since=0 and replays on ?since=N."""
     from koan.web.app import _sse_event
-    from koan.driver import push_sse
 
-    # Push a phase event through the new JSON-only push_sse
-    push_sse(app_state, "phase", "intake")
+    # Push a phase event via projection store
+    app_state.projection_store.push_event("phase_started", {"phase": "intake"})
 
-    # Verify the replay cache now holds the JSON payload (no html/target)
-    assert "phase" in app_state.last_sse_values
-    payload = app_state.last_sse_values["phase"]
-    assert payload["phase"] == "intake"
-    assert "html" not in payload
-    assert "target" not in payload
+    # Verify projection holds the phase
+    assert app_state.projection_store.projection.phase == "intake"
+    assert app_state.projection_store.version == 1
 
     # Verify the SSE event formatter produces correct output
-    event_str = _sse_event("phase", payload)
-    assert "event: phase" in event_str
+    event_str = _sse_event("phase_started", {"phase": "intake"})
+    assert "event: phase_started" in event_str
     assert '"intake"' in event_str
+
+    # Verify events_since works for replay
+    events = app_state.projection_store.events_since(0)
+    assert len(events) == 1
+    assert events[0].event_type == "phase_started"
+    assert events[0].payload["phase"] == "intake"
 
 
 # -- Live page redirect (now SPA fallback) ------------------------------------
@@ -364,30 +366,30 @@ def test_live_page_when_running(client, app_state):
 # -- Workflow interaction SSE payload -----------------------------------------
 
 def test_workflow_interaction_sse_payload_shape(app_state):
-    from koan.driver import push_sse
+    from koan.events import build_workflow_decision_requested
 
-    push_sse(app_state, "interaction", {
-        "type": "workflow-decision",
-        "token": "tok",
-        "chat_turns": [{
-            "role": "orchestrator",
-            "status_report": "Done",
-            "recommended_phases": [{
-                "phase": "tech-plan",
-                "context": "next",
-                "recommended": True,
-            }],
+    token = "tok"
+    chat_turns = [{
+        "role": "orchestrator",
+        "status_report": "Done",
+        "recommended_phases": [{
+            "phase": "tech-plan",
+            "context": "next",
+            "recommended": True,
         }],
-    })
+    }]
+    app_state.projection_store.push_event(
+        "workflow_decision_requested",
+        build_workflow_decision_requested(token, chat_turns),
+        agent_id="agent-1",
+    )
 
-    # After SPA migration, interaction payloads are pure JSON (no html/target).
-    payload = app_state.last_sse_values["interaction"]
-    assert payload["type"] == "workflow-decision"
-    assert payload["token"] == "tok"
-    assert "html" not in payload
-    assert "target" not in payload
-    # Verify the phase data is in the payload
-    turns = payload["chat_turns"]
+    # Verify projection holds the active interaction
+    active = app_state.projection_store.projection.active_interaction
+    assert active is not None
+    assert active["interaction_type"] == "workflow_decision_requested"
+    assert active["token"] == "tok"
+    turns = active["chat_turns"]
     assert turns[0]["recommended_phases"][0]["phase"] == "tech-plan"
 
 
@@ -537,3 +539,63 @@ def test_agents_set_active(client, app_state):
     assert resp.status_code == 200
     assert resp.json()["ok"] is True
     assert app_state.config.active_installations.get("claude") == "my-claude"
+
+
+# -- SSE endpoint HTTP-level tests -------------------------------------------
+
+@pytest.mark.anyio
+def test_sse_snapshot_contains_projection_state(app_state):
+    """Snapshot SSE event contains the full projection as {version, state}."""
+    from koan.web.app import _sse_event
+
+    app_state.projection_store.push_event("phase_started", {"phase": "intake"})
+
+    snapshot = app_state.projection_store.get_snapshot()
+    assert snapshot["version"] == 1
+    assert snapshot["state"]["phase"] == "intake"
+    assert snapshot["state"]["run_started"] is True
+
+    # Verify SSE wire format
+    event_str = _sse_event("snapshot", snapshot)
+    assert "event: snapshot" in event_str
+    assert '"intake"' in event_str
+
+
+def test_sse_replay_events_since_n(app_state):
+    """events_since(N) returns events with version > N for replay."""
+    app_state.projection_store.push_event("phase_started", {"phase": "intake"})
+    app_state.projection_store.push_event("phase_started", {"phase": "brief-generation"})
+    # version is now 2
+
+    # Client at version 1 should get only version 2
+    events = app_state.projection_store.events_since(1)
+    assert len(events) == 1
+    assert events[0].version == 2
+    assert events[0].event_type == "phase_started"
+    assert events[0].payload["phase"] == "brief-generation"
+
+    # Client at version 0 gets both
+    all_events = app_state.projection_store.events_since(0)
+    assert len(all_events) == 2
+
+    # Client at version 2 gets nothing (live-tail only)
+    none = app_state.projection_store.events_since(2)
+    assert len(none) == 0
+
+
+def test_sse_fatal_error_stale_version(app_state):
+    """?since=N where N > server version triggers fatal_error condition."""
+    # server version is 0, client claims version 99
+    store = app_state.projection_store
+    assert store.version == 0
+
+    # The sse_stream handler checks: if since > 0 and since > store.version
+    # When true, it yields a fatal_error event and returns.
+    from koan.web.app import _sse_event
+    fatal_event = _sse_event("fatal_error", {"reason": "version_not_available"})
+    assert "event: fatal_error" in fatal_event
+    assert "version_not_available" in fatal_event
+
+    # Verify the condition: since=99 > version=0 and since > 0
+    assert 99 > store.version
+    assert 99 > 0

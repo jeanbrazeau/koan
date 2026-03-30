@@ -37,7 +37,7 @@ class TestClaudeRunnerParseStreamEvent:
     def test_thinking_block(self):
         line = json.dumps({"type": "assistant", "content": [{"type": "thinking", "text": "hmm"}]})
         evts = self.runner.parse_stream_event(line)
-        assert evts == [StreamEvent(type="thinking", is_thinking=True)]
+        assert evts == [StreamEvent(type="thinking", is_thinking=True, content="hmm")]
 
     def test_result_success(self):
         line = json.dumps({"type": "result", "subtype": "success", "result": "done"})
@@ -74,7 +74,7 @@ class TestClaudeRunnerParseStreamEvent:
         })
         evts = self.runner.parse_stream_event(line)
         assert len(evts) == 2
-        assert evts[0] == StreamEvent(type="thinking", is_thinking=True)
+        assert evts[0] == StreamEvent(type="thinking", is_thinking=True, content="reasoning")
         assert evts[1] == StreamEvent(type="token_delta", content="answer")
 
     def test_multi_block_with_unknown_type_skipped(self):
