@@ -13,6 +13,12 @@ export default defineConfig({
     // `uv run koan` serves the latest build without a copy step.
     outDir: '../koan/web/static/app',
     emptyOutDir: true,
+
+    // Dev-friendly build: keep readable names and source maps so React
+    // DevTools, browser debugger, and console traces are useful.
+    // The bundle is only served locally — size doesn't matter.
+    sourcemap: true,
+    minify: false,
   },
 
   server: {
