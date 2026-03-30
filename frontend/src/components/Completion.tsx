@@ -1,10 +1,12 @@
 import { useStore } from '../store/index'
-import { formatSize } from '../utils'
 
 export function Completion() {
   const completion = useStore(s => s.completion)
+  const artifacts = useStore(s => s.artifacts)
 
   if (!completion) return null
+
+  const artifactList = Object.keys(artifacts)
 
   return (
     <div className="phase-content">
@@ -15,14 +17,12 @@ export function Completion() {
             <p className="phase-status">
               {completion.summary || 'All phases completed successfully.'}
             </p>
-            {(completion.artifacts ?? []).length > 0 && (
+            {artifactList.length > 0 && (
               <div className="summary-list">
-                {completion.artifacts.map(a => (
-                  <div key={a.path} className="summary-item">
+                {artifactList.map(path => (
+                  <div key={path} className="summary-item">
                     <span className="icon-done">[OK]</span>
-                    <span>
-                      {a.path} ({formatSize(a.size)})
-                    </span>
+                    <span>{path}</span>
                   </div>
                 ))}
               </div>

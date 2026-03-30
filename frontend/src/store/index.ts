@@ -29,6 +29,7 @@ export interface CompletionInfo {
   success: boolean
   summary: string
   error?: string
+  phase?: string
 }
 
 export interface NotificationEntry {
@@ -201,7 +202,7 @@ interface KoanState {
   applyEvent: (event: Record<string, unknown>) => void
 }
 
-export const useStore = create<KoanState>((set, get) => ({
+export const useStore = create<KoanState>((set) => ({
   connected: false,
   lastVersion: 0,
   fatalError: false,
