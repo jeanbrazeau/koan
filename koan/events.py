@@ -174,3 +174,59 @@ def build_workflow_decided(
     if decision is not None:
         result["decision"] = decision
     return result
+
+
+# -- Configuration event builders ---------------------------------------------
+
+def build_probe_completed(runners: list[dict]) -> dict:
+    return {"runners": runners}
+
+
+def build_installation_created(
+    alias: str, runner_type: str, binary: str, extra_args: list[str],
+) -> dict:
+    return {
+        "alias": alias,
+        "runner_type": runner_type,
+        "binary": binary,
+        "extra_args": extra_args,
+    }
+
+
+def build_installation_modified(
+    alias: str, runner_type: str, binary: str, extra_args: list[str],
+) -> dict:
+    return {
+        "alias": alias,
+        "runner_type": runner_type,
+        "binary": binary,
+        "extra_args": extra_args,
+    }
+
+
+def build_installation_removed(alias: str) -> dict:
+    return {"alias": alias}
+
+
+def build_profile_created(name: str, read_only: bool, tiers: dict) -> dict:
+    return {"name": name, "read_only": read_only, "tiers": tiers}
+
+
+def build_profile_modified(name: str, read_only: bool, tiers: dict) -> dict:
+    return {"name": name, "read_only": read_only, "tiers": tiers}
+
+
+def build_profile_removed(name: str) -> dict:
+    return {"name": name}
+
+
+def build_active_profile_changed(name: str) -> dict:
+    return {"name": name}
+
+
+def build_active_installation_changed(runner_type: str, alias: str) -> dict:
+    return {"runner_type": runner_type, "alias": alias}
+
+
+def build_scout_concurrency_changed(value: int) -> dict:
+    return {"value": value}

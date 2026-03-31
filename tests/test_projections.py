@@ -531,3 +531,101 @@ class TestAgentSpawnedOrdering:
         assert store.projection.primary_agent is not None  # known bad state
         # In production, this can't happen: subagent.py now emits agent_spawned only
         # after build_command succeeds (just before create_subprocess_exec).
+
+
+# -- fold: configuration events -----------------------------------------------
+
+class TestConfigEvents:
+    def _e(self, event_type: str, payload: dict) -> VersionedEvent:
+        return VersionedEvent(version=1, event_type=event_type, timestamp="t", payload=payload)
+
+    def test_probe_completed_sets_runners(self):
+        p = Projection()
+        runners = [{"runner_type": "claude", "available": True}]
+        p2 = fold(p, self._e("probe_completed", {"runners": runners}))
+        assert p2.config_runners == runners
+
+    def test_installation_created_appends(self):
+        p = Projection()
+        inst = {"alias": "claude-default", "runner_type": "claude", "binary": "/usr/bin/claude", "extra_args": []}
+        p2 = fold(p, self._e("installation_created", inst))
+        assert len(p2.config_installations) == 1
+        assert p2.config_installations[0]["alias"] == "claude-default"
+
+    def test_installation_modified_replaces(self):
+        inst = {"alias": "my-claude", "runner_type": "claude", "binary": "/old/claude", "extra_args": []}
+        p = Projection(config_installations=[inst])
+        updated = {"alias": "my-claude", "runner_type": "claude", "binary": "/new/claude", "extra_args": []}
+        p2 = fold(p, self._e("installation_modified", updated))
+        assert len(p2.config_installations) == 1
+        assert p2.config_installations[0]["binary"] == "/new/claude"
+
+    def test_installation_removed_removes_and_cleans_active(self):
+        inst = {"alias": "my-claude", "runner_type": "claude", "binary": "/usr/bin/claude", "extra_args": []}
+        p = Projection(
+            config_installations=[inst],
+            config_active_installations={"claude": "my-claude"},
+        )
+        p2 = fold(p, self._e("installation_removed", {"alias": "my-claude"}))
+        assert p2.config_installations == []
+        assert "claude" not in p2.config_active_installations
+
+    def test_installation_removed_does_not_clean_unrelated_active(self):
+        inst = {"alias": "my-claude", "runner_type": "claude", "binary": "/usr/bin/claude", "extra_args": []}
+        p = Projection(
+            config_installations=[inst],
+            config_active_installations={"claude": "other-claude"},
+        )
+        p2 = fold(p, self._e("installation_removed", {"alias": "my-claude"}))
+        assert p2.config_active_installations == {"claude": "other-claude"}
+
+    def test_profile_created_appends(self):
+        p = Projection()
+        profile = {"name": "fast", "read_only": False, "tiers": {}}
+        p2 = fold(p, self._e("profile_created", profile))
+        assert len(p2.config_profiles) == 1
+        assert p2.config_profiles[0]["name"] == "fast"
+
+    def test_profile_modified_replaces(self):
+        profile = {"name": "fast", "read_only": False, "tiers": {"strong": {"runner_type": "claude"}}}
+        p = Projection(config_profiles=[profile])
+        updated = {"name": "fast", "read_only": False, "tiers": {"strong": {"runner_type": "codex"}}}
+        p2 = fold(p, self._e("profile_modified", updated))
+        assert len(p2.config_profiles) == 1
+        assert p2.config_profiles[0]["tiers"]["strong"]["runner_type"] == "codex"
+
+    def test_profile_modified_appends_when_not_found(self):
+        p = Projection()
+        balanced = {"name": "balanced", "read_only": True, "tiers": {}}
+        p2 = fold(p, self._e("profile_modified", balanced))
+        assert len(p2.config_profiles) == 1
+        assert p2.config_profiles[0]["name"] == "balanced"
+
+    def test_profile_removed(self):
+        p = Projection(config_profiles=[
+            {"name": "fast", "read_only": False, "tiers": {}},
+            {"name": "slow", "read_only": False, "tiers": {}},
+        ])
+        p2 = fold(p, self._e("profile_removed", {"name": "fast"}))
+        assert len(p2.config_profiles) == 1
+        assert p2.config_profiles[0]["name"] == "slow"
+
+    def test_active_profile_changed(self):
+        p = Projection()
+        p2 = fold(p, self._e("active_profile_changed", {"name": "fast"}))
+        assert p2.config_active_profile == "fast"
+
+    def test_active_installation_changed(self):
+        p = Projection()
+        p2 = fold(p, self._e("active_installation_changed", {"runner_type": "claude", "alias": "my-claude"}))
+        assert p2.config_active_installations == {"claude": "my-claude"}
+
+    def test_active_installation_changed_updates_existing(self):
+        p = Projection(config_active_installations={"claude": "old", "codex": "codex-default"})
+        p2 = fold(p, self._e("active_installation_changed", {"runner_type": "claude", "alias": "new"}))
+        assert p2.config_active_installations == {"claude": "new", "codex": "codex-default"}
+
+    def test_scout_concurrency_changed(self):
+        p = Projection()
+        p2 = fold(p, self._e("scout_concurrency_changed", {"value": 16}))
+        assert p2.config_scout_concurrency == 16

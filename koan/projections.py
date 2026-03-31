@@ -37,6 +37,17 @@ EventType = Literal[
     "artifact_created",
     "artifact_modified",
     "artifact_removed",
+    # Configuration
+    "probe_completed",
+    "installation_created",
+    "installation_modified",
+    "installation_removed",
+    "profile_created",
+    "profile_modified",
+    "profile_removed",
+    "active_profile_changed",
+    "active_installation_changed",
+    "scout_concurrency_changed",
 ]
 
 
@@ -82,6 +93,14 @@ class Projection(BaseModel):
 
     # Completion
     completion: dict | None = None
+
+    # Configuration
+    config_runners: list[dict] = Field(default_factory=list)
+    config_profiles: list[dict] = Field(default_factory=list)
+    config_installations: list[dict] = Field(default_factory=list)
+    config_active_installations: dict[str, str] = Field(default_factory=dict)
+    config_active_profile: str = "balanced"
+    config_scout_concurrency: int = 8
 
 
 def _utcnow() -> str:
@@ -298,6 +317,112 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                 path = payload.get("path", "")
                 new_artifacts = {k: v for k, v in projection.artifacts.items() if k != path}
                 return projection.model_copy(update={"artifacts": new_artifacts})
+
+            # ── Configuration ──────────────────────────────────────────────────
+
+            case "probe_completed":
+                return projection.model_copy(update={
+                    "config_runners": payload.get("runners", []),
+                })
+
+            case "installation_created":
+                new_inst = {
+                    "alias": payload.get("alias", ""),
+                    "runner_type": payload.get("runner_type", ""),
+                    "binary": payload.get("binary", ""),
+                    "extra_args": payload.get("extra_args", []),
+                }
+                return projection.model_copy(update={
+                    "config_installations": [*projection.config_installations, new_inst],
+                })
+
+            case "installation_modified":
+                alias = payload.get("alias", "")
+                updated_inst = {
+                    "alias": alias,
+                    "runner_type": payload.get("runner_type", ""),
+                    "binary": payload.get("binary", ""),
+                    "extra_args": payload.get("extra_args", []),
+                }
+                new_insts = [
+                    updated_inst if inst.get("alias") == alias else inst
+                    for inst in projection.config_installations
+                ]
+                return projection.model_copy(update={"config_installations": new_insts})
+
+            case "installation_removed":
+                alias = payload.get("alias", "")
+                # Find runner_type before removing (needed to clean active_installations)
+                removed_rt = next(
+                    (inst.get("runner_type") for inst in projection.config_installations
+                     if inst.get("alias") == alias),
+                    None,
+                )
+                new_insts = [
+                    inst for inst in projection.config_installations
+                    if inst.get("alias") != alias
+                ]
+                new_active = dict(projection.config_active_installations)
+                if removed_rt and new_active.get(removed_rt) == alias:
+                    del new_active[removed_rt]
+                return projection.model_copy(update={
+                    "config_installations": new_insts,
+                    "config_active_installations": new_active,
+                })
+
+            case "profile_created":
+                new_profile = {
+                    "name": payload.get("name", ""),
+                    "read_only": payload.get("read_only", False),
+                    "tiers": payload.get("tiers", {}),
+                }
+                return projection.model_copy(update={
+                    "config_profiles": [*projection.config_profiles, new_profile],
+                })
+
+            case "profile_modified":
+                name = payload.get("name", "")
+                updated_profile = {
+                    "name": name,
+                    "read_only": payload.get("read_only", False),
+                    "tiers": payload.get("tiers", {}),
+                }
+                if any(p.get("name") == name for p in projection.config_profiles):
+                    new_profiles = [
+                        updated_profile if p.get("name") == name else p
+                        for p in projection.config_profiles
+                    ]
+                else:
+                    # First time (e.g. balanced on startup)
+                    new_profiles = [*projection.config_profiles, updated_profile]
+                return projection.model_copy(update={"config_profiles": new_profiles})
+
+            case "profile_removed":
+                name = payload.get("name", "")
+                new_profiles = [
+                    p for p in projection.config_profiles if p.get("name") != name
+                ]
+                return projection.model_copy(update={"config_profiles": new_profiles})
+
+            case "active_profile_changed":
+                return projection.model_copy(update={
+                    "config_active_profile": payload.get("name", "balanced"),
+                })
+
+            case "active_installation_changed":
+                new_active = dict(projection.config_active_installations)
+                rt = payload.get("runner_type", "")
+                alias = payload.get("alias", "")
+                if rt:
+                    new_active[rt] = alias
+                return projection.model_copy(update={
+                    "config_active_installations": new_active,
+                })
+
+            case "scout_concurrency_changed":
+                return projection.model_copy(update={
+                    "config_scout_concurrency": payload.get("value", 8),
+                })
 
             case _:
                 log.warning("fold: unknown event_type=%r", event_type)
