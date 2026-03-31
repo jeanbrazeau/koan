@@ -1069,35 +1069,110 @@
   margin-left: auto;
 }
 
-.installation-cards {
+/* -- Installation tabs -- */
+
+.install-tab-bar {
   display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-4);
-  margin-top: var(--space-4);
+  gap: 0;
+  border-bottom: 2px solid var(--border);
+  margin-bottom: 0;
 }
 
-.installation-card {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
-  padding: var(--space-4);
-  min-width: 180px;
-  max-width: 220px;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-2);
-}
-
-.installation-card-alias {
+.install-tab {
+  padding: var(--space-2) var(--space-4);
   font-family: var(--font-mono);
-  font-weight: 700;
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  cursor: pointer;
+  margin-bottom: -2px;
+  border-bottom: 2px solid transparent;
+  transition: color var(--duration-fast) var(--ease-default),
+              border-color var(--duration-fast) var(--ease-default);
+}
+
+.install-tab:hover {
+  color: var(--text);
+}
+
+.install-tab--active {
+  font-weight: 600;
+  color: var(--text-strong);
+  border-bottom-color: var(--green);
+}
+
+.install-tab-content {
+  padding: var(--space-4) 0;
+}
+
+.install-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-4);
+  padding: var(--space-2) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: var(--space-2);
+  background: var(--bg-elevated);
+}
+
+.install-row--default {
+  background: var(--bg);
+  border-color: transparent;
+}
+
+.install-row-info {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 160px;
+}
+
+.install-row-alias {
+  font-family: var(--font-mono);
+  font-weight: 600;
+  font-size: var(--font-size-sm);
   color: var(--text-strong);
 }
 
-.installation-card-meta {
+.install-row-badge {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-xs);
+  background: var(--green-bg);
+  color: var(--green);
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+}
+
+.install-row-path {
+  flex: 1;
   font-family: var(--font-mono);
   font-size: var(--font-size-xs);
   color: var(--text-muted);
+}
+
+.install-add-btn {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  padding: var(--space-2) var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-top: var(--space-2);
+  transition: border-color var(--duration-fast) var(--ease-default),
+              color var(--duration-fast) var(--ease-default);
+}
+
+.install-add-btn:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.btn-danger {
+  color: var(--red);
 }
 
 .no-runners-msg {

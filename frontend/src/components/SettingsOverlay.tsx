@@ -327,6 +327,7 @@ export function SettingsOverlay() {
   const [editingProfile, setEditingProfile] = useState<string | null>(null)
   const [showNewInstallation, setShowNewInstallation] = useState(false)
   const [editingInstallation, setEditingInstallation] = useState<string | null>(null)
+  const [activeRunnerTab, setActiveRunnerTab] = useState<string | null>(null)
 
   // Sync local scout concurrency when store changes
   useEffect(() => {
@@ -363,6 +364,12 @@ export function SettingsOverlay() {
     installationsByType[inst.runner_type].push(inst)
   }
   const runnerTypes = Object.keys(installationsByType).sort()
+
+  // Auto-select first tab when runner types arrive
+  const currentTab = activeRunnerTab && runnerTypes.includes(activeRunnerTab)
+    ? activeRunnerTab
+    : runnerTypes[0] ?? null
+  const currentTabInstallations = currentTab ? installationsByType[currentTab] ?? [] : []
 
   const editingProfileData = editingProfile
     ? profiles.find(p => p.name === editingProfile)
@@ -457,87 +464,107 @@ export function SettingsOverlay() {
               />
             )}
 
-            {/* Agent Installations — grouped by runner type */}
+            {/* Agent Installations — tabbed by runner type */}
             <div className="settings-section-heading" style={{ marginTop: 24 }}>
               Agent Installations
             </div>
-            {runnerTypes.map(rt => (
-              <div key={rt} style={{ marginBottom: 12 }}>
-                <div style={{ fontWeight: 600, fontSize: 13, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--text-muted)', marginBottom: 4 }}>{rt}</div>
-                {installationsByType[rt].map(inst => {
-                  const isDefault = inst.alias === `${rt}-default`
-                  return (
-                    <div key={inst.alias} className="profile-row">
-                      <span className="profile-row-name">
-                        {inst.alias}
-                        {isDefault && ' [default]'}
-                      </span>
-                      <span className="profile-row-tiers">
-                        {inst.binary || '--'}
-                        {inst.extra_args && inst.extra_args.length > 0 && ` ${inst.extra_args.join(' ')}`}
-                      </span>
-                      <span className="profile-row-actions">
-                        <button
-                          className="btn btn-secondary"
-                          style={{ padding: '4px 10px', fontSize: 13 }}
-                          onClick={() => {
-                            setShowNewInstallation(false)
-                            setEditingInstallation(inst.alias)
-                          }}
+
+            {runnerTypes.length > 0 && (
+              <div>
+                {/* Tab bar */}
+                <div className="install-tab-bar">
+                  {runnerTypes.map(rt => (
+                    <button
+                      key={rt}
+                      className={`install-tab${rt === currentTab ? ' install-tab--active' : ''}`}
+                      onClick={() => setActiveRunnerTab(rt)}
+                    >
+                      {rt}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Tab content */}
+                {currentTab && (
+                  <div className="install-tab-content">
+                    {currentTabInstallations.map(inst => {
+                      const isDefault = inst.alias === `${currentTab}-default`
+                      return (
+                        <div
+                          key={inst.alias}
+                          className={`install-row${isDefault ? ' install-row--default' : ''}`}
                         >
-                          Edit
-                        </button>
-                        {!isDefault && (
-                          <button
-                            className="btn btn-secondary"
-                            style={{ padding: '4px 10px', fontSize: 13 }}
-                            onClick={() => handleDeleteInstallation(inst.alias)}
-                          >
-                            Delete
-                          </button>
-                        )}
-                      </span>
-                    </div>
-                  )
-                })}
+                          <div className="install-row-info">
+                            <span className="install-row-alias">{inst.alias}</span>
+                            {isDefault && <span className="install-row-badge">default</span>}
+                          </div>
+                          <span className="install-row-path">
+                            {inst.binary || '--'}
+                            {inst.extra_args && inst.extra_args.length > 0 && ` ${inst.extra_args.join(' ')}`}
+                          </span>
+                          <span className="profile-row-actions">
+                            <button
+                              className="btn btn-secondary"
+                              style={{ padding: '4px 10px', fontSize: 13 }}
+                              onClick={() => {
+                                setShowNewInstallation(false)
+                                setEditingInstallation(inst.alias)
+                              }}
+                            >
+                              Edit
+                            </button>
+                            {!isDefault && (
+                              <button
+                                className="btn btn-secondary btn-danger"
+                                style={{ padding: '4px 10px', fontSize: 13 }}
+                                onClick={() => handleDeleteInstallation(inst.alias)}
+                              >
+                                Delete
+                              </button>
+                            )}
+                          </span>
+                        </div>
+                      )
+                    })}
+
+                    {editingInstallation && editingInstData && editingInstData.runner_type === currentTab && (
+                      <InstallationForm
+                        initialAlias={editingInstallation}
+                        initialRunnerType={editingInstData.runner_type}
+                        initialBinary={editingInstData.binary}
+                        initialExtraArgs={editingInstData.extra_args}
+                        isEdit
+                        allRunners={runners}
+                        onSave={() => setEditingInstallation(null)}
+                        onCancel={() => setEditingInstallation(null)}
+                      />
+                    )}
+
+                    {!showNewInstallation ? (
+                      <button
+                        className="install-add-btn"
+                        onClick={() => {
+                          setEditingInstallation(null)
+                          setShowNewInstallation(true)
+                        }}
+                      >
+                        + Add {currentTab} installation
+                      </button>
+                    ) : (
+                      <InstallationForm
+                        initialAlias=""
+                        initialRunnerType={currentTab}
+                        initialBinary=""
+                        initialExtraArgs={[]}
+                        isEdit={false}
+                        allRunners={runners}
+                        onSave={() => setShowNewInstallation(false)}
+                        onCancel={() => setShowNewInstallation(false)}
+                      />
+                    )}
+                  </div>
+                )}
               </div>
-            ))}
-
-            {editingInstallation && editingInstData && (
-              <InstallationForm
-                initialAlias={editingInstallation}
-                initialRunnerType={editingInstData.runner_type}
-                initialBinary={editingInstData.binary}
-                initialExtraArgs={editingInstData.extra_args}
-                isEdit
-                allRunners={runners}
-                onSave={() => setEditingInstallation(null)}
-                onCancel={() => setEditingInstallation(null)}
-              />
-            )}
-
-            {!showNewInstallation ? (
-              <button
-                className="btn btn-secondary"
-                style={{ marginTop: 8 }}
-                onClick={() => {
-                  setEditingInstallation(null)
-                  setShowNewInstallation(true)
-                }}
-              >
-                + New Installation
-              </button>
-            ) : (
-              <InstallationForm
-                initialAlias=""
-                initialRunnerType=""
-                initialBinary=""
-                initialExtraArgs={[]}
-                isEdit={false}
-                allRunners={runners}
-                onSave={() => setShowNewInstallation(false)}
-                onCancel={() => setShowNewInstallation(false)}
-              />
             )}
 
             {/* Scout Concurrency */}
