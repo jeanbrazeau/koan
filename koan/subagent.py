@@ -156,6 +156,7 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
         role=role,
         subagent_dir=subagent_dir,
         epic_dir=task.get("epic_dir", ""),
+        label=task.get("label", ""),
         step=0,
         phase_module=phase_module,
         phase_ctx=phase_ctx,

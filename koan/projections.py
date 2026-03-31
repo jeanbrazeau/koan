@@ -20,6 +20,7 @@ EventType = Literal[
     "agent_step_advanced",
     "agent_exited",
     "workflow_completed",
+    "scout_queued",
     # Activity
     "tool_called",
     "tool_completed",
@@ -96,6 +97,8 @@ class Projection(BaseModel):
     artifacts: dict[str, dict] = Field(default_factory=dict)  # keyed by path
     notifications: list[dict] = Field(default_factory=list)   # derived from error events
 
+    queued_scouts: list[dict] = Field(default_factory=list)
+
     # Completion
     completion: dict | None = None
 
@@ -158,7 +161,20 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                 else:
                     new_scouts = dict(projection.scouts)
                     new_scouts[eid] = new_agent
-                    return projection.model_copy(update={"scouts": new_scouts})
+                    # Remove from queued_scouts when scout starts running
+                    lbl = payload.get("label", "")
+                    new_queued = [s for s in projection.queued_scouts if s.get("label") != lbl]
+                    return projection.model_copy(update={"scouts": new_scouts, "queued_scouts": new_queued})
+
+            case "scout_queued":
+                entry = {
+                    "scout_id": payload.get("scout_id", ""),
+                    "label": payload.get("label", ""),
+                    "model": payload.get("model"),
+                }
+                return projection.model_copy(update={
+                    "queued_scouts": [*projection.queued_scouts, entry],
+                })
 
             case "agent_spawn_failed":
                 notification = {

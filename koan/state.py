@@ -35,6 +35,7 @@ class AgentState:
     role: SubagentRole
     subagent_dir: str
     epic_dir: str = ""
+    label: str = ""
     step: int = 0
     phase_module: Any = None
     phase_ctx: Any = None

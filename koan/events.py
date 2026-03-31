@@ -15,9 +15,18 @@ def build_agent_spawned(agent: AgentState) -> dict:
     return {
         "agent_id": agent.agent_id,
         "role": agent.role,
+        "label": agent.label,
         "model": agent.model,
         "is_primary": agent.is_primary,
         "started_at_ms": int(agent.started_at.timestamp() * 1000),
+    }
+
+
+def build_scout_queued(scout_id: str, label: str, model: str | None = None) -> dict:
+    return {
+        "scout_id": scout_id,
+        "label": label,
+        "model": model,
     }
 
 

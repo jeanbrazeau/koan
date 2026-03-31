@@ -9,8 +9,7 @@ function AgentRow({ agent }: { agent: AgentInfo }) {
 
   const statusIcon = status === 'running' ? '›'
     : status === 'done' ? '✓'
-    : status === 'failed' ? '✘'
-    : '○'
+    : '✘'
   const statusCls = `agent-status-${status}`
   const nameCls = `agent-name-${status}`
   const doingCls = status === 'failed' ? 'agent-doing-failed' : 'agent-doing-dim'
@@ -18,12 +17,12 @@ function AgentRow({ agent }: { agent: AgentInfo }) {
     ? (agent.error || 'failed')
     : status === 'done'
     ? 'done'
-    : (agent.stepName || `step ${agent.step}`)
+    : (agent.lastTool || agent.stepName || `step ${agent.step}`)
 
   return (
     <div className={`agent-row agent-row-${status}`}>
       <span className={`agent-row-icon ${statusCls}`}>{statusIcon}</span>
-      <span className={`agent-row-name ${nameCls}`}>{agent.role}</span>
+      <span className={`agent-row-name ${nameCls}`}>{agent.label || agent.role}</span>
       <span className="agent-row-model">{agent.model ?? '--'}</span>
       <span className="agent-row-tokens">{formatTokens(agent.tokensSent, agent.tokensReceived)}</span>
       <span className="agent-row-time">{elapsed}</span>
@@ -70,15 +69,16 @@ function SectionHeader({ icon, label, className }: {
 export function AgentMonitor() {
   const scouts = useStore(s => s.scouts)
   const completedAgents = useStore(s => s.completedAgents)
+  const queuedScouts = useStore(s => s.queuedScouts)
 
   const { running, done, failed } = useMemo(() => {
     const runList = Object.values(scouts)
-    const doneList = completedAgents.filter(a => a.status === 'done')
-    const failList = completedAgents.filter(a => a.status === 'failed')
+    const doneList = completedAgents.filter(a => a.status === 'done' && a.role === 'scout')
+    const failList = completedAgents.filter(a => a.status === 'failed' && a.role === 'scout')
     return { running: runList, done: doneList, failed: failList }
   }, [scouts, completedAgents])
 
-  const total = running.length + done.length + failed.length
+  const total = running.length + done.length + failed.length + queuedScouts.length
   if (total === 0) return null
 
   return (
@@ -86,7 +86,7 @@ export function AgentMonitor() {
       <div className="monitor-inner">
         <CounterBar
           running={running.length}
-          queued={0}
+          queued={queuedScouts.length}
           done={done.length}
           failed={failed.length}
         />
@@ -95,6 +95,22 @@ export function AgentMonitor() {
           <>
             <SectionHeader icon="●" label="running" className="section-running" />
             {running.map(a => <AgentRow key={a.agentId} agent={a} />)}
+          </>
+        )}
+
+        {queuedScouts.length > 0 && (
+          <>
+            <SectionHeader icon="○" label="queued" className="section-queued" />
+            {queuedScouts.map((q, i) => (
+              <div key={i} className="agent-row agent-row-queued">
+                <span className="agent-row-icon agent-status-queued">○</span>
+                <span className="agent-row-name agent-name-queued">{q.label || 'scout'}</span>
+                <span className="agent-row-model">--</span>
+                <span className="agent-row-tokens">--</span>
+                <span className="agent-row-time">--</span>
+                <span className="agent-row-doing agent-doing-dim">queued</span>
+              </div>
+            ))}
           </>
         )}
 

@@ -37,7 +37,7 @@ export function connectSSE(store: KoanStore): EventSource {
 
   const KNOWN_EVENTS = [
     // Lifecycle
-    'phase_started', 'agent_spawned', 'agent_spawn_failed',
+    'phase_started', 'agent_spawned', 'agent_spawn_failed', 'scout_queued',
     'agent_step_advanced', 'agent_exited', 'workflow_completed',
     // Activity
     'tool_called', 'tool_completed',

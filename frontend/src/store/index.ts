@@ -22,6 +22,8 @@ export interface AgentInfo {
   tokensReceived: number
   status: AgentStatus
   error?: string
+  label: string
+  lastTool: string
 }
 
 export interface ArtifactFile {
@@ -146,6 +148,8 @@ function transformAgent(a: Record<string, unknown>): AgentInfo {
     tokensReceived: (a['output_tokens'] as number) ?? 0,
     status:         (a['status'] as AgentStatus) ?? 'running',
     error:          a['error'] as string | undefined,
+    label:          (a['label'] as string) ?? '',
+    lastTool:       (a['lastTool'] as string) ?? '',
   }
 }
 
@@ -181,6 +185,9 @@ interface KoanState {
 
   // Scout agents — keyed by agentId
   scouts: Record<string, AgentInfo>
+
+  // Queued scouts (waiting for semaphore)
+  queuedScouts: Array<{ scoutId: string; label: string; model: string | null }>
 
   // Activity feed
   activityLog: ActivityEntry[]
@@ -249,6 +256,7 @@ export const useStore = create<KoanState>((set) => ({
   completedAgents: [],
   intakeProgress: null,
   scouts: {},
+  queuedScouts: [],
   activityLog: [],
   streamBuffer: '',
   isThinking: false,
@@ -447,6 +455,11 @@ export const useStore = create<KoanState>((set) => ({
       isThinking: false,
       thinkingBuffer: '',
       thinkingStartedAt: null,
+      queuedScouts: ((state['queued_scouts'] ?? []) as Array<{ scout_id: string; label: string; model: string | null }>).map(q => ({
+        scoutId: (q as any).scout_id ?? (q as any).scoutId ?? '',
+        label: (q as any).label ?? '',
+        model: (q as any).model ?? null,
+      })),
       completion: completion ?? null,
       // Configuration
       configProfiles,
@@ -531,11 +544,15 @@ export const useStore = create<KoanState>((set) => ({
             tokensSent:     0,
             tokensReceived: 0,
             status:         'running',
+            label:          (event['label'] as string) ?? '',
+            lastTool:       '',
           }
           if (isPrimary) {
             return { ...base, primaryAgent: agent }
           } else {
-            return { ...base, scouts: { ...s.scouts, [agent.agentId]: agent } }
+            const lbl = (event['label'] as string) ?? ''
+            const newQueued = s.queuedScouts.filter(q => q.label !== lbl)
+            return { ...base, scouts: { ...s.scouts, [agent.agentId]: agent }, queuedScouts: newQueued }
           }
         }
 
@@ -547,6 +564,15 @@ export const useStore = create<KoanState>((set) => ({
             message: (event['message'] as string) ?? 'Agent spawn failed',
           }
           return { ...base, notifications: [...s.notifications, notif] }
+        }
+
+        case 'scout_queued': {
+          const entry = {
+            scoutId: (event['scout_id'] as string) ?? '',
+            label: (event['label'] as string) ?? '',
+            model: (event['model'] as string | null) ?? null,
+          }
+          return { ...base, queuedScouts: [...s.queuedScouts, entry] }
         }
 
         case 'agent_step_advanced': {
@@ -645,6 +671,11 @@ export const useStore = create<KoanState>((set) => ({
           const toolName = (event['tool'] as string) ?? 'tool'
           // Skip koan MCP tools — rendered as step headers via MCP endpoint
           if (toolName.startsWith('koan_') || toolName.startsWith('mcp__koan')) return base
+          if (agentId && agentId in s.scouts && agentId !== s.primaryAgent?.agentId) {
+            const summary = (event['summary'] as string) ?? ''
+            const lastTool = summary ? `${toolName} ${summary}` : toolName
+            return { ...base, scouts: { ...s.scouts, [agentId]: { ...s.scouts[agentId], lastTool } } }
+          }
           if (agentId !== s.primaryAgent?.agentId) return base
           const newLog = flushBuffers(s)
           const entry: ActivityEntry = {

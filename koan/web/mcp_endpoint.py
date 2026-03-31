@@ -225,6 +225,7 @@ async def koan_request_scouts(questions: list[dict] | None = None) -> str:
             )
             scout_tasks.append({
                 "role": "scout",
+                "label": scout_id,
                 "epic_dir": epic_dir,
                 "subagent_dir": subagent_dir,
                 "question": q.get("prompt", ""),
@@ -254,6 +255,17 @@ async def koan_request_scouts(questions: list[dict] | None = None) -> str:
                         return await f.read()
                 except FileNotFoundError:
                     return None
+
+        # Emit queued events for all scouts before concurrency-limited execution
+        from ..events import build_scout_queued
+        for st in scout_tasks:
+            _app_state.projection_store.push_event(
+                "scout_queued",
+                build_scout_queued(
+                    scout_id=st.get("label", ""),
+                    label=st.get("label", ""),
+                ),
+            )
 
         results = await asyncio.gather(*[run_scout(t) for t in scout_tasks])
         findings = [r for r in results if r is not None]
