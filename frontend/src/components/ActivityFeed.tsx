@@ -49,6 +49,14 @@ function ActiveThinkingCard() {
   )
 }
 
+function TextBlock({ entry }: { entry: ActivityEntry }) {
+  return (
+    <div className="stream-output">
+      {entry.textContent}
+    </div>
+  )
+}
+
 function StepHeader({ entry }: { entry: ActivityEntry }) {
   const label = entry.totalSteps
     ? `step ${entry.step}/${entry.totalSteps}`
@@ -99,6 +107,7 @@ export function ActivityFeed() {
         {activityLog.map((entry, i) => {
           if (entry.type === 'thinking') return <ThinkingCard key={i} entry={entry} />
           if (entry.type === 'step') return <StepHeader key={i} entry={entry} />
+          if (entry.type === 'text') return <TextBlock key={i} entry={entry} />
           return <ToolLine key={i} entry={entry} />
         })}
 
@@ -113,7 +122,7 @@ export function ActivityFeed() {
           </div>
         )}
 
-        {/* Stream output — wrapping text block for LLM output */}
+        {/* Active stream output — text being produced right now */}
         {streamBuffer && (
           <div className="stream-output">
             {streamBuffer}

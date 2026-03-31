@@ -41,7 +41,7 @@ export interface NotificationEntry {
   detail?: string
 }
 
-export type ActivityEntryType = 'tool' | 'thinking' | 'step'
+export type ActivityEntryType = 'tool' | 'thinking' | 'step' | 'text'
 
 export interface ActivityEntry {
   type: ActivityEntryType
@@ -58,6 +58,8 @@ export interface ActivityEntry {
   step?: number
   stepName?: string
   totalSteps?: number
+  // Text entries
+  textContent?: string
 }
 
 export interface AskOption {
@@ -429,6 +431,46 @@ export const useStore = create<KoanState>((set) => ({
   // -- Event fold: mirrors backend fold --------------------------------------
 
   applyEvent: (event) => {
+    // Helpers to flush accumulated buffers into activity entries.
+    function flushThinkingBuffer(s: KoanState): ActivityEntry[] {
+      if (!s.thinkingBuffer) return [...s.activityLog]
+      return [...s.activityLog, {
+        type: 'thinking', tool: 'thinking', summary: '',
+        inFlight: false,
+        thinkingContent: s.thinkingBuffer,
+        thinkingStartedAt: s.thinkingStartedAt ?? undefined,
+        thinkingEndedAt: Date.now(),
+      }]
+    }
+    function flushStreamBuffer(s: KoanState): ActivityEntry[] {
+      if (!s.streamBuffer) return [...s.activityLog]
+      return [...s.activityLog, {
+        type: 'text', tool: '', summary: '',
+        inFlight: false,
+        textContent: s.streamBuffer,
+      }]
+    }
+    function flushBuffers(s: KoanState): ActivityEntry[] {
+      let log = [...s.activityLog]
+      if (s.thinkingBuffer) {
+        log.push({
+          type: 'thinking', tool: 'thinking', summary: '',
+          inFlight: false,
+          thinkingContent: s.thinkingBuffer,
+          thinkingStartedAt: s.thinkingStartedAt ?? undefined,
+          thinkingEndedAt: Date.now(),
+        })
+      }
+      if (s.streamBuffer) {
+        log.push({
+          type: 'text', tool: '', summary: '',
+          inFlight: false,
+          textContent: s.streamBuffer,
+        })
+      }
+      return log
+    }
+
     const eventType = event['event_type'] as string
     const version = event['version'] as number
     const agentId = event['agent_id'] as string | null
@@ -482,43 +524,33 @@ export const useStore = create<KoanState>((set) => ({
           const stepName = (event['step_name'] as string) ?? ''
           const totalSteps = event['total_steps'] as number | undefined
           const usage = event['usage'] as Record<string, number> | undefined
+          const isPrimary = s.primaryAgent?.agentId === agentId
 
-          // Flush pending thinking buffer
-          const flushLog = [...s.activityLog]
-          let newThinkBuf = s.thinkingBuffer
-          let newThinkStart = s.thinkingStartedAt
-          if (s.thinkingBuffer) {
-            flushLog.push({
-              type: 'thinking', tool: 'thinking', summary: '',
-              inFlight: false,
-              thinkingContent: s.thinkingBuffer,
-              thinkingStartedAt: s.thinkingStartedAt ?? undefined,
-              thinkingEndedAt: Date.now(),
-            })
-            newThinkBuf = ''
-            newThinkStart = null
-          }
-
-          // Add step marker (skip step 0 → 1 bootstrap transition)
-          if (step >= 1) {
-            flushLog.push({
-              type: 'step', tool: '', summary: '',
-              inFlight: false,
-              step, stepName, totalSteps,
-            })
+          // Only add activity entries for the primary agent
+          let newLog = s.activityLog
+          if (isPrimary) {
+            newLog = flushBuffers(s)
+            if (step >= 1) {
+              newLog.push({
+                type: 'step', tool: '', summary: '',
+                inFlight: false,
+                step, stepName, totalSteps,
+              })
+            }
           }
 
           const updates: Partial<KoanState> = {
             ...base,
-            activityLog: flushLog,
+            activityLog: newLog,
             isThinking: false,
-            thinkingBuffer: newThinkBuf,
-            thinkingStartedAt: newThinkStart,
+            thinkingBuffer: isPrimary ? '' : s.thinkingBuffer,
+            thinkingStartedAt: isPrimary ? null : s.thinkingStartedAt,
+            streamBuffer: isPrimary ? '' : s.streamBuffer,
           }
-          if (s.primaryAgent?.agentId === agentId) {
-            updates.primaryAgent = { ...s.primaryAgent, step, stepName,
-              tokensSent: s.primaryAgent.tokensSent + (usage?.['input_tokens'] ?? 0),
-              tokensReceived: s.primaryAgent.tokensReceived + (usage?.['output_tokens'] ?? 0),
+          if (isPrimary) {
+            updates.primaryAgent = { ...s.primaryAgent!, step, stepName,
+              tokensSent: s.primaryAgent!.tokensSent + (usage?.['input_tokens'] ?? 0),
+              tokensReceived: s.primaryAgent!.tokensReceived + (usage?.['output_tokens'] ?? 0),
             }
           } else if (agentId && agentId in s.scouts) {
             const scout = s.scouts[agentId]
@@ -575,23 +607,13 @@ export const useStore = create<KoanState>((set) => ({
         }
 
         // ── Activity ───────────────────────────────────────────────────────
+        // Only primary agent events go into the main activity feed.
+        // Scout activity is shown in the agent monitor at the bottom.
 
         case 'tool_called': {
-          // Flush pending thinking buffer before tool call
-          const newLog = [...s.activityLog]
-          let thinkBuf = s.thinkingBuffer
-          let thinkStart = s.thinkingStartedAt
-          if (s.thinkingBuffer) {
-            newLog.push({
-              type: 'thinking', tool: 'thinking', summary: '',
-              inFlight: false,
-              thinkingContent: s.thinkingBuffer,
-              thinkingStartedAt: s.thinkingStartedAt ?? undefined,
-              thinkingEndedAt: Date.now(),
-            })
-            thinkBuf = ''
-            thinkStart = null
-          }
+          if (agentId !== s.primaryAgent?.agentId) return base
+          // Flush pending buffers before tool call
+          const newLog = flushBuffers(s)
           const entry: ActivityEntry = {
             type:     'tool',
             tool:     (event['tool'] as string) ?? 'tool',
@@ -602,10 +624,12 @@ export const useStore = create<KoanState>((set) => ({
           }
           newLog.push(entry)
           return { ...base, activityLog: newLog, isThinking: false,
-                   thinkingBuffer: thinkBuf, thinkingStartedAt: thinkStart }
+                   thinkingBuffer: '', thinkingStartedAt: null,
+                   streamBuffer: '' }
         }
 
         case 'tool_completed': {
+          if (agentId !== s.primaryAgent?.agentId) return base
           const callId = event['call_id'] as string
           return {
             ...base,
@@ -616,30 +640,37 @@ export const useStore = create<KoanState>((set) => ({
         }
 
         case 'thinking': {
+          if (agentId !== s.primaryAgent?.agentId) return base
           const delta = (event['delta'] as string) ?? ''
+          // If there was pending stream text, flush it first (text → thinking transition)
+          const thinkLog = s.streamBuffer ? flushStreamBuffer(s) : s.activityLog
           return {
             ...base,
             isThinking: true,
+            activityLog: thinkLog,
             thinkingBuffer: s.thinkingBuffer + delta,
             thinkingStartedAt: s.thinkingStartedAt ?? Date.now(),
+            streamBuffer: '',
           }
         }
 
-        case 'stream_delta':
-          return { ...base, streamBuffer: s.streamBuffer + ((event['delta'] as string) ?? ''), isThinking: false }
+        case 'stream_delta': {
+          if (agentId !== s.primaryAgent?.agentId) return base
+          // If there was pending thinking, flush it first (thinking → text transition)
+          const sdLog = s.thinkingBuffer ? flushThinkingBuffer(s) : s.activityLog
+          return {
+            ...base,
+            activityLog: sdLog,
+            streamBuffer: s.streamBuffer + ((event['delta'] as string) ?? ''),
+            isThinking: false,
+            thinkingBuffer: '',
+            thinkingStartedAt: null,
+          }
+        }
 
         case 'stream_cleared': {
-          // Flush any pending thinking buffer
-          const clearedLog = [...s.activityLog]
-          if (s.thinkingBuffer) {
-            clearedLog.push({
-              type: 'thinking', tool: 'thinking', summary: '',
-              inFlight: false,
-              thinkingContent: s.thinkingBuffer,
-              thinkingStartedAt: s.thinkingStartedAt ?? undefined,
-              thinkingEndedAt: Date.now(),
-            })
-          }
+          if (agentId !== s.primaryAgent?.agentId) return base
+          const clearedLog = flushBuffers(s)
           return { ...base, streamBuffer: '', isThinking: false, activityLog: clearedLog,
                    thinkingBuffer: '', thinkingStartedAt: null }
         }
