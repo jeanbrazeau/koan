@@ -439,7 +439,7 @@ class TestToolNameNormalization:
         runner = ClaudeRunner(subagent_dir="/tmp/test")
         line = json.dumps({
             "type": "assistant",
-            "content": [{"type": "tool_use", "name": "Read", "input": {"file_path": "/tmp/f"}}],
+            "message": {"content": [{"type": "tool_use", "name": "Read", "input": {"file_path": "/tmp/f"}}]},
         })
         evts = runner.parse_stream_event(line)
         assert len(evts) == 1
@@ -451,7 +451,7 @@ class TestToolNameNormalization:
         runner = ClaudeRunner(subagent_dir="/tmp/test")
         line = json.dumps({
             "type": "assistant",
-            "content": [{"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}],
+            "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "ls"}}]},
         })
         evts = runner.parse_stream_event(line)
         assert len(evts) == 1
@@ -463,7 +463,7 @@ class TestToolNameNormalization:
         runner = ClaudeRunner(subagent_dir="/tmp/test")
         line = json.dumps({
             "type": "assistant",
-            "content": [{"type": "tool_use", "name": "koan_complete_step", "input": {}}],
+            "message": {"content": [{"type": "tool_use", "name": "koan_complete_step", "input": {}}]},
         })
         evts = runner.parse_stream_event(line)
         assert evts == []

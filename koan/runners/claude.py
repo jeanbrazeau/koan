@@ -48,6 +48,7 @@ class ClaudeRunner:
 
     def __init__(self, *, subagent_dir: str) -> None:
         self.subagent_dir = subagent_dir
+        self._saw_stream_events = False
 
     def list_models(self, binary: str) -> list[ModelInfo]:
         return [
@@ -105,6 +106,7 @@ class ClaudeRunner:
             installation.binary, "-p", boot_prompt,
             "--output-format", "stream-json",
             "--verbose",
+            "--include-partial-messages",
             "--mcp-config", str(config_path),
         ]
         if thinking != "disabled":
@@ -124,6 +126,8 @@ class ClaudeRunner:
 
         evt_type = data.get("type")
 
+        if evt_type == "stream_event":
+            return self._parse_stream_event(data)
         if evt_type == "assistant":
             return self._parse_assistant(data)
         if evt_type == "result":
@@ -133,8 +137,29 @@ class ClaudeRunner:
 
     # -- Private helpers -------------------------------------------------------
 
+    def _parse_stream_event(self, data: dict) -> list[StreamEvent]:
+        """Handle incremental stream_event deltas from --include-partial-messages."""
+        inner = data.get("event")
+        if not isinstance(inner, dict):
+            return []
+        inner_type = inner.get("type")
+        if inner_type == "content_block_delta":
+            self._saw_stream_events = True
+            delta = inner.get("delta", {})
+            delta_type = delta.get("type")
+            if delta_type == "thinking_delta":
+                return [StreamEvent(type="thinking", is_thinking=True, content=delta.get("thinking", ""))]
+            if delta_type == "text_delta":
+                return [StreamEvent(type="token_delta", content=delta.get("text", ""))]
+        return []
+
     def _parse_assistant(self, data: dict) -> list[StreamEvent]:
-        blocks = data.get("content")
+        # stream-json wraps content inside a "message" envelope
+        msg = data.get("message")
+        if isinstance(msg, dict):
+            blocks = msg.get("content")
+        else:
+            blocks = data.get("content")
         if not isinstance(blocks, list) or len(blocks) == 0:
             return []
 
@@ -143,9 +168,7 @@ class ClaudeRunner:
             if not isinstance(block, dict):
                 continue
             block_type = block.get("type")
-            if block_type == "text":
-                events.append(StreamEvent(type="token_delta", content=block.get("text", "")))
-            elif block_type == "tool_use":
+            if block_type == "tool_use":
                 raw_name = block.get("name")
                 canonical = _normalize_tool_name(raw_name)
                 # Drop koan MCP tool events -- the MCP endpoint is authoritative
@@ -156,10 +179,13 @@ class ClaudeRunner:
                     tool_name=canonical,
                     tool_args=block.get("input"),
                 ))
-            elif block_type == "thinking":
-                # Claude stream-json thinking blocks use the "thinking" key for content,
-                # not "text" (which is used by text blocks). Fall back to "text" as a
-                # safety net for format variations.
+            # text and thinking blocks are streamed incrementally via
+            # stream_event deltas (--include-partial-messages). Only
+            # emit them from assistant messages as a fallback when no
+            # stream_events were seen (e.g. partial-messages disabled).
+            elif block_type == "text" and not self._saw_stream_events:
+                events.append(StreamEvent(type="token_delta", content=block.get("text", "")))
+            elif block_type == "thinking" and not self._saw_stream_events:
                 events.append(StreamEvent(
                     type="thinking",
                     is_thinking=True,

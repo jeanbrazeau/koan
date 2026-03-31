@@ -21,23 +21,69 @@ class TestClaudeRunnerParseStreamEvent:
     def setup_method(self):
         self.runner = ClaudeRunner(subagent_dir="/tmp/test-claude")
 
+    def _msg(self, content: list) -> str:
+        """Wrap content blocks in the stream-json message envelope."""
+        return json.dumps({"type": "assistant", "message": {"content": content}})
+
     def test_text_delta(self):
-        line = json.dumps({"type": "assistant", "content": [{"type": "text", "text": "hello"}]})
+        line = self._msg([{"type": "text", "text": "hello"}])
         evts = self.runner.parse_stream_event(line)
         assert evts == [StreamEvent(type="token_delta", content="hello")]
 
     def test_tool_call(self):
-        line = json.dumps({
-            "type": "assistant",
-            "content": [{"type": "tool_use", "name": "bash", "input": {"cmd": "ls"}}],
-        })
+        line = self._msg([{"type": "tool_use", "name": "bash", "input": {"cmd": "ls"}}])
         evts = self.runner.parse_stream_event(line)
         assert evts == [StreamEvent(type="tool_call", tool_name="bash", tool_args={"cmd": "ls"})]
 
     def test_thinking_block(self):
-        line = json.dumps({"type": "assistant", "content": [{"type": "thinking", "text": "hmm"}]})
+        line = self._msg([{"type": "thinking", "text": "hmm"}])
         evts = self.runner.parse_stream_event(line)
         assert evts == [StreamEvent(type="thinking", is_thinking=True, content="hmm")]
+
+    def test_thinking_block_thinking_key(self):
+        # Real claude stream-json uses "thinking" key, not "text"
+        line = self._msg([{"type": "thinking", "thinking": "reasoning here", "signature": "sig"}])
+        evts = self.runner.parse_stream_event(line)
+        assert evts == [StreamEvent(type="thinking", is_thinking=True, content="reasoning here")]
+
+    # -- stream_event (--include-partial-messages) ----------------------------
+
+    def test_stream_event_thinking_delta(self):
+        line = json.dumps({
+            "type": "stream_event",
+            "event": {"type": "content_block_delta", "index": 0,
+                      "delta": {"type": "thinking_delta", "thinking": "hmm"}},
+        })
+        evts = self.runner.parse_stream_event(line)
+        assert evts == [StreamEvent(type="thinking", is_thinking=True, content="hmm")]
+
+    def test_stream_event_text_delta(self):
+        line = json.dumps({
+            "type": "stream_event",
+            "event": {"type": "content_block_delta", "index": 0,
+                      "delta": {"type": "text_delta", "text": "hello"}},
+        })
+        evts = self.runner.parse_stream_event(line)
+        assert evts == [StreamEvent(type="token_delta", content="hello")]
+
+    def test_stream_event_suppresses_assistant_text(self):
+        """Once stream_events are seen, assistant text/thinking blocks are skipped."""
+        # First: a stream_event sets the flag
+        delta_line = json.dumps({
+            "type": "stream_event",
+            "event": {"type": "content_block_delta", "index": 0,
+                      "delta": {"type": "text_delta", "text": "hi"}},
+        })
+        self.runner.parse_stream_event(delta_line)
+        # Then: assistant message with text and tool_use
+        msg_line = self._msg([
+            {"type": "text", "text": "hi"},
+            {"type": "tool_use", "name": "bash", "input": {"cmd": "ls"}},
+        ])
+        evts = self.runner.parse_stream_event(msg_line)
+        # text is skipped (already streamed), tool_use preserved
+        assert len(evts) == 1
+        assert evts[0].type == "tool_call"
 
     def test_result_success(self):
         line = json.dumps({"type": "result", "subtype": "success", "result": "done"})
@@ -52,53 +98,41 @@ class TestClaudeRunnerParseStreamEvent:
         assert self.runner.parse_stream_event("not json{") == []
 
     def test_multi_block_text_and_tool(self):
-        line = json.dumps({
-            "type": "assistant",
-            "content": [
-                {"type": "text", "text": "calling tool"},
-                {"type": "tool_use", "name": "read", "input": {"path": "/a"}},
-            ],
-        })
+        line = self._msg([
+            {"type": "text", "text": "calling tool"},
+            {"type": "tool_use", "name": "read", "input": {"path": "/a"}},
+        ])
         evts = self.runner.parse_stream_event(line)
         assert len(evts) == 2
         assert evts[0] == StreamEvent(type="token_delta", content="calling tool")
         assert evts[1] == StreamEvent(type="tool_call", tool_name="read", tool_args={"path": "/a"})
 
     def test_multi_block_thinking_and_text(self):
-        line = json.dumps({
-            "type": "assistant",
-            "content": [
-                {"type": "thinking", "text": "reasoning"},
-                {"type": "text", "text": "answer"},
-            ],
-        })
+        line = self._msg([
+            {"type": "thinking", "text": "reasoning"},
+            {"type": "text", "text": "answer"},
+        ])
         evts = self.runner.parse_stream_event(line)
         assert len(evts) == 2
         assert evts[0] == StreamEvent(type="thinking", is_thinking=True, content="reasoning")
         assert evts[1] == StreamEvent(type="token_delta", content="answer")
 
     def test_multi_block_with_unknown_type_skipped(self):
-        line = json.dumps({
-            "type": "assistant",
-            "content": [
-                {"type": "text", "text": "hello"},
-                {"type": "unknown_block"},
-                {"type": "tool_use", "name": "bash", "input": {}},
-            ],
-        })
+        line = self._msg([
+            {"type": "text", "text": "hello"},
+            {"type": "unknown_block"},
+            {"type": "tool_use", "name": "bash", "input": {}},
+        ])
         evts = self.runner.parse_stream_event(line)
         assert len(evts) == 2
         assert evts[0].type == "token_delta"
         assert evts[1].type == "tool_call"
 
     def test_multi_block_non_dict_block_skipped(self):
-        line = json.dumps({
-            "type": "assistant",
-            "content": [
-                "not a dict",
-                {"type": "text", "text": "valid"},
-            ],
-        })
+        line = self._msg([
+            "not a dict",
+            {"type": "text", "text": "valid"},
+        ])
         evts = self.runner.parse_stream_event(line)
         assert evts == [StreamEvent(type="token_delta", content="valid")]
 
