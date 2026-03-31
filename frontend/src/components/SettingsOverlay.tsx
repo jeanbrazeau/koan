@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-import { useStore, Profile, Installation } from '../store/index'
+import { useStore, Installation } from '../store/index'
 import { tierSummary } from '../utils'
 import * as api from '../api/client'
 import { RunnerInfo } from '../api/client'
@@ -51,12 +51,10 @@ function ProfileForm({
   const setTierField = (tier: string, field: keyof TierConfig, value: string) => {
     setTiers(prev => {
       const updated = { ...prev[tier], [field]: value }
-      // Reset downstream when runner changes
       if (field === 'runner_type') {
         updated.model = ''
         updated.thinking = ''
       }
-      // Reset thinking when model changes
       if (field === 'model') {
         updated.thinking = ''
       }
@@ -78,12 +76,9 @@ function ProfileForm({
     }
     setSaving(true)
     try {
-      let res
-      if (isEdit) {
-        res = await api.updateProfile(name, filteredTiers)
-      } else {
-        res = await api.createProfile(name.trim(), filteredTiers)
-      }
+      const res = isEdit
+        ? await api.updateProfile(name, filteredTiers)
+        : await api.createProfile(name.trim(), filteredTiers)
       if (res.ok) {
         onSave()
       } else {
@@ -221,21 +216,18 @@ function InstallationForm({
     const args = extraArgs.trim() ? extraArgs.trim().split(/\s+/) : []
     setSaving(true)
     try {
-      let res
-      if (isEdit) {
-        res = await api.updateAgent(alias, {
-          runner_type: runnerType,
-          binary: binary.trim(),
-          extra_args: args,
-        })
-      } else {
-        res = await api.createAgent({
-          alias: alias.trim(),
-          runner_type: runnerType,
-          binary: binary.trim(),
-          extra_args: args,
-        })
-      }
+      const res = isEdit
+        ? await api.updateAgent(alias, {
+            runner_type: runnerType,
+            binary: binary.trim(),
+            extra_args: args,
+          })
+        : await api.createAgent({
+            alias: alias.trim(),
+            runner_type: runnerType,
+            binary: binary.trim(),
+            extra_args: args,
+          })
       if (res.ok) {
         onSave()
       } else {
@@ -281,7 +273,7 @@ function InstallationForm({
         <input
           className="model-tier-input"
           style={{ flex: 1 }}
-          placeholder="/usr/bin/claude"
+          placeholder="/usr/local/bin/claude"
           value={binary}
           onChange={e => setBinary(e.target.value)}
         />
@@ -320,40 +312,26 @@ function InstallationForm({
 
 export function SettingsOverlay() {
   const setSettingsOpen = useStore(s => s.setSettingsOpen)
-  const [loading, setLoading] = useState(true)
-  const [profiles, setProfiles] = useState<Profile[]>([])
-  const [installations, setInstallations] = useState<Installation[]>([])
-  const [activeInstallations, setActiveInstallations] = useState<Record<string, string>>({})
-  const [scoutConcurrency, setScoutConcurrency] = useState(8)
-  const [availableRunners, setAvailableRunners] = useState<RunnerInfo[]>([])
-  const [allRunners, setAllRunners] = useState<RunnerInfo[]>([])
 
+  // Read all config from the store (fed by SSE events — always current)
+  const profiles = useStore(s => s.configProfiles)
+  const installations = useStore(s => s.configInstallations)
+  const runners = useStore(s => s.configRunners)
+  const scoutConcurrency = useStore(s => s.configScoutConcurrency)
+
+  const availableRunners = runners.filter(r => r.available)
+
+  // Local UI state for forms
+  const [localScoutConcurrency, setLocalScoutConcurrency] = useState(scoutConcurrency)
   const [showNewProfile, setShowNewProfile] = useState(false)
   const [editingProfile, setEditingProfile] = useState<string | null>(null)
   const [showNewInstallation, setShowNewInstallation] = useState(false)
   const [editingInstallation, setEditingInstallation] = useState<string | null>(null)
 
-  const loadSettings = async () => {
-    setLoading(true)
-    try {
-      const [probeData, settingsData] = await Promise.all([
-        api.getProbe(true),
-        api.getSettingsBody(),
-      ])
-      setAvailableRunners(probeData.runners.filter(r => r.available))
-      setAllRunners(probeData.runners)
-      setProfiles(settingsData.profiles)
-      setInstallations(settingsData.installations)
-      setActiveInstallations(settingsData.activeInstallations)
-      setScoutConcurrency(settingsData.scoutConcurrency)
-    } finally {
-      setLoading(false)
-    }
-  }
-
+  // Sync local scout concurrency when store changes
   useEffect(() => {
-    loadSettings()
-  }, [])
+    setLocalScoutConcurrency(scoutConcurrency)
+  }, [scoutConcurrency])
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -364,23 +342,27 @@ export function SettingsOverlay() {
   }, [setSettingsOpen])
 
   const handleDeleteProfile = async (name: string) => {
-    const res = await api.deleteProfile(name)
-    if (res.ok) loadSettings()
+    await api.deleteProfile(name)
+    // SSE event updates the store automatically
   }
 
   const handleDeleteInstallation = async (alias: string) => {
-    const res = await api.deleteAgent(alias)
-    if (res.ok) loadSettings()
-  }
-
-  const handleSetActive = async (runner_type: string, alias: string) => {
-    const res = await api.setActiveAgent(runner_type, alias)
-    if (res.ok) loadSettings()
+    await api.deleteAgent(alias)
   }
 
   const handleSaveScoutConcurrency = async () => {
-    await api.saveScoutConcurrency(scoutConcurrency)
+    await api.saveScoutConcurrency(localScoutConcurrency)
   }
+
+  // Group installations by runner type
+  const installationsByType: Record<string, Installation[]> = {}
+  for (const inst of installations) {
+    if (!installationsByType[inst.runner_type]) {
+      installationsByType[inst.runner_type] = []
+    }
+    installationsByType[inst.runner_type].push(inst)
+  }
+  const runnerTypes = Object.keys(installationsByType).sort()
 
   const editingProfileData = editingProfile
     ? profiles.find(p => p.name === editingProfile)
@@ -407,133 +389,110 @@ export function SettingsOverlay() {
           </div>
 
           <div className="settings-overlay-body">
-            {loading ? (
-              <p className="settings-section-heading">Loading...</p>
+            {/* Profiles */}
+            <div className="settings-section-heading">Profiles</div>
+            {profiles.map(p => (
+              <div key={p.name} className="profile-row">
+                <span className="profile-row-name">
+                  {p.name}
+                  {p.read_only && ' [locked]'}
+                </span>
+                <span className="profile-row-tiers">
+                  {tierSummary(p.tiers)}
+                </span>
+                {!p.read_only && (
+                  <span className="profile-row-actions">
+                    <button
+                      className="btn btn-secondary"
+                      style={{ padding: '4px 10px', fontSize: 13 }}
+                      onClick={() => {
+                        setShowNewProfile(false)
+                        setEditingProfile(p.name)
+                      }}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="btn btn-secondary"
+                      style={{ padding: '4px 10px', fontSize: 13 }}
+                      onClick={() => handleDeleteProfile(p.name)}
+                    >
+                      Delete
+                    </button>
+                  </span>
+                )}
+              </div>
+            ))}
+
+            {editingProfile && editingProfileData && (
+              <ProfileForm
+                initialName={editingProfile}
+                initialTiers={editingProfileData.tiers}
+                isEdit
+                runners={availableRunners}
+                onSave={() => setEditingProfile(null)}
+                onCancel={() => setEditingProfile(null)}
+              />
+            )}
+
+            {!showNewProfile ? (
+              <button
+                className="btn btn-secondary"
+                style={{ marginTop: 8 }}
+                onClick={() => {
+                  setEditingProfile(null)
+                  setShowNewProfile(true)
+                }}
+              >
+                + New Profile
+              </button>
             ) : (
-              <>
-                {/* Profiles */}
-                <div className="settings-section-heading">Profiles</div>
-                {profiles.map(p => (
-                  <div key={p.name} className="profile-row">
-                    <span className="profile-row-name">
-                      {p.name}
-                      {p.read_only && ' [locked]'}
-                    </span>
-                    <span className="profile-row-tiers">
-                      {tierSummary(p.tiers)}
-                    </span>
-                    {!p.read_only && (
-                      <span className="profile-row-actions">
-                        <button
-                          className="btn btn-secondary"
-                          style={{ padding: '4px 10px', fontSize: 13 }}
-                          onClick={() => {
-                            setShowNewProfile(false)
-                            setEditingProfile(p.name)
-                          }}
-                        >
-                          Edit
-                        </button>
-                        <button
-                          className="btn btn-secondary"
-                          style={{ padding: '4px 10px', fontSize: 13 }}
-                          onClick={() => handleDeleteProfile(p.name)}
-                        >
-                          Delete
-                        </button>
-                      </span>
-                    )}
-                  </div>
-                ))}
+              <ProfileForm
+                initialName=""
+                initialTiers={{}}
+                isEdit={false}
+                runners={availableRunners}
+                onSave={() => setShowNewProfile(false)}
+                onCancel={() => setShowNewProfile(false)}
+              />
+            )}
 
-                {editingProfile && editingProfileData && (
-                  <ProfileForm
-                    initialName={editingProfile}
-                    initialTiers={editingProfileData.tiers}
-                    isEdit
-                    runners={availableRunners}
-                    onSave={() => {
-                      setEditingProfile(null)
-                      loadSettings()
-                    }}
-                    onCancel={() => setEditingProfile(null)}
-                  />
-                )}
-
-                {!showNewProfile ? (
-                  <button
-                    className="btn btn-secondary"
-                    style={{ marginTop: 8 }}
-                    onClick={() => {
-                      setEditingProfile(null)
-                      setShowNewProfile(true)
-                    }}
-                  >
-                    + New Profile
-                  </button>
-                ) : (
-                  <ProfileForm
-                    initialName=""
-                    initialTiers={{}}
-                    isEdit={false}
-                    runners={availableRunners}
-                    onSave={() => {
-                      setShowNewProfile(false)
-                      loadSettings()
-                    }}
-                    onCancel={() => setShowNewProfile(false)}
-                  />
-                )}
-
-                {/* Agent Installations */}
-                <details style={{ marginTop: 24 }}>
-                  <summary
-                    className="settings-section-heading"
-                    style={{ cursor: 'pointer' }}
-                  >
-                    Agent Installations
-                  </summary>
-                  <div className="installation-cards">
-                    {installations.map(inst => {
-                      const isActive =
-                        activeInstallations[inst.runner_type] === inst.alias
-                      return (
-                        <div key={inst.alias} className="installation-card">
-                          <span className="installation-card-alias">{inst.alias}</span>
-                          {isActive && <span className="badge active">active</span>}
+            {/* Agent Installations — grouped by runner type */}
+            <div className="settings-section-heading" style={{ marginTop: 24 }}>
+              Agent Installations
+            </div>
+            {runnerTypes.map(rt => (
+              <div key={rt} style={{ marginBottom: 16 }}>
+                <div style={{ fontWeight: 500, marginBottom: 4 }}>{rt}</div>
+                <div className="installation-cards">
+                  {installationsByType[rt].map(inst => {
+                    const isDefault = inst.alias === `${rt}-default`
+                    return (
+                      <div key={inst.alias} className="installation-card">
+                        <span className="installation-card-alias">
+                          {inst.alias}
+                          {isDefault && ' [default]'}
+                        </span>
+                        <span className="installation-card-meta">
+                          {inst.binary || '--'}
+                        </span>
+                        {inst.extra_args && inst.extra_args.length > 0 && (
                           <span className="installation-card-meta">
-                            {inst.runner_type}
+                            {inst.extra_args.join(' ')}
                           </span>
-                          <span className="installation-card-meta">
-                            {inst.binary || '--'}
-                          </span>
-                          {inst.extra_args && inst.extra_args.length > 0 && (
-                            <span className="installation-card-meta">
-                              {inst.extra_args.join(' ')}
-                            </span>
-                          )}
-                          <span className="profile-row-actions">
-                            {!isActive && (
-                              <button
-                                className="btn btn-secondary"
-                                style={{ padding: '3px 8px', fontSize: 12 }}
-                                onClick={() =>
-                                  handleSetActive(inst.runner_type, inst.alias)
-                                }
-                              >
-                                Set active
-                              </button>
-                            )}
-                            <button
-                              className="btn btn-secondary"
-                              style={{ padding: '3px 8px', fontSize: 12 }}
-                              onClick={() => {
-                                setShowNewInstallation(false)
-                                setEditingInstallation(inst.alias)
-                              }}
-                            >
-                              Edit
-                            </button>
+                        )}
+                        <span className="profile-row-actions">
+                          <button
+                            className="btn btn-secondary"
+                            style={{ padding: '3px 8px', fontSize: 12 }}
+                            onClick={() => {
+                              setShowNewInstallation(false)
+                              setEditingInstallation(inst.alias)
+                            }}
+                          >
+                            Edit
+                          </button>
+                          {!isDefault && (
                             <button
                               className="btn btn-secondary"
                               style={{ padding: '3px 8px', fontSize: 12 }}
@@ -541,91 +500,78 @@ export function SettingsOverlay() {
                             >
                               Delete
                             </button>
-                          </span>
-                        </div>
-                      )
-                    })}
-                  </div>
-
-                  {editingInstallation && editingInstData && (
-                    <InstallationForm
-                      initialAlias={editingInstallation}
-                      initialRunnerType={editingInstData.runner_type}
-                      initialBinary={editingInstData.binary}
-                      initialExtraArgs={editingInstData.extra_args}
-                      isEdit
-                      allRunners={allRunners}
-                      onSave={() => {
-                        setEditingInstallation(null)
-                        loadSettings()
-                      }}
-                      onCancel={() => setEditingInstallation(null)}
-                    />
-                  )}
-
-                  {!showNewInstallation ? (
-                    <button
-                      className="btn btn-secondary"
-                      style={{ marginTop: 8 }}
-                      onClick={() => {
-                        setEditingInstallation(null)
-                        setShowNewInstallation(true)
-                      }}
-                    >
-                      + New Installation
-                    </button>
-                  ) : (
-                    <InstallationForm
-                      initialAlias=""
-                      initialRunnerType=""
-                      initialBinary=""
-                      initialExtraArgs={[]}
-                      isEdit={false}
-                      allRunners={allRunners}
-                      onSave={() => {
-                        setShowNewInstallation(false)
-                        loadSettings()
-                      }}
-                      onCancel={() => setShowNewInstallation(false)}
-                    />
-                  )}
-                </details>
-
-                {/* Scout Concurrency */}
-                <div className="model-config-section" style={{ marginTop: 24 }}>
-                  <div className="settings-section-heading">Scout Concurrency</div>
-                  <div
-                    style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}
-                  >
-                    <input
-                      id="settings-scout-concurrency"
-                      className="scout-concurrency-input"
-                      type="number"
-                      min={1}
-                      max={32}
-                      value={scoutConcurrency}
-                      onChange={e =>
-                        setScoutConcurrency(parseInt(e.target.value, 10) || 8)
-                      }
-                    />
-                    <button
-                      className="btn btn-secondary"
-                      style={{ padding: '4px 12px', fontSize: 13 }}
-                      onClick={handleSaveScoutConcurrency}
-                    >
-                      Save
-                    </button>
-                  </div>
+                          )}
+                        </span>
+                      </div>
+                    )
+                  })}
                 </div>
+              </div>
+            ))}
 
-                {/* Refresh */}
-                <div style={{ marginTop: 24, textAlign: 'right' }}>
-                  <button className="btn btn-secondary" onClick={loadSettings}>
-                    Refresh
-                  </button>
-                </div>
-              </>
+            {editingInstallation && editingInstData && (
+              <InstallationForm
+                initialAlias={editingInstallation}
+                initialRunnerType={editingInstData.runner_type}
+                initialBinary={editingInstData.binary}
+                initialExtraArgs={editingInstData.extra_args}
+                isEdit
+                allRunners={runners}
+                onSave={() => setEditingInstallation(null)}
+                onCancel={() => setEditingInstallation(null)}
+              />
             )}
+
+            {!showNewInstallation ? (
+              <button
+                className="btn btn-secondary"
+                style={{ marginTop: 8 }}
+                onClick={() => {
+                  setEditingInstallation(null)
+                  setShowNewInstallation(true)
+                }}
+              >
+                + New Installation
+              </button>
+            ) : (
+              <InstallationForm
+                initialAlias=""
+                initialRunnerType=""
+                initialBinary=""
+                initialExtraArgs={[]}
+                isEdit={false}
+                allRunners={runners}
+                onSave={() => setShowNewInstallation(false)}
+                onCancel={() => setShowNewInstallation(false)}
+              />
+            )}
+
+            {/* Scout Concurrency */}
+            <div className="model-config-section" style={{ marginTop: 24 }}>
+              <div className="settings-section-heading">Scout Concurrency</div>
+              <div
+                style={{ display: 'flex', alignItems: 'center', gap: 10, marginTop: 8 }}
+              >
+                <input
+                  id="settings-scout-concurrency"
+                  className="scout-concurrency-input"
+                  type="number"
+                  min={1}
+                  max={32}
+                  value={localScoutConcurrency}
+                  onChange={e =>
+                    setLocalScoutConcurrency(parseInt(e.target.value, 10) || 8)
+                  }
+                />
+                <button
+                  className="btn btn-secondary"
+                  style={{ padding: '4px 12px', fontSize: 13 }}
+                  onClick={handleSaveScoutConcurrency}
+                >
+                  Save
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       </div>

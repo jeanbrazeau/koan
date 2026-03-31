@@ -1,63 +1,92 @@
-import { useState, useEffect } from 'react'
-import { Profile } from '../store/index'
+import { useState, useEffect, useMemo } from 'react'
+import { useStore } from '../store/index'
 import * as api from '../api/client'
 
 export function LandingPage() {
   const [task, setTask] = useState('')
   const [profile, setProfile] = useState('')
   const [scoutConcurrency, setScoutConcurrency] = useState(8)
-  const [profiles, setProfiles] = useState<Profile[]>([])
-  const [hasRunners, setHasRunners] = useState(false)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-
-  // Installation selection driven by profile
-  const [preflight, setPreflight] = useState<api.StartRunPreflight | null>(null)
-  const [preflightLoading, setPreflightLoading] = useState(false)
   const [selectedInstallations, setSelectedInstallations] = useState<Record<string, string>>({})
 
+  // Read from store (fed by SSE — always current, no API fetch needed)
+  const profiles = useStore(s => s.configProfiles)
+  const installations = useStore(s => s.configInstallations)
+  const activeInstallations = useStore(s => s.configActiveInstallations)
+  const runners = useStore(s => s.configRunners)
+  const storeScoutConcurrency = useStore(s => s.configScoutConcurrency)
+
+  const hasRunners = runners.some(r => r.available)
+
+  // Load initial prompt (one-shot, not config state)
   useEffect(() => {
-    Promise.all([api.getProfiles(), api.getProbe(), api.getInitialPrompt()]).then(
-      ([profilesData, probeData, promptData]) => {
-        setProfiles(profilesData.profiles)
-        if (profilesData.profiles.length > 0) {
-          setProfile(profilesData.profiles[0].name)
-        }
-        setHasRunners(probeData.runners.some(r => r.available))
-        if (promptData.prompt) {
-          setTask(promptData.prompt)
-        }
-      },
-    )
+    api.getInitialPrompt().then(data => {
+      if (data.prompt) setTask(data.prompt)
+    })
   }, [])
 
-  // Fetch preflight when profile changes
+  // Auto-select first profile when profiles arrive from store
   useEffect(() => {
-    if (!profile) {
-      setPreflight(null)
+    if (profiles.length > 0 && !profile) {
+      setProfile(profiles[0].name)
+    }
+  }, [profiles, profile])
+
+  // Sync scout concurrency from store
+  useEffect(() => {
+    setScoutConcurrency(storeScoutConcurrency)
+  }, [storeScoutConcurrency])
+
+  // Derive preflight locally from store state (no API call)
+  const preflight = useMemo(() => {
+    const selectedProfile = profiles.find(p => p.name === profile)
+    if (!selectedProfile) return null
+
+    // Collect unique runner types from profile tiers
+    const requiredTypes = new Set<string>()
+    for (const tier of Object.values(selectedProfile.tiers)) {
+      if (tier.runner_type) requiredTypes.add(tier.runner_type)
+    }
+
+    // Group installations by runner type with binary validity
+    const installationsByType: Record<string, { alias: string; binary: string; binary_valid: boolean }[]> = {}
+    for (const rt of requiredTypes) {
+      installationsByType[rt] = installations
+        .filter(i => i.runner_type === rt)
+        .map(i => ({
+          alias: i.alias,
+          binary: i.binary,
+          // We can't check binary existence client-side, but the start-run
+          // endpoint validates. Show all installations as selectable.
+          binary_valid: true,
+        }))
+    }
+
+    return {
+      required_runner_types: [...requiredTypes].sort(),
+      installations: installationsByType,
+    }
+  }, [profile, profiles, installations])
+
+  // Auto-select installations when preflight changes
+  useEffect(() => {
+    if (!preflight) {
       setSelectedInstallations({})
       return
     }
-    setPreflightLoading(true)
-    api.getStartRunPreflight(profile).then(data => {
-      setPreflight(data)
-      // Auto-select: prefer the active installation if valid, else first valid
-      const selections: Record<string, string> = {}
-      for (const [rt, insts] of Object.entries(data.installations)) {
-        const active = insts.find(i => i.is_active && i.binary_valid)
-        const firstValid = insts.find(i => i.binary_valid)
-        if (active) selections[rt] = active.alias
-        else if (firstValid) selections[rt] = firstValid.alias
-      }
-      setSelectedInstallations(selections)
-      setPreflightLoading(false)
-    }).catch(() => {
-      setPreflight(null)
-      setPreflightLoading(false)
-    })
-  }, [profile])
+    const selections: Record<string, string> = {}
+    for (const rt of preflight.required_runner_types) {
+      const insts = preflight.installations[rt] || []
+      // Prefer the active installation, else first available
+      const active = insts.find(i => activeInstallations[rt] === i.alias)
+      const first = insts[0]
+      if (active) selections[rt] = active.alias
+      else if (first) selections[rt] = first.alias
+    }
+    setSelectedInstallations(selections)
+  }, [preflight, activeInstallations])
 
-  // All required runner types must have a selected installation
   const installationsReady = preflight
     ? preflight.required_runner_types.every(rt => selectedInstallations[rt])
     : false
@@ -85,7 +114,6 @@ export function LandingPage() {
       if (!result.ok) {
         setError(result.message ?? 'Failed to start run')
       }
-      // The SSE 'phase' event will flip runStarted → live view renders
     } catch {
       setError('Network error')
     } finally {
@@ -128,13 +156,12 @@ export function LandingPage() {
             </select>
           </div>
 
-          {preflight && !preflightLoading && preflight.required_runner_types.length > 0 && (
+          {preflight && preflight.required_runner_types.length > 0 && (
             <div className="model-config-section">
               <h3 className="model-config-section-heading">Agent Installations</h3>
               {preflight.required_runner_types.map(rt => {
                 const insts = preflight.installations[rt] || []
                 const selected = selectedInstallations[rt] || ''
-                const hasNoValid = insts.length > 0 && !insts.some(i => i.binary_valid)
                 return (
                   <div key={rt} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
                     <span style={{ minWidth: 70, fontWeight: 500 }}>{rt}</span>
@@ -146,23 +173,14 @@ export function LandingPage() {
                     >
                       <option value="">-- select installation --</option>
                       {insts.map(inst => (
-                        <option
-                          key={inst.alias}
-                          value={inst.alias}
-                          disabled={!inst.binary_valid}
-                        >
-                          {inst.alias} ({inst.binary}){!inst.binary_valid ? ' ✘ missing' : ''}
+                        <option key={inst.alias} value={inst.alias}>
+                          {inst.alias} ({inst.binary})
                         </option>
                       ))}
                     </select>
                     {insts.length === 0 && (
                       <span className="no-runners-msg" style={{ fontSize: 13 }}>
                         No installations. Add one in Settings.
-                      </span>
-                    )}
-                    {hasNoValid && (
-                      <span className="no-runners-msg" style={{ fontSize: 13 }}>
-                        All binaries missing. Update paths in Settings.
                       </span>
                     )}
                   </div>
