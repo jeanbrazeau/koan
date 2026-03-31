@@ -6,12 +6,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import shutil
 import time
 import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+log = logging.getLogger(__name__)
 
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -1063,6 +1066,30 @@ def create_app(app_state: AppState) -> Starlette:
         # StreamableHTTPSessionManager task-group is running.
         async with mcp_app._mcp_inner.lifespan(app):  # type: ignore[attr-defined]
             yield
+
+        # -- Shutdown: kill all active agent processes -------------------------
+        procs = dict(app_state._active_processes)
+        if procs:
+            log.info("shutdown: terminating %d active agent(s)…", len(procs))
+            for aid, proc in procs.items():
+                try:
+                    proc.terminate()
+                except ProcessLookupError:
+                    pass  # already dead
+
+            # Give agents a few seconds to exit cleanly
+            async def _wait_proc(aid: str, proc: asyncio.subprocess.Process) -> None:
+                try:
+                    await asyncio.wait_for(proc.wait(), timeout=5.0)
+                except asyncio.TimeoutError:
+                    log.warning("shutdown: agent %s did not exit in time, killing", aid)
+                    try:
+                        proc.kill()
+                    except ProcessLookupError:
+                        pass
+
+            await asyncio.gather(*[_wait_proc(a, p) for a, p in procs.items()])
+            log.info("shutdown: all agents stopped")
 
     routes = [
         Mount("/mcp", app=mcp_app),

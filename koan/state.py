@@ -65,3 +65,7 @@ class AppState:
     open_browser: bool = True
     initial_prompt: str = ""
     config_write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    # Track running subprocess handles so shutdown can kill them.
+    _active_processes: dict[str, asyncio.subprocess.Process] = field(
+        default_factory=dict, repr=False,
+    )

@@ -100,7 +100,10 @@ def main() -> None:
     app = create_app(app_state)
 
     host = "127.0.0.1"
-    uvicorn.run(app, host=host, port=port, log_level=args.log_level.lower())
+    # timeout_graceful_shutdown=0: don't wait for HTTP clients to disconnect.
+    # Agent cleanup happens in the lifespan shutdown handler instead.
+    uvicorn.run(app, host=host, port=port, log_level=args.log_level.lower(),
+                timeout_graceful_shutdown=0)
 
 
 if __name__ == "__main__":

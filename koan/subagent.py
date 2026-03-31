@@ -190,6 +190,7 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
         stderr=asyncio.subprocess.PIPE,
         cwd=subagent_dir,
     )
+    app_state._active_processes[agent_id] = proc
 
     # Stream tracking
     async def stream_stdout():
@@ -271,7 +272,8 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
         error_str = "bootstrap_failure"
         exit_code = 1
 
-    # Cleanup: resolve pending interactions for this agent
+    # Cleanup: remove from active processes, resolve pending interactions
+    app_state._active_processes.pop(agent_id, None)
     _cancel_pending_interactions(agent_id, app_state)
 
     # Finalize audit log
