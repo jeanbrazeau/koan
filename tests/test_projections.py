@@ -160,6 +160,65 @@ class TestFoldActivity:
         assert r.stream_buffer == ""
 
 
+# -- fold: typed tool events --------------------------------------------------
+
+class TestFoldTypedTools:
+    def _event(self, event_type: str, payload: dict) -> "VersionedEvent":
+        from koan.projections import VersionedEvent
+        return VersionedEvent(version=1, event_type=event_type,
+                              timestamp="2026-01-01T00:00:00Z", agent_id="a1", payload=payload)
+
+    def test_tool_read_appended(self):
+        from koan.projections import Projection, fold
+        p = Projection()
+        e = self._event("tool_read", {"call_id": "c1", "tool": "read", "file": "/foo.ts", "lines": ""})
+        r = fold(p, e)
+        assert len(r.activity_log) == 1
+        assert r.activity_log[0]["event_type"] == "tool_read"
+        assert r.activity_log[0]["file"] == "/foo.ts"
+
+    def test_tool_write_appended(self):
+        from koan.projections import Projection, fold
+        p = Projection()
+        e = self._event("tool_write", {"call_id": "c1", "tool": "write", "file": "/out.ts"})
+        r = fold(p, e)
+        assert len(r.activity_log) == 1
+        assert r.activity_log[0]["event_type"] == "tool_write"
+        assert r.activity_log[0]["file"] == "/out.ts"
+
+    def test_tool_edit_appended(self):
+        from koan.projections import Projection, fold
+        p = Projection()
+        e = self._event("tool_edit", {"call_id": "c1", "tool": "edit", "file": "/edit.ts"})
+        r = fold(p, e)
+        assert len(r.activity_log) == 1
+        assert r.activity_log[0]["event_type"] == "tool_edit"
+
+    def test_tool_bash_appended(self):
+        from koan.projections import Projection, fold
+        p = Projection()
+        e = self._event("tool_bash", {"call_id": "c1", "tool": "bash", "command": "ls -la"})
+        r = fold(p, e)
+        assert len(r.activity_log) == 1
+        assert r.activity_log[0]["command"] == "ls -la"
+
+    def test_tool_grep_appended(self):
+        from koan.projections import Projection, fold
+        p = Projection()
+        e = self._event("tool_grep", {"call_id": "c1", "tool": "grep", "pattern": "def foo"})
+        r = fold(p, e)
+        assert len(r.activity_log) == 1
+        assert r.activity_log[0]["pattern"] == "def foo"
+
+    def test_tool_ls_appended(self):
+        from koan.projections import Projection, fold
+        p = Projection()
+        e = self._event("tool_ls", {"call_id": "c1", "tool": "ls", "path": "/src"})
+        r = fold(p, e)
+        assert len(r.activity_log) == 1
+        assert r.activity_log[0]["path"] == "/src"
+
+
 # -- fold: interactions -------------------------------------------------------
 
 class TestFoldInteractions:

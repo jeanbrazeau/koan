@@ -26,6 +26,21 @@ def _normalize_tool_name(name: str | None) -> str | None:
     return _TOOL_NAME_MAP.get(name, name.lower())
 
 
+def _extract_tool_summary(tool: str, args: dict) -> str:
+    """Extract human-readable detail from Gemini tool arguments."""
+    if tool == "read":
+        return args.get("file_path", "") or args.get("path", "") or args.get("file", "")
+    if tool == "bash":
+        return args.get("command", "") or args.get("cmd", "")
+    if tool in ("write", "edit"):
+        return args.get("file_path", "") or args.get("path", "") or args.get("file", "")
+    if tool == "grep":
+        return args.get("pattern", "") or args.get("query", "")
+    if tool == "ls":
+        return args.get("path", "") or args.get("directory", "")
+    return ""
+
+
 class GeminiRunner:
     name = "gemini"
     supported_thinking_modes: frozenset[ThinkingMode] = frozenset(
@@ -97,10 +112,12 @@ class GeminiRunner:
             canonical = _normalize_tool_name(raw_name)
             if canonical in KOAN_MCP_TOOLS:
                 return []
+            args = data.get("input") or {}
             return [StreamEvent(
                 type="tool_call",
                 tool_name=canonical,
-                tool_args=data.get("input"),
+                tool_args=args,
+                summary=_extract_tool_summary(canonical or "", args),
             )]
         if evt_type == "result":
             return [StreamEvent(type="turn_complete")]

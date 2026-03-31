@@ -16,6 +16,7 @@ class StreamEvent:
     is_thinking: bool = False
     tool_name: str | None = None
     tool_args: dict | None = None
+    summary: str | None = None
 
 
 @dataclass(kw_only=True)

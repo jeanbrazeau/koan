@@ -24,6 +24,25 @@ def _normalize_tool_name(name: str | None) -> str | None:
     return _TOOL_NAME_MAP.get(name, name.lower())
 
 
+def _extract_tool_summary(tool: str, args_str: str) -> str:
+    """Extract human-readable detail from Codex tool arguments (JSON string)."""
+    try:
+        args = json.loads(args_str) if args_str else {}
+    except (json.JSONDecodeError, TypeError):
+        args = {}
+    if tool == "read":
+        return args.get("path", "") or args.get("file", "")
+    if tool == "bash":
+        return args.get("command", "") or args.get("cmd", "")
+    if tool in ("write", "edit"):
+        return args.get("path", "") or args.get("file", "")
+    if tool == "grep":
+        return args.get("pattern", "") or args.get("query", "")
+    if tool == "ls":
+        return args.get("path", "")
+    return ""
+
+
 class CodexRunner:
     name = "codex"
     supported_thinking_modes: frozenset[ThinkingMode] = frozenset({"disabled"})
@@ -102,15 +121,11 @@ class CodexRunner:
                 canonical = _normalize_tool_name(raw_name)
                 if canonical in KOAN_MCP_TOOLS:
                     return []
+                args_str = item.get("arguments", "")
                 return [StreamEvent(
                     type="tool_call",
                     tool_name=canonical,
-                    content=item.get("arguments", ""),
-                )]
-            elif item_type == "function_call_output":
-                return [StreamEvent(
-                    type="tool_call",
-                    tool_name="tool_result",
-                    content=(item.get("output") or "")[:100],
+                    content=args_str,
+                    summary=_extract_tool_summary(canonical or "", args_str),
                 )]
         return []

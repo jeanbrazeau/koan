@@ -40,7 +40,9 @@ export function connectSSE(store: KoanStore): EventSource {
     'phase_started', 'agent_spawned', 'agent_spawn_failed',
     'agent_step_advanced', 'agent_exited', 'workflow_completed',
     // Activity
-    'tool_called', 'tool_completed', 'thinking', 'stream_delta', 'stream_cleared',
+    'tool_called', 'tool_completed',
+    'tool_read', 'tool_write', 'tool_edit', 'tool_bash', 'tool_grep', 'tool_ls',
+    'thinking', 'stream_delta', 'stream_cleared',
     // Interactions
     'questions_asked', 'questions_answered',
     'artifact_review_requested', 'artifact_reviewed',

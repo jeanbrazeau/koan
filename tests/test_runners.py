@@ -33,7 +33,7 @@ class TestClaudeRunnerParseStreamEvent:
     def test_tool_call(self):
         line = self._msg([{"type": "tool_use", "name": "bash", "input": {"cmd": "ls"}}])
         evts = self.runner.parse_stream_event(line)
-        assert evts == [StreamEvent(type="tool_call", tool_name="bash", tool_args={"cmd": "ls"})]
+        assert evts == [StreamEvent(type="tool_call", tool_name="bash", tool_args={"cmd": "ls"}, summary="")]
 
     def test_thinking_block(self):
         line = self._msg([{"type": "thinking", "text": "hmm"}])
@@ -105,7 +105,7 @@ class TestClaudeRunnerParseStreamEvent:
         evts = self.runner.parse_stream_event(line)
         assert len(evts) == 2
         assert evts[0] == StreamEvent(type="token_delta", content="calling tool")
-        assert evts[1] == StreamEvent(type="tool_call", tool_name="read", tool_args={"path": "/a"})
+        assert evts[1] == StreamEvent(type="tool_call", tool_name="read", tool_args={"path": "/a"}, summary="")
 
     def test_multi_block_thinking_and_text(self):
         line = self._msg([
@@ -180,7 +180,7 @@ class TestGeminiRunnerParseStreamEvent:
     def test_tool_use(self):
         line = json.dumps({"type": "tool_use", "name": "read", "input": {"path": "/a"}})
         evts = self.runner.parse_stream_event(line)
-        assert evts == [StreamEvent(type="tool_call", tool_name="read", tool_args={"path": "/a"})]
+        assert evts == [StreamEvent(type="tool_call", tool_name="read", tool_args={"path": "/a"}, summary="/a")]
 
     def test_result_event(self):
         line = json.dumps({"type": "result"})
@@ -526,3 +526,108 @@ class TestGeminiRunnerExtraArgs:
         assert cmd[-1] == "--verbose"
 
 
+
+
+# -- Summary extraction --------------------------------------------------------
+
+class TestClaudeSummaryExtraction:
+    def setup_method(self):
+        self.runner = ClaudeRunner(subagent_dir="/tmp/test-claude")
+
+    def _msg(self, content):
+        import json
+        return json.dumps({"type": "assistant", "message": {"content": content}})
+
+    def test_read_summary(self):
+        line = self._msg([{"type": "tool_use", "name": "Read", "input": {"file_path": "/src/foo.ts"}}])
+        evts = self.runner.parse_stream_event(line)
+        assert evts[0].summary == "/src/foo.ts"
+
+    def test_read_summary_with_offset_limit(self):
+        line = self._msg([{"type": "tool_use", "name": "Read", "input": {"file_path": "/src/foo.ts", "offset": 10, "limit": 50}}])
+        evts = self.runner.parse_stream_event(line)
+        assert evts[0].summary == "/src/foo.ts:10-60"
+
+    def test_bash_summary(self):
+        line = self._msg([{"type": "tool_use", "name": "Bash", "input": {"command": "ls -la"}}])
+        evts = self.runner.parse_stream_event(line)
+        assert evts[0].summary == "ls -la"
+
+    def test_write_summary(self):
+        line = self._msg([{"type": "tool_use", "name": "Write", "input": {"file_path": "/src/new.ts"}}])
+        evts = self.runner.parse_stream_event(line)
+        assert evts[0].summary == "/src/new.ts"
+
+    def test_grep_summary(self):
+        line = self._msg([{"type": "tool_use", "name": "Grep", "input": {"pattern": "def foo"}}])
+        evts = self.runner.parse_stream_event(line)
+        assert evts[0].summary == "def foo"
+
+    def test_ls_summary(self):
+        line = self._msg([{"type": "tool_use", "name": "LS", "input": {"path": "/src"}}])
+        evts = self.runner.parse_stream_event(line)
+        assert evts[0].summary == "/src"
+
+    def test_unknown_tool_empty_summary(self):
+        line = self._msg([{"type": "tool_use", "name": "WebFetch", "input": {"url": "http://example.com"}}])
+        evts = self.runner.parse_stream_event(line)
+        assert evts[0].summary == ""
+
+
+class TestCodexSummaryExtraction:
+    def setup_method(self):
+        self.runner = CodexRunner()
+
+    def _item(self, name, args_dict):
+        import json
+        return json.dumps({"type": "item.completed", "item": {
+            "type": "function_call", "name": name, "arguments": json.dumps(args_dict)
+        }})
+
+    def test_read_summary(self):
+        line = self._item("read_file", {"path": "/src/foo.ts"})
+        evts = self.runner.parse_stream_event(line)
+        assert evts[0].summary == "/src/foo.ts"
+
+    def test_bash_summary(self):
+        line = self._item("shell", {"command": "npm test"})
+        evts = self.runner.parse_stream_event(line)
+        assert evts[0].summary == "npm test"
+
+    def test_write_summary(self):
+        line = self._item("write_file", {"path": "/out/result.ts"})
+        evts = self.runner.parse_stream_event(line)
+        assert evts[0].summary == "/out/result.ts"
+
+    def test_no_function_call_output_event(self):
+        """function_call_output should no longer produce a tool_call event."""
+        import json
+        line = json.dumps({"type": "item.completed", "item": {
+            "type": "function_call_output", "output": "some result"
+        }})
+        evts = self.runner.parse_stream_event(line)
+        assert evts == []
+
+
+class TestGeminiSummaryExtraction:
+    def setup_method(self):
+        self.runner = GeminiRunner(subagent_dir="/tmp/test-gemini")
+
+    def _tool(self, name, input_dict):
+        import json
+        return json.dumps({"type": "tool_use", "name": name, "input": input_dict})
+
+    def test_read_summary(self):
+        line = self._tool("read_file", {"file_path": "/src/bar.go"})
+        evts = self.runner.parse_stream_event(line)
+        assert evts[0].summary == "/src/bar.go"
+
+    def test_bash_summary(self):
+        line = self._tool("run_bash_command", {"command": "go build"})
+        evts = self.runner.parse_stream_event(line)
+        assert evts[0].summary == "go build"
+
+    def test_ls_summary(self):
+        line = self._tool("list_directory", {"path": "/src"})
+        evts = self.runner.parse_stream_event(line)
+        assert evts[0].summary == "/src"

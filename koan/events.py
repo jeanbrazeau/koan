@@ -71,6 +71,32 @@ def build_tool_called(
     }
 
 
+# -- Typed tool event builders (recognized tools with extracted metadata) -----
+
+def build_tool_read(call_id: str, file: str, lines: str = "") -> dict:
+    return {"call_id": call_id, "tool": "read", "file": file, "lines": lines}
+
+
+def build_tool_write(call_id: str, file: str) -> dict:
+    return {"call_id": call_id, "tool": "write", "file": file}
+
+
+def build_tool_edit(call_id: str, file: str) -> dict:
+    return {"call_id": call_id, "tool": "edit", "file": file}
+
+
+def build_tool_bash(call_id: str, command: str) -> dict:
+    return {"call_id": call_id, "tool": "bash", "command": command}
+
+
+def build_tool_grep(call_id: str, pattern: str) -> dict:
+    return {"call_id": call_id, "tool": "grep", "pattern": pattern}
+
+
+def build_tool_ls(call_id: str, path: str) -> dict:
+    return {"call_id": call_id, "tool": "ls", "path": path}
+
+
 def build_tool_completed(
     call_id: str,
     tool: str,

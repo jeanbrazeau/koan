@@ -20,8 +20,14 @@ from .events import (
     build_agent_spawned,
     build_artifact_reviewed,
     build_questions_answered,
+    build_tool_bash,
     build_tool_called,
     build_tool_completed,
+    build_tool_edit,
+    build_tool_grep,
+    build_tool_ls,
+    build_tool_read,
+    build_tool_write,
     build_workflow_decided,
 )
 from .logger import get_logger
@@ -228,14 +234,38 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
                             build_tool_completed(last_call_id, last_tool_name),
                             agent_id=agent_id,
                         )
-                    # Open new tool call
+                    # Open new tool call — emit typed event for recognized tools
                     call_id = str(uuid.uuid4())
                     tool_name = ev.tool_name or "tool"
-                    store.push_event(
-                        "tool_called",
-                        build_tool_called(call_id, tool_name, ev.tool_args or {}, ev.content or ""),
-                        agent_id=agent_id,
-                    )
+                    summary = ev.summary or ""
+                    if tool_name == "read":
+                        # Separate file path from optional line range (e.g. "foo.py:10-20")
+                        file_part, lines_part = summary, ""
+                        if ":" in summary:
+                            head, tail = summary.rsplit(":", 1)
+                            if tail and (tail[0].isdigit() or "-" in tail):
+                                file_part, lines_part = head, tail
+                        store.push_event(
+                            "tool_read",
+                            build_tool_read(call_id, file_part, lines_part),
+                            agent_id=agent_id,
+                        )
+                    elif tool_name == "write":
+                        store.push_event("tool_write", build_tool_write(call_id, summary), agent_id=agent_id)
+                    elif tool_name == "edit":
+                        store.push_event("tool_edit", build_tool_edit(call_id, summary), agent_id=agent_id)
+                    elif tool_name == "bash":
+                        store.push_event("tool_bash", build_tool_bash(call_id, summary), agent_id=agent_id)
+                    elif tool_name == "grep":
+                        store.push_event("tool_grep", build_tool_grep(call_id, summary), agent_id=agent_id)
+                    elif tool_name == "ls":
+                        store.push_event("tool_ls", build_tool_ls(call_id, summary), agent_id=agent_id)
+                    else:
+                        store.push_event(
+                            "tool_called",
+                            build_tool_called(call_id, tool_name, ev.tool_args or {}, summary),
+                            agent_id=agent_id,
+                        )
                     last_call_id = call_id
                     last_tool_name = tool_name
                 elif ev.type == "turn_complete":

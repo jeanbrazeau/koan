@@ -291,7 +291,12 @@
 
 .activity-detail {
   color: var(--text-ghost);
-  padding-left: 12px;
+  font-size: var(--font-size-xs);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  min-width: 0;
 }
 
 /* Monitor -- sticky bottom, sizes to content, centered like activity feed.

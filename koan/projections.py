@@ -23,6 +23,12 @@ EventType = Literal[
     # Activity
     "tool_called",
     "tool_completed",
+    "tool_read",
+    "tool_write",
+    "tool_edit",
+    "tool_bash",
+    "tool_grep",
+    "tool_ls",
     "thinking",
     "stream_delta",
     "stream_cleared",
@@ -257,6 +263,12 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                 })
 
             case "tool_completed":
+                entry = {"event_type": event_type, "agent_id": agent_id, **payload}
+                return projection.model_copy(update={
+                    "activity_log": [*projection.activity_log, entry],
+                })
+
+            case "tool_read" | "tool_write" | "tool_edit" | "tool_bash" | "tool_grep" | "tool_ls":
                 entry = {"event_type": event_type, "agent_id": agent_id, **payload}
                 return projection.model_copy(update={
                     "activity_log": [*projection.activity_log, entry],

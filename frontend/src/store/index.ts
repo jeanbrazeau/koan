@@ -45,7 +45,7 @@ export interface NotificationEntry {
   detail?: string
 }
 
-export type ActivityEntryType = 'tool' | 'thinking' | 'step' | 'text'
+export type ActivityEntryType = 'tool' | 'tool_read' | 'tool_write' | 'tool_edit' | 'tool_bash' | 'tool_grep' | 'tool_ls' | 'thinking' | 'step' | 'text'
 
 export interface ActivityEntry {
   type: ActivityEntryType
@@ -64,6 +64,12 @@ export interface ActivityEntry {
   totalSteps?: number
   // Text entries
   textContent?: string
+  // Typed tool fields
+  file?: string
+  lines?: string
+  command?: string
+  pattern?: string
+  path?: string
 }
 
 export interface AskOption {
@@ -358,38 +364,55 @@ export const useStore = create<KoanState>((set) => ({
     )
     const activityLog: ActivityEntry[] = rawLog
       .filter(e => e['event_type'] !== 'tool_completed')
-      .map((e) => {
+      .flatMap((e): ActivityEntry[] => {
         const evtType = e['event_type'] as string
+        const callId = e['call_id'] as string | undefined
+        const inFlight = callId ? !completedCallIds.has(callId) : false
+
         if (evtType === 'thinking') {
-          return {
-            type: 'thinking' as const,
-            tool: 'thinking',
-            summary: '',
+          return [{ type: 'thinking', tool: 'thinking', summary: '',
             inFlight: false,
-            thinkingContent: (e['delta'] as string) ?? '',
-          }
+            thinkingContent: (e['delta'] as string) ?? '' }]
         }
         if (evtType === 'agent_step_advanced') {
-          return {
-            type: 'step' as const,
-            tool: '', summary: '',
-            inFlight: false,
+          return [{ type: 'step', tool: '', summary: '', inFlight: false,
             step: e['step'] as number,
             stepName: (e['step_name'] as string) ?? '',
-            totalSteps: e['total_steps'] as number | undefined,
-          }
+            totalSteps: e['total_steps'] as number | undefined }]
         }
-        const callId = e['call_id'] as string | undefined
-        const isToolCall = evtType === 'tool_called'
-        const inFlight = isToolCall ? !completedCallIds.has(callId ?? '') : false
-        return {
-          type: 'tool' as const,
-          tool:    (e['tool'] as string) ?? evtType ?? '',
-          summary: (e['summary'] as string) ?? (e['delta'] as string) ?? '',
-          inFlight,
-          callId,
-          ts:      e['ts'] as string | undefined,
+        if (evtType === 'tool_read') {
+          return [{ type: 'tool_read', tool: 'read', summary: '', inFlight, callId,
+            file: (e['file'] as string) ?? '', lines: (e['lines'] as string) ?? '' }]
         }
+        if (evtType === 'tool_write') {
+          return [{ type: 'tool_write', tool: 'write', summary: '', inFlight, callId,
+            file: (e['file'] as string) ?? '' }]
+        }
+        if (evtType === 'tool_edit') {
+          return [{ type: 'tool_edit', tool: 'edit', summary: '', inFlight, callId,
+            file: (e['file'] as string) ?? '' }]
+        }
+        if (evtType === 'tool_bash') {
+          return [{ type: 'tool_bash', tool: 'bash', summary: '', inFlight, callId,
+            command: (e['command'] as string) ?? '' }]
+        }
+        if (evtType === 'tool_grep') {
+          return [{ type: 'tool_grep', tool: 'grep', summary: '', inFlight, callId,
+            pattern: (e['pattern'] as string) ?? '' }]
+        }
+        if (evtType === 'tool_ls') {
+          return [{ type: 'tool_ls', tool: 'ls', summary: '', inFlight, callId,
+            path: (e['path'] as string) ?? '' }]
+        }
+        if (evtType === 'tool_called') {
+          const toolName = (e['tool'] as string) ?? ''
+          // Skip koan MCP tools — rendered as step headers
+          if (toolName.startsWith('koan_') || toolName.startsWith('mcp__koan')) return []
+          return [{ type: 'tool', tool: toolName,
+            summary: (e['summary'] as string) ?? '', inFlight, callId,
+            ts: e['ts'] as string | undefined }]
+        }
+        return []
       })
 
     const completion = state['completion'] as CompletionInfo | null
@@ -619,12 +642,14 @@ export const useStore = create<KoanState>((set) => ({
         // Scout activity is shown in the agent monitor at the bottom.
 
         case 'tool_called': {
+          const toolName = (event['tool'] as string) ?? 'tool'
+          // Skip koan MCP tools — rendered as step headers via MCP endpoint
+          if (toolName.startsWith('koan_') || toolName.startsWith('mcp__koan')) return base
           if (agentId !== s.primaryAgent?.agentId) return base
-          // Flush pending buffers before tool call
           const newLog = flushBuffers(s)
           const entry: ActivityEntry = {
             type:     'tool',
-            tool:     (event['tool'] as string) ?? 'tool',
+            tool:     toolName,
             summary:  (event['summary'] as string) ?? '',
             inFlight: true,
             callId:   event['call_id'] as string,
@@ -634,6 +659,85 @@ export const useStore = create<KoanState>((set) => ({
           return { ...base, activityLog: newLog, isThinking: false,
                    thinkingBuffer: '', thinkingStartedAt: null,
                    streamBuffer: '' }
+        }
+
+        case 'tool_read': {
+          if (agentId !== s.primaryAgent?.agentId) return base
+          const newLog = flushBuffers(s)
+          newLog.push({
+            type: 'tool_read', tool: 'read', summary: '',
+            inFlight: true, callId: event['call_id'] as string,
+            file: (event['file'] as string) ?? '',
+            lines: (event['lines'] as string) ?? '',
+            ts: new Date().toISOString(),
+          })
+          return { ...base, activityLog: newLog, isThinking: false,
+                   thinkingBuffer: '', thinkingStartedAt: null, streamBuffer: '' }
+        }
+
+        case 'tool_write': {
+          if (agentId !== s.primaryAgent?.agentId) return base
+          const newLog = flushBuffers(s)
+          newLog.push({
+            type: 'tool_write', tool: 'write', summary: '',
+            inFlight: true, callId: event['call_id'] as string,
+            file: (event['file'] as string) ?? '',
+            ts: new Date().toISOString(),
+          })
+          return { ...base, activityLog: newLog, isThinking: false,
+                   thinkingBuffer: '', thinkingStartedAt: null, streamBuffer: '' }
+        }
+
+        case 'tool_edit': {
+          if (agentId !== s.primaryAgent?.agentId) return base
+          const newLog = flushBuffers(s)
+          newLog.push({
+            type: 'tool_edit', tool: 'edit', summary: '',
+            inFlight: true, callId: event['call_id'] as string,
+            file: (event['file'] as string) ?? '',
+            ts: new Date().toISOString(),
+          })
+          return { ...base, activityLog: newLog, isThinking: false,
+                   thinkingBuffer: '', thinkingStartedAt: null, streamBuffer: '' }
+        }
+
+        case 'tool_bash': {
+          if (agentId !== s.primaryAgent?.agentId) return base
+          const newLog = flushBuffers(s)
+          newLog.push({
+            type: 'tool_bash', tool: 'bash', summary: '',
+            inFlight: true, callId: event['call_id'] as string,
+            command: (event['command'] as string) ?? '',
+            ts: new Date().toISOString(),
+          })
+          return { ...base, activityLog: newLog, isThinking: false,
+                   thinkingBuffer: '', thinkingStartedAt: null, streamBuffer: '' }
+        }
+
+        case 'tool_grep': {
+          if (agentId !== s.primaryAgent?.agentId) return base
+          const newLog = flushBuffers(s)
+          newLog.push({
+            type: 'tool_grep', tool: 'grep', summary: '',
+            inFlight: true, callId: event['call_id'] as string,
+            pattern: (event['pattern'] as string) ?? '',
+            ts: new Date().toISOString(),
+          })
+          return { ...base, activityLog: newLog, isThinking: false,
+                   thinkingBuffer: '', thinkingStartedAt: null, streamBuffer: '' }
+        }
+
+        case 'tool_ls': {
+          if (agentId !== s.primaryAgent?.agentId) return base
+          const newLog = flushBuffers(s)
+          newLog.push({
+            type: 'tool_ls', tool: 'ls', summary: '',
+            inFlight: true, callId: event['call_id'] as string,
+            path: (event['path'] as string) ?? '',
+            ts: new Date().toISOString(),
+          })
+          return { ...base, activityLog: newLog, isThinking: false,
+                   thinkingBuffer: '', thinkingStartedAt: null, streamBuffer: '' }
         }
 
         case 'tool_completed': {

@@ -3,6 +3,8 @@ import { useStore, ActivityEntry } from '../store/index'
 import { useAutoScroll } from '../hooks/useAutoScroll'
 import { useElapsedBetween } from '../hooks/useElapsed'
 
+// -- Thinking ------------------------------------------------------------------
+
 function ThinkingCard({ entry }: { entry: ActivityEntry }) {
   const [expanded, setExpanded] = useState(false)
   const elapsed = useElapsedBetween(entry.thinkingStartedAt, entry.thinkingEndedAt)
@@ -49,13 +51,7 @@ function ActiveThinkingCard() {
   )
 }
 
-function TextBlock({ entry }: { entry: ActivityEntry }) {
-  return (
-    <div className="stream-output">
-      {entry.textContent}
-    </div>
-  )
-}
+// -- Step header ---------------------------------------------------------------
 
 function StepHeader({ entry }: { entry: ActivityEntry }) {
   const label = entry.totalSteps
@@ -70,19 +66,30 @@ function StepHeader({ entry }: { entry: ActivityEntry }) {
   )
 }
 
+// -- Text block ----------------------------------------------------------------
+
+function TextBlock({ entry }: { entry: ActivityEntry }) {
+  return (
+    <div className="stream-output">
+      {entry.textContent}
+    </div>
+  )
+}
+
+// -- Tool lines ----------------------------------------------------------------
+
+function statusIcon(inFlight: boolean) {
+  return inFlight ? '›' : '✓'
+}
+
+function statusClass(inFlight: boolean) {
+  return inFlight ? 'activity-inflight' : 'activity-done'
+}
+
 function ToolLine({ entry }: { entry: ActivityEntry }) {
   return (
-    <div
-      className={[
-        'activity-line',
-        entry.inFlight ? 'activity-inflight' : 'activity-done',
-      ]
-        .filter(Boolean)
-        .join(' ')}
-    >
-      <span className="activity-status">
-        {entry.inFlight ? '›' : '✓'}
-      </span>
+    <div className={`activity-line ${statusClass(entry.inFlight)}`}>
+      <span className="activity-status">{statusIcon(entry.inFlight)}</span>
       <span className="activity-tool">{entry.tool || ''}</span>
       <span className="activity-summary">
         {entry.summary || ''}
@@ -90,6 +97,90 @@ function ToolLine({ entry }: { entry: ActivityEntry }) {
       </span>
     </div>
   )
+}
+
+function ReadLine({ entry }: { entry: ActivityEntry }) {
+  const detail = entry.lines ? `${entry.file}:${entry.lines}` : (entry.file || '')
+  return (
+    <div className={`activity-line ${statusClass(entry.inFlight)}`}>
+      <span className="activity-status">{statusIcon(entry.inFlight)}</span>
+      <span className="activity-tool">read</span>
+      <span className="activity-detail">{detail}</span>
+      {entry.inFlight && <span className="activity-dots">...</span>}
+    </div>
+  )
+}
+
+function WriteLine({ entry }: { entry: ActivityEntry }) {
+  return (
+    <div className={`activity-line ${statusClass(entry.inFlight)}`}>
+      <span className="activity-status">{statusIcon(entry.inFlight)}</span>
+      <span className="activity-tool">write</span>
+      <span className="activity-detail">{entry.file || ''}</span>
+      {entry.inFlight && <span className="activity-dots">...</span>}
+    </div>
+  )
+}
+
+function EditLine({ entry }: { entry: ActivityEntry }) {
+  return (
+    <div className={`activity-line ${statusClass(entry.inFlight)}`}>
+      <span className="activity-status">{statusIcon(entry.inFlight)}</span>
+      <span className="activity-tool">edit</span>
+      <span className="activity-detail">{entry.file || ''}</span>
+      {entry.inFlight && <span className="activity-dots">...</span>}
+    </div>
+  )
+}
+
+function BashLine({ entry }: { entry: ActivityEntry }) {
+  return (
+    <div className={`activity-line ${statusClass(entry.inFlight)}`}>
+      <span className="activity-status">{statusIcon(entry.inFlight)}</span>
+      <span className="activity-tool">bash</span>
+      <span className="activity-detail">{entry.command || ''}</span>
+      {entry.inFlight && <span className="activity-dots">...</span>}
+    </div>
+  )
+}
+
+function GrepLine({ entry }: { entry: ActivityEntry }) {
+  return (
+    <div className={`activity-line ${statusClass(entry.inFlight)}`}>
+      <span className="activity-status">{statusIcon(entry.inFlight)}</span>
+      <span className="activity-tool">grep</span>
+      <span className="activity-detail">{entry.pattern || ''}</span>
+      {entry.inFlight && <span className="activity-dots">...</span>}
+    </div>
+  )
+}
+
+function LsLine({ entry }: { entry: ActivityEntry }) {
+  return (
+    <div className={`activity-line ${statusClass(entry.inFlight)}`}>
+      <span className="activity-status">{statusIcon(entry.inFlight)}</span>
+      <span className="activity-tool">ls</span>
+      <span className="activity-detail">{entry.path || ''}</span>
+      {entry.inFlight && <span className="activity-dots">...</span>}
+    </div>
+  )
+}
+
+// -- Feed ----------------------------------------------------------------------
+
+function renderEntry(entry: ActivityEntry, i: number) {
+  switch (entry.type) {
+    case 'thinking':   return <ThinkingCard key={i} entry={entry} />
+    case 'step':       return <StepHeader   key={i} entry={entry} />
+    case 'text':       return <TextBlock    key={i} entry={entry} />
+    case 'tool_read':  return <ReadLine     key={i} entry={entry} />
+    case 'tool_write': return <WriteLine    key={i} entry={entry} />
+    case 'tool_edit':  return <EditLine     key={i} entry={entry} />
+    case 'tool_bash':  return <BashLine     key={i} entry={entry} />
+    case 'tool_grep':  return <GrepLine     key={i} entry={entry} />
+    case 'tool_ls':    return <LsLine       key={i} entry={entry} />
+    default:           return <ToolLine     key={i} entry={entry} />
+  }
 }
 
 export function ActivityFeed() {
@@ -104,12 +195,7 @@ export function ActivityFeed() {
   return (
     <div className="activity-feed-scroll" ref={scrollRef}>
       <div id="activity-feed-inner" className="activity-feed-inner">
-        {activityLog.map((entry, i) => {
-          if (entry.type === 'thinking') return <ThinkingCard key={i} entry={entry} />
-          if (entry.type === 'step') return <StepHeader key={i} entry={entry} />
-          if (entry.type === 'text') return <TextBlock key={i} entry={entry} />
-          return <ToolLine key={i} entry={entry} />
-        })}
+        {activityLog.map(renderEntry)}
 
         {/* Active thinking card — shown while LLM is reasoning */}
         {isThinking && thinkingBuffer && <ActiveThinkingCard />}
