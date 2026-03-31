@@ -417,18 +417,26 @@ async def _refresh_probe_state(st: AppState) -> None:
     st.probe_results = await probe_all_runners()
     st.balanced_profile = compute_balanced_profile(st.probe_results)
 
-    # Auto-create default installations for detected runners that lack one
+    # Auto-create or update default installations from probe results
     existing_types = {inst.runner_type for inst in st.config.agent_installations}
     changed = False
     for pr in st.probe_results:
-        if pr.available and pr.binary_path and pr.runner_type not in existing_types:
-            st.config.agent_installations.append(AgentInstallation(
-                alias=f"{pr.runner_type}-default",
-                runner_type=pr.runner_type,
-                binary=pr.binary_path,
-                extra_args=[],
-            ))
-            changed = True
+        if pr.available and pr.binary_path:
+            if pr.runner_type not in existing_types:
+                st.config.agent_installations.append(AgentInstallation(
+                    alias=f"{pr.runner_type}-default",
+                    runner_type=pr.runner_type,
+                    binary=pr.binary_path,
+                    extra_args=[],
+                ))
+                changed = True
+            else:
+                # Refresh binary path for auto-created default installations
+                for inst in st.config.agent_installations:
+                    if inst.runner_type == pr.runner_type and inst.alias == f"{pr.runner_type}-default":
+                        if inst.binary != pr.binary_path:
+                            inst.binary = pr.binary_path
+                            changed = True
     if changed:
         from ..config import save_koan_config
         await save_koan_config(st.config)

@@ -101,15 +101,6 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
                 role, config, balanced_profile=app_state.balanced_profile,
             )
 
-            # Fail fast on missing binary
-            if not Path(installation.binary).exists():
-                raise RunnerError(RunnerDiagnostic(
-                    code="binary_not_found",
-                    runner=installation.runner_type,
-                    stage="spawn",
-                    message=f"Binary not found: {installation.binary}",
-                ))
-
             runner = registry.get_runner(installation.runner_type, subagent_dir)
             model = model_alias
         except RunnerError as e:
