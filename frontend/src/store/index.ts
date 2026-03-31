@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import type { RunnerInfo } from '../api/client'
 
 export const ALL_PHASES = [
   'intake', 'brief-generation', 'core-flows', 'tech-plan',
@@ -178,6 +179,14 @@ interface KoanState {
   profiles: Profile[]
   installations: Installation[]
 
+  // Configuration — sourced from projection events, always up to date
+  configProfiles: Profile[]
+  configInstallations: Installation[]
+  configActiveInstallations: Record<string, string>
+  configActiveProfile: string
+  configScoutConcurrency: number
+  configRunners: RunnerInfo[]
+
   // Legacy actions (used by existing components)
   setConnected: (v: boolean) => void
   setPhase: (phase: string) => void
@@ -224,6 +233,14 @@ export const useStore = create<KoanState>((set) => ({
   settingsOpen: false,
   profiles: [],
   installations: [],
+
+  // Configuration defaults
+  configProfiles: [],
+  configInstallations: [],
+  configActiveInstallations: {},
+  configActiveProfile: 'balanced',
+  configScoutConcurrency: 8,
+  configRunners: [],
 
   setConnected: (v) => set({ connected: v }),
   setFatalError: (v) => set({ fatalError: v }),
@@ -336,6 +353,20 @@ export const useStore = create<KoanState>((set) => ({
 
     const completion = state['completion'] as CompletionInfo | null
 
+    // Transform config fields
+    const configProfiles: Profile[] = ((state['config_profiles'] ?? []) as Record<string, unknown>[]).map(p => ({
+      name: p['name'] as string,
+      read_only: (p['read_only'] as boolean) ?? false,
+      tiers: (p['tiers'] as Record<string, ProfileTierConfig>) ?? {},
+    }))
+
+    const configInstallations: Installation[] = ((state['config_installations'] ?? []) as Record<string, unknown>[]).map(i => ({
+      alias: i['alias'] as string,
+      runner_type: i['runner_type'] as string,
+      binary: i['binary'] as string,
+      extra_args: (i['extra_args'] as string[]) ?? [],
+    }))
+
     set({
       lastVersion: version,
       phase,
@@ -351,6 +382,13 @@ export const useStore = create<KoanState>((set) => ({
       streamBuffer: (state['stream_buffer'] as string) ?? '',
       isThinking: false,
       completion: completion ?? null,
+      // Configuration
+      configProfiles,
+      configInstallations,
+      configActiveInstallations: (state['config_active_installations'] ?? {}) as Record<string, string>,
+      configActiveProfile: (state['config_active_profile'] as string) ?? 'balanced',
+      configScoutConcurrency: (state['config_scout_concurrency'] as number) ?? 8,
+      configRunners: (state['config_runners'] ?? []) as RunnerInfo[],
     })
   },
 
@@ -557,6 +595,98 @@ export const useStore = create<KoanState>((set) => ({
           const path = event['path'] as string
           const { [path]: _, ...rest } = s.artifacts
           return { ...base, artifacts: rest }
+        }
+
+        // ── Configuration ──────────────────────────────────────────────────
+
+        case 'probe_completed': {
+          return { ...base, configRunners: (event['runners'] as RunnerInfo[]) ?? [] }
+        }
+
+        case 'installation_created': {
+          const inst: Installation = {
+            alias:       event['alias'] as string,
+            runner_type: event['runner_type'] as string,
+            binary:      event['binary'] as string,
+            extra_args:  (event['extra_args'] as string[]) ?? [],
+          }
+          return { ...base, configInstallations: [...s.configInstallations, inst] }
+        }
+
+        case 'installation_modified': {
+          const alias = event['alias'] as string
+          const updated: Installation = {
+            alias,
+            runner_type: event['runner_type'] as string,
+            binary:      event['binary'] as string,
+            extra_args:  (event['extra_args'] as string[]) ?? [],
+          }
+          return {
+            ...base,
+            configInstallations: s.configInstallations.map(i =>
+              i.alias === alias ? updated : i
+            ),
+          }
+        }
+
+        case 'installation_removed': {
+          const alias = event['alias'] as string
+          const newInsts = s.configInstallations.filter(i => i.alias !== alias)
+          const newActive = { ...s.configActiveInstallations }
+          for (const [rt, a] of Object.entries(newActive)) {
+            if (a === alias) delete newActive[rt]
+          }
+          return { ...base, configInstallations: newInsts, configActiveInstallations: newActive }
+        }
+
+        case 'profile_created': {
+          const profile: Profile = {
+            name:      event['name'] as string,
+            read_only: (event['read_only'] as boolean) ?? false,
+            tiers:     (event['tiers'] as Record<string, ProfileTierConfig>) ?? {},
+          }
+          return { ...base, configProfiles: [...s.configProfiles, profile] }
+        }
+
+        case 'profile_modified': {
+          const name = event['name'] as string
+          const updated: Profile = {
+            name,
+            read_only: (event['read_only'] as boolean) ?? false,
+            tiers:     (event['tiers'] as Record<string, ProfileTierConfig>) ?? {},
+          }
+          const exists = s.configProfiles.some(p => p.name === name)
+          return {
+            ...base,
+            configProfiles: exists
+              ? s.configProfiles.map(p => p.name === name ? updated : p)
+              : [...s.configProfiles, updated],
+          }
+        }
+
+        case 'profile_removed': {
+          const name = event['name'] as string
+          return {
+            ...base,
+            configProfiles: s.configProfiles.filter(p => p.name !== name),
+          }
+        }
+
+        case 'active_profile_changed': {
+          return { ...base, configActiveProfile: (event['name'] as string) ?? 'balanced' }
+        }
+
+        case 'active_installation_changed': {
+          const rt    = event['runner_type'] as string
+          const alias = event['alias'] as string
+          return {
+            ...base,
+            configActiveInstallations: { ...s.configActiveInstallations, [rt]: alias },
+          }
+        }
+
+        case 'scout_concurrency_changed': {
+          return { ...base, configScoutConcurrency: (event['value'] as number) ?? 8 }
         }
 
         default:

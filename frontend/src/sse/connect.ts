@@ -36,13 +36,23 @@ export function connectSSE(store: KoanStore): EventSource {
   // ── All other events: incremental fold ────────────────────────────────
 
   const KNOWN_EVENTS = [
+    // Lifecycle
     'phase_started', 'agent_spawned', 'agent_spawn_failed',
     'agent_step_advanced', 'agent_exited', 'workflow_completed',
+    // Activity
     'tool_called', 'tool_completed', 'thinking', 'stream_delta', 'stream_cleared',
+    // Interactions
     'questions_asked', 'questions_answered',
     'artifact_review_requested', 'artifact_reviewed',
     'workflow_decision_requested', 'workflow_decided',
+    // Resources
     'artifact_created', 'artifact_modified', 'artifact_removed',
+    // Configuration
+    'probe_completed',
+    'installation_created', 'installation_modified', 'installation_removed',
+    'profile_created', 'profile_modified', 'profile_removed',
+    'active_profile_changed', 'active_installation_changed',
+    'scout_concurrency_changed',
   ]
 
   for (const eventType of KNOWN_EVENTS) {
