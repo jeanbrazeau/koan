@@ -83,6 +83,8 @@ def main() -> None:
     parser.add_argument("--log-level", type=str, default="INFO")
     parser.add_argument("--no-open", action="store_true", help="Don't open browser on startup")
     parser.add_argument("--skip-build", action="store_true", help="Skip frontend rebuild check")
+    parser.add_argument("-p", "--prompt", type=str, default="",
+                        help="Pre-fill the task description")
     args = parser.parse_args()
 
     setup_logging(args.log_level)
@@ -93,7 +95,8 @@ def main() -> None:
     port = args.port if args.port is not None else _find_free_port()
 
     config = asyncio.run(load_koan_config())
-    app_state = AppState(config=config, port=port, open_browser=not args.no_open)
+    app_state = AppState(config=config, port=port, open_browser=not args.no_open,
+                          initial_prompt=args.prompt)
     app = create_app(app_state)
 
     host = "127.0.0.1"

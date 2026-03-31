@@ -190,6 +190,12 @@ export async function saveScoutConcurrency(value: number) {
   })
 }
 
+// -- Initial prompt ----------------------------------------------------------
+
+export async function getInitialPrompt(): Promise<{ prompt: string }> {
+  return get('/api/initial-prompt')
+}
+
 // -- Artifacts ---------------------------------------------------------------
 
 export async function getArtifactContent(

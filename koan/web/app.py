@@ -818,6 +818,13 @@ async def api_settings_scout_concurrency(r: Request) -> Response:
     return JSONResponse({"ok": True})
 
 
+# -- Initial prompt endpoint --------------------------------------------------
+
+async def api_initial_prompt(r: Request) -> Response:
+    st = _app_state(r)
+    return JSONResponse({"prompt": st.initial_prompt})
+
+
 # -- App factory --------------------------------------------------------------
 
 def _build_mcp(app_state: AppState):
@@ -879,6 +886,7 @@ def create_app(app_state: AppState) -> Starlette:
         Route("/api/settings/scout-concurrency", api_settings_scout_concurrency, methods=["PUT"]),
         Route("/api/settings/profile-form", api_settings_profile_form, methods=["GET"]),
         Route("/api/settings/installation-form", api_settings_installation_form, methods=["GET"]),
+        Route("/api/initial-prompt", api_initial_prompt, methods=["GET"]),
         Route("/events", sse_stream),
     ]
 

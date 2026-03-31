@@ -63,4 +63,5 @@ class AppState:
     probe_results: list[ProbeResult] = field(default_factory=list)
     port: int = 8000
     open_browser: bool = True
+    initial_prompt: str = ""
     config_write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)

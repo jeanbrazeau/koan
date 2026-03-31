@@ -12,13 +12,16 @@ export function LandingPage() {
   const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    Promise.all([api.getProfiles(), api.getProbe()]).then(
-      ([profilesData, probeData]) => {
+    Promise.all([api.getProfiles(), api.getProbe(), api.getInitialPrompt()]).then(
+      ([profilesData, probeData, promptData]) => {
         setProfiles(profilesData.profiles)
         if (profilesData.profiles.length > 0) {
           setProfile(profilesData.profiles[0].name)
         }
         setHasRunners(probeData.runners.some(r => r.available))
+        if (promptData.prompt) {
+          setTask(promptData.prompt)
+        }
       },
     )
   }, [])
