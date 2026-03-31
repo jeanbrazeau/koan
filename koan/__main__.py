@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import socket
 import subprocess
 import sys
 from pathlib import Path
@@ -68,9 +69,17 @@ def _rebuild_frontend() -> None:
         sys.exit(1)
 
 
+def _find_free_port() -> int:
+    """Bind to port 0 and let the OS assign a free ephemeral port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(prog="koan")
-    parser.add_argument("--port", type=int, default=8000)
+    parser.add_argument("--port", type=int, default=None,
+                        help="Port to listen on (default: random free port)")
     parser.add_argument("--log-level", type=str, default="INFO")
     parser.add_argument("--no-open", action="store_true", help="Don't open browser on startup")
     parser.add_argument("--skip-build", action="store_true", help="Skip frontend rebuild check")
@@ -81,12 +90,14 @@ def main() -> None:
     if not args.skip_build and _frontend_needs_rebuild():
         _rebuild_frontend()
 
+    port = args.port if args.port is not None else _find_free_port()
+
     config = asyncio.run(load_koan_config())
-    app_state = AppState(config=config, port=args.port, open_browser=not args.no_open)
+    app_state = AppState(config=config, port=port, open_browser=not args.no_open)
     app = create_app(app_state)
 
     host = "127.0.0.1"
-    uvicorn.run(app, host=host, port=args.port, log_level=args.log_level.lower())
+    uvicorn.run(app, host=host, port=port, log_level=args.log_level.lower())
 
 
 if __name__ == "__main__":
