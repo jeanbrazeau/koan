@@ -241,6 +241,29 @@
   min-width: 0;
 }
 
+/* Step header -- separates steps in the activity feed */
+.step-header {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  padding: var(--space-4) 0 var(--space-1);
+  margin-top: var(--space-2);
+  border-bottom: 1px solid var(--border);
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+}
+
+.step-header-label {
+  color: var(--copper);
+  font-weight: 600;
+}
+
+.step-header-name {
+  color: var(--text-strong);
+  font-weight: 500;
+  text-transform: capitalize;
+}
+
 /* Stream output -- wrapping text block for LLM text */
 .stream-output {
   font-family: var(--font-mono);

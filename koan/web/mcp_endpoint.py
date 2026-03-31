@@ -160,7 +160,7 @@ async def koan_complete_step(thoughts: str = "") -> str:
             from ..events import build_step_advanced
             _app_state.projection_store.push_event(
                 "agent_step_advanced",
-                build_step_advanced(step_num, step_name),
+                build_step_advanced(step_num, step_name, total_steps=phase_module.TOTAL_STEPS),
                 agent_id=agent.agent_id,
             )
 

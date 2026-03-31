@@ -47,10 +47,13 @@ def build_step_advanced(
     step: int,
     step_name: str,
     usage: dict | None = None,
+    total_steps: int | None = None,
 ) -> dict:
     result: dict = {"step": step, "step_name": step_name}
     if usage is not None:
         result["usage"] = usage
+    if total_steps is not None:
+        result["total_steps"] = total_steps
     return result
 
 

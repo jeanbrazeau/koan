@@ -171,13 +171,20 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                 step = payload.get("step", 0)
                 step_name = payload.get("step_name", "")
 
+                # Append to activity_log so snapshots include step markers
+                step_entry = {"event_type": event_type, "agent_id": agent_id, **payload}
+                new_log = [*projection.activity_log, step_entry]
+
                 if projection.primary_agent and projection.primary_agent.agent_id == agent_id:
                     updated = projection.primary_agent.model_copy(update={
                         "step": step,
                         "step_name": step_name,
                     })
                     updated = _accumulate_usage(updated, usage)
-                    return projection.model_copy(update={"primary_agent": updated})
+                    return projection.model_copy(update={
+                        "primary_agent": updated,
+                        "activity_log": new_log,
+                    })
                 elif agent_id and agent_id in projection.scouts:
                     updated = projection.scouts[agent_id].model_copy(update={
                         "step": step,
@@ -186,10 +193,13 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                     updated = _accumulate_usage(updated, usage)
                     new_scouts = dict(projection.scouts)
                     new_scouts[agent_id] = updated
-                    return projection.model_copy(update={"scouts": new_scouts})
+                    return projection.model_copy(update={
+                        "scouts": new_scouts,
+                        "activity_log": new_log,
+                    })
                 else:
                     log.warning("fold agent_step_advanced: unknown agent_id=%s", agent_id)
-                    return projection
+                    return projection.model_copy(update={"activity_log": new_log})
 
             case "agent_exited":
                 usage = payload.get("usage")

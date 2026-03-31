@@ -69,8 +69,10 @@ class TestFoldLifecycle:
         p = Projection()
         e = self._event("agent_step_advanced", {"step": 1, "step_name": "X"}, agent_id="unknown")
         r = fold(p, e)
-        # Unknown agent: unchanged
-        assert r == p
+        # Unknown agent: agent state unchanged, but step still appended to activity_log
+        assert r.primary_agent is None
+        assert len(r.activity_log) == 1
+        assert r.activity_log[0]["event_type"] == "agent_step_advanced"
 
     def test_agent_step_advanced_accumulates_usage(self):
         p = Projection(primary_agent=AgentProjection(agent_id="a1", role="intake", output_tokens=10))
@@ -244,12 +246,14 @@ class TestFoldSafety:
         r = fold(p, e)
         assert r == p
 
-    def test_unknown_agent_id_unchanged(self):
+    def test_unknown_agent_id_step_appended(self):
         p = Projection()  # no agents registered
         e = VersionedEvent(version=1, event_type="agent_step_advanced", timestamp="2026-01-01T00:00:00Z",
                            agent_id="nonexistent", payload={"step": 1, "step_name": "X"})
         r = fold(p, e)
-        assert r == p
+        # Agent state unchanged, but step marker still in activity_log
+        assert r.primary_agent is None
+        assert len(r.activity_log) == 1
 
     def test_phase_started_empty_payload_returns_empty_phase(self):
         # Verifies that phase_started with {} payload returns phase="" (not an error).
