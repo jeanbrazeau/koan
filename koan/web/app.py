@@ -171,6 +171,60 @@ def _sse_event(event_type: str, payload: Any) -> str:
     return f"event: {event_type}\ndata: {data}\n\n"
 
 
+def _resolve_profile(st: AppState, name: str) -> Profile | None:
+    """Look up a profile by name, including the computed balanced profile."""
+    if name == "balanced":
+        return st.balanced_profile
+    for p in st.config.profiles:
+        if p.name == name:
+            return p
+    return None
+
+
+async def api_start_run_preflight(r: Request) -> Response:
+    """Return required runner types and available installations for a profile."""
+    profile_name = r.query_params.get("profile", "")
+    if not profile_name:
+        return JSONResponse(
+            {"error": "validation_error", "message": "profile query parameter is required"},
+            status_code=422,
+        )
+
+    st = _app_state(r)
+    profile = _resolve_profile(st, profile_name)
+    if profile is None:
+        return JSONResponse(
+            {"error": "not_found", "message": f"Profile '{profile_name}' not found"},
+            status_code=404,
+        )
+
+    # Derive required runner types from profile tiers
+    required_types: set[str] = set()
+    for tier in profile.tiers.values():
+        required_types.add(tier.runner_type)
+
+    # For each type, list available installations with validity status
+    installations_by_type: dict[str, list[dict]] = {}
+    for rt in sorted(required_types):
+        insts = []
+        for inst in st.config.agent_installations:
+            if inst.runner_type == rt:
+                insts.append({
+                    "alias": inst.alias,
+                    "binary": inst.binary,
+                    "binary_valid": Path(inst.binary).exists(),
+                    "is_active": st.config.active_installations.get(rt) == inst.alias,
+                    "extra_args": inst.extra_args,
+                })
+        installations_by_type[rt] = insts
+
+    return JSONResponse({
+        "profile": profile_name,
+        "required_runner_types": sorted(required_types),
+        "installations": installations_by_type,
+    })
+
+
 async def api_start_run(r: Request) -> Response:
     body = await r.json()
     task = body.get("task", "")
@@ -198,13 +252,50 @@ async def api_start_run(r: Request) -> Response:
         )
 
     # Validate profile exists
-    if profile != "balanced" and not any(p.name == profile for p in st.config.profiles):
+    profile_obj = _resolve_profile(st, profile)
+    if profile_obj is None:
         return JSONResponse(
             {"error": "validation_error", "message": f"profile '{profile}' not found"},
             status_code=422,
         )
 
-    # Persist profile selection
+    # Apply installation selections (runner_type -> alias)
+    installations = body.get("installations")
+    if isinstance(installations, dict):
+        for rt, alias in installations.items():
+            found = any(
+                inst.alias == alias and inst.runner_type == rt
+                for inst in st.config.agent_installations
+            )
+            if not found:
+                return JSONResponse(
+                    {"error": "validation_error",
+                     "message": f"Installation '{alias}' not found for runner type '{rt}'"},
+                    status_code=422,
+                )
+        for rt, alias in installations.items():
+            st.config.active_installations[rt] = alias
+
+    # Pre-validate installations for every runner type the profile requires
+    from ..runners.registry import RunnerRegistry
+    from ..runners.base import RunnerError
+    registry = RunnerRegistry()
+    checked_types: set[str] = set()
+    for tier in profile_obj.tiers.values():
+        if tier.runner_type in checked_types:
+            continue
+        checked_types.add(tier.runner_type)
+        try:
+            registry.resolve_installation(tier.runner_type, st.config)
+        except RunnerError as e:
+            return JSONResponse(
+                {"error": e.diagnostic.code,
+                 "message": e.diagnostic.message,
+                 "runner_type": tier.runner_type},
+                status_code=422,
+            )
+
+    # Persist profile + installation selections
     st.config.active_profile = profile
     from ..config import save_koan_config
     await save_koan_config(st.config)
@@ -213,7 +304,6 @@ async def api_start_run(r: Request) -> Response:
     scout_concurrency = body.get("scout_concurrency")
     if isinstance(scout_concurrency, int) and scout_concurrency > 0:
         st.config.scout_concurrency = scout_concurrency
-        from ..config import save_koan_config
         await save_koan_config(st.config)
 
     # Create epic directory
@@ -874,6 +964,7 @@ def create_app(app_state: AppState) -> Starlette:
     routes = [
         Mount("/mcp", app=mcp_app),
         Route("/api/start-run", api_start_run, methods=["POST"]),
+        Route("/api/start-run/preflight", api_start_run_preflight, methods=["GET"]),
         Route("/api/answer", api_answer, methods=["POST"]),
         Route("/api/artifact-review", api_artifact_review, methods=["POST"]),
         Route("/api/workflow-decision", api_workflow_decision, methods=["POST"]),

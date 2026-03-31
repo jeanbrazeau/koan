@@ -125,6 +125,92 @@ def test_start_run_persists_profile(client, app_state):
     assert app_state.config.active_profile == "balanced"
 
 
+# -- Start-run preflight -------------------------------------------------------
+
+def test_preflight_returns_required_types(client, app_state):
+    from koan.runners.registry import compute_balanced_profile
+    app_state.probe_results = _make_probe_results()
+    app_state.balanced_profile = compute_balanced_profile(app_state.probe_results)
+    resp = client.get("/api/start-run/preflight?profile=balanced")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert "claude" in data["required_runner_types"]
+    assert "claude" in data["installations"]
+
+
+def test_preflight_shows_binary_validity(client, app_state, tmp_path):
+    from koan.runners.registry import compute_balanced_profile
+    app_state.probe_results = _make_probe_results()
+    app_state.balanced_profile = compute_balanced_profile(app_state.probe_results)
+    real_binary = tmp_path / "claude"
+    real_binary.touch()
+    app_state.config.agent_installations = [
+        AgentInstallation(alias="good", runner_type="claude", binary=str(real_binary)),
+        AgentInstallation(alias="bad", runner_type="claude", binary="/nonexistent/claude"),
+    ]
+    resp = client.get("/api/start-run/preflight?profile=balanced")
+    data = resp.json()
+    insts = data["installations"]["claude"]
+    good = next(i for i in insts if i["alias"] == "good")
+    bad = next(i for i in insts if i["alias"] == "bad")
+    assert good["binary_valid"] is True
+    assert bad["binary_valid"] is False
+
+
+def test_preflight_missing_profile(client, app_state):
+    resp = client.get("/api/start-run/preflight?profile=nonexistent")
+    assert resp.status_code == 404
+
+
+# -- Start-run installation validation -----------------------------------------
+
+def test_start_run_accepts_installation_selection(client, app_state, tmp_path):
+    from koan.runners.registry import compute_balanced_profile
+    app_state.probe_results = _make_probe_results()
+    app_state.balanced_profile = compute_balanced_profile(app_state.probe_results)
+    binary = tmp_path / "claude"
+    binary.touch()
+    app_state.config.agent_installations = [
+        AgentInstallation(alias="my-claude", runner_type="claude", binary=str(binary)),
+    ]
+    resp = client.post("/api/start-run", json={
+        "task": "build something",
+        "profile": "balanced",
+        "installations": {"claude": "my-claude"},
+    })
+    assert resp.status_code == 200
+    assert app_state.config.active_installations["claude"] == "my-claude"
+
+
+def test_start_run_rejects_missing_binary(client, app_state):
+    from koan.runners.registry import compute_balanced_profile
+    app_state.probe_results = _make_probe_results()
+    app_state.balanced_profile = compute_balanced_profile(app_state.probe_results)
+    app_state.config.agent_installations = [
+        AgentInstallation(alias="broken", runner_type="claude", binary="/nonexistent/claude"),
+    ]
+    app_state.config.active_installations = {"claude": "broken"}
+    resp = client.post("/api/start-run", json={
+        "task": "build something",
+        "profile": "balanced",
+    })
+    assert resp.status_code == 422
+    data = resp.json()
+    assert data["error"] == "binary_not_found"
+    assert "claude" in data["runner_type"]
+
+
+def test_start_run_rejects_unknown_installation_alias(client, app_state):
+    app_state.probe_results = _make_probe_results()
+    resp = client.post("/api/start-run", json={
+        "task": "build something",
+        "profile": "balanced",
+        "installations": {"claude": "ghost"},
+    })
+    assert resp.status_code == 422
+    assert "ghost" in resp.json()["message"]
+
+
 # -- Artifacts ----------------------------------------------------------------
 
 def test_artifact_listing(client, app_state):
