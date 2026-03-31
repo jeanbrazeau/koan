@@ -204,6 +204,17 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
             line = raw.decode("utf-8", errors="replace").rstrip("\n")
             events = runner.parse_stream_event(line)
             for ev in events:
+                # Close in-flight tool when the LLM moves on to thinking
+                # or text output -- those signal the previous tool is done.
+                if ev.type in ("token_delta", "thinking") and last_call_id is not None:
+                    store.push_event(
+                        "tool_completed",
+                        build_tool_completed(last_call_id, last_tool_name),
+                        agent_id=agent_id,
+                    )
+                    last_call_id = None
+                    last_tool_name = None
+
                 if ev.type == "token_delta":
                     agent.token_count["received"] = agent.token_count.get("received", 0) + len(ev.content or "")
                     store.push_event("stream_delta", {"delta": ev.content or ""}, agent_id=agent_id)
