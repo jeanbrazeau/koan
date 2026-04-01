@@ -26,19 +26,16 @@ The answer: it shouldn't. The fold exists in one place (Python). The frontend ap
 
 The fold runs **only in Python**. The frontend has **zero business logic** — no event interpretation, no buffer management, no agent filtering, no in-flight tracking. It receives state and renders it.
 
-### Protocol: snapshot + JSON Patch + streaming deltas
+### Protocol: snapshot + JSON Patch
 
-The server sends three types of SSE messages:
+The server sends two types of SSE messages:
 
 | SSE event | When | Payload | Client action |
 |-----------|------|---------|---------------|
 | `snapshot` | First connect, reconnect | `{version, state}` — full materialized projection (camelCase) | Replace entire store |
-| `patch` | After each event (except deltas) | `{version, patch}` — RFC 6902 JSON Patch operations (camelCase paths) | `applyPatch(store, patch)` |
-| `delta` | `thinking` / `stream_delta` events | `{version, path, delta}` — string append (camelCase path) | `store[path] += delta` |
+| `patch` | After each event | `{version, patch}` — RFC 6902 JSON Patch operations (camelCase paths) | `applyPatch(store, patch)` |
 
-**Why three types, not just patches?**
-
-JSON Patch's `replace` operation for a growing string buffer is O(buffer_size) per delta. A `thinking_buffer` at 10KB with 20 deltas/second produces 200KB/s of patches — vs 600B/s for raw deltas. Streaming buffers are special-cased for bandwidth efficiency. Everything else goes through standard JSON Patch.
+**Everything goes through JSON Patch — including thinking and text deltas.** A thinking delta produces a `replace` on `/pendingThinking` carrying the full accumulated string. At 10KB of accumulated thinking with 20 deltas/second, this is ~200KB/s of patches. On a remote server this would warrant a special-cased delta bypass. But koan is a localhost tool — loopback traffic doesn't hit a NIC, and 200KB/s is noise compared to the LLM API traffic that dwarfs it. The simplicity of a uniform protocol (two event types, two handlers, zero special cases) is worth more than the bandwidth savings of a third event type that only matters at scale we'll never hit.
 
 ### Connection lifecycle
 
@@ -46,8 +43,8 @@ JSON Patch's `replace` operation for a growing string buffer is O(buffer_size) p
 First connect:     GET /events?since=0
                    ← snapshot {version: N, state: <Projection>}      (camelCase keys)
                    ← patch {version: N+1, patch: [...]}              (camelCase paths)
-                   ← delta {version: N+2, path: "thinkingBuffer", delta: "The user"}
-                   ← delta {version: N+3, path: "thinkingBuffer", delta: " wants me"}
+                   ← patch {version: N+2, patch: [{op:"replace", path:"/pendingThinking", value:"The user"}]}
+                   ← patch {version: N+3, patch: [{op:"replace", path:"/pendingThinking", value:"The user wants me"}]}
                    ← patch {version: N+4, patch: [...]}
                    ...
 
@@ -87,30 +84,22 @@ def push_event(self, event_type, payload, agent_id=None):
     new_state = self.projection.to_wire()              # camelCase via alias_generator
     self.prev_state = new_state
 
-    # Streaming deltas: bypass JSON Patch, send raw delta
-    if event_type in ("thinking", "stream_delta"):
-        msg = {"type": "delta", "version": self.version,
-               "path": "thinkingBuffer" if event_type == "thinking" else "streamBuffer",
-               "delta": payload["delta"]}
-    else:
-        patch = jsonpatch.make_patch(old_state, new_state)
-        if not patch:
-            return  # no-op event (e.g. koan MCP tool filtered by fold)
-        msg = {"type": "patch", "version": self.version,
-               "patch": patch.to_string()}
+    patch = jsonpatch.make_patch(old_state, new_state)
+    if not patch:
+        return                                         # no-op (e.g. koan MCP tool filtered by fold)
 
-    # Broadcast to all subscribers as a plain dict
+    msg = {"type": "patch", "version": self.version, "patch": patch.to_string()}
     for q in list(self.subscribers):
         q.put_nowait(msg)
 ```
 
-Subscriber queues carry **plain dicts**, not `VersionedEvent` objects. The dict shape matches the SSE JSON payload directly — the `sse_stream()` consumer just serializes and sends. This is a deliberate simplification: the raw event is for the audit log, the dict message is for the wire.
+Every event takes the same path: fold, diff, broadcast. No branching on event type. Subscriber queues carry **plain dicts**, not `VersionedEvent` objects. The dict shape matches the SSE JSON payload directly — the `sse_stream()` consumer just serializes and sends.
 
 ### Wire format: camelCase via Pydantic aliases
 
 The server emits camelCase JSON. The frontend applies it directly — no field renaming, no shadow state, no mapping function.
 
-Pydantic's `alias_generator` handles the conversion at serialization boundaries. Python fold code still uses snake_case attributes (`projection.thinking_buffer`). Only `to_wire()` output is camelCase:
+Pydantic's `alias_generator` handles the conversion at serialization boundaries. Python fold code still uses snake_case attributes (`projection.pending_thinking`). Only `to_wire()` output is camelCase:
 
 ```python
 from pydantic import ConfigDict
@@ -124,7 +113,7 @@ class KoanBaseModel(BaseModel):
         return self.model_dump(by_alias=True)
 ```
 
-All projection models (`Projection`, `AgentProjection`, `ConversationEntry` types, etc.) inherit from `KoanBaseModel`. Snapshot JSON, patch paths, and delta paths are all camelCase. The frontend receives `thinkingBuffer`, `primaryAgent`, `configActiveProfile` — matching JavaScript conventions natively.
+All projection models (`Projection`, `AgentProjection`, `ConversationEntry` types, etc.) inherit from `KoanBaseModel`. Snapshot JSON and patch paths are all camelCase. The frontend receives `pendingThinking`, `primaryAgent`, `configActiveProfile` — matching JavaScript conventions natively.
 
 **Why not keep snake_case on the wire and rename in the frontend?** Because that requires a `mapProjectionToStore()` function that renames every field, a `projectionState` shadow variable holding the snake_case dict for patch application (separate from the Zustand store), and maintenance of both in sync with the Projection model. Every new field needs a rename entry. That mapping layer *is* business logic — it contradicts the "frontend has zero business logic" principle. Emitting camelCase from the server eliminates the layer entirely: patches apply directly to the store, snapshots spread directly into the store, and adding a field to the Projection requires zero frontend changes.
 
@@ -144,24 +133,13 @@ es.addEventListener('patch', (e) => {
   storeState = applyPatch(storeState, patch).newDocument
   set({ lastVersion: version, ...storeState })
 })
-
-es.addEventListener('delta', (e) => {
-  const { version, path, delta } = JSON.parse(e.data)
-  set(s => {
-    if (path === 'thinkingBuffer')
-      return { lastVersion: version, thinkingBuffer: s.thinkingBuffer + delta, isThinking: true }
-    if (path === 'streamBuffer')
-      return { lastVersion: version, streamBuffer: s.streamBuffer + delta, isThinking: false }
-    return { lastVersion: version }
-  })
-})
 ```
 
-That is the **entire** frontend sync implementation. No `applyEvent`. No 33-case switch. No fold logic. No buffer flushing. No agent filtering. No `completedCallIds` sets. No `mapProjectionToStore`. No field renaming.
+That is the **entire** frontend sync implementation. Two handlers. No `applyEvent`. No 33-case switch. No fold logic. No buffer management. No agent filtering. No `completedCallIds` sets. No `mapProjectionToStore`. No field renaming. No special cases for streaming events.
 
 **`storeState`** is a module-level variable in `connect.ts` that holds the current raw projection dict for patch application. It must be a plain JS object (not Zustand state) because `fast-json-patch`'s `applyPatch` operates on plain objects. On snapshot, it is replaced wholesale. On patch, `applyPatch` returns a `newDocument` (the immutable variant — avoids mutating the previous state in case Zustand still references it). The Zustand store is updated by spreading `storeState` into it.
 
-**`isThinking` is a stored field, not derived.** The `delta` handler for `thinkingBuffer` sets `isThinking: true`. When the fold flushes `thinking_buffer` into a `ThinkingEntry` (on transition to a tool call or text output), the patch clears `thinkingBuffer` to `""` and the spread into the store updates it. The `patch` handler implicitly sets `isThinking` to `false` when the snapshot state has an empty `thinkingBuffer`. Components read a definitive boolean, not a derived check.
+**`isThinking`** is a projection field computed by the fold (`is_thinking = bool(self.pending_thinking)`). It arrives via patch like everything else. The frontend does not manage it — it reads a boolean from the store. When the fold flushes `pending_thinking` into a `ThinkingEntry`, it also sets `is_thinking = False`, and the patch carries both changes.
 
 **Error handling:** If `applyPatch` throws (malformed patch, path mismatch, or stale state), the client cannot safely continue — its local state may be inconsistent. The correct recovery is to force a reconnect with `since=0` to get a fresh snapshot. The error handler should: log the error, close the EventSource, reset `lastVersion` to 0, and reconnect.
 
@@ -178,7 +156,7 @@ The initial design considered symmetric folds: identical fold logic in Python an
 | Fold implementations | 2 (Python + TypeScript) — must stay in sync forever | **1 (Python only)** |
 | New event type cost | Python fold + TS fold + TS snapshot reconstruction | **Python fold only** — frontend unchanged |
 | Bug surface | Proportional to event_type_count × 2 | Proportional to event_type_count × 1 |
-| Frontend complexity | 33-case switch + buffer management + agent filtering | **3 event listeners, zero business logic** |
+| Frontend complexity | 33-case switch + buffer management + agent filtering | **2 event listeners, zero business logic** |
 | Correctness guarantee | Requires "symmetric fold invariant" — manual discipline | **Correct by construction** — frontend cannot diverge |
 
 The dual-fold approach is *complected* in the Rich Hickey sense: fold logic interleaved with two language runtimes. The "symmetric fold invariant" is an admission that the architecture requires discipline to maintain. JSON Patch eliminates the problem: there is no invariant to enforce because the logic exists in one place.
@@ -267,18 +245,18 @@ ConversationEntry = Annotated[
 
 ### Fold rules
 
-The fold maintains `conversation: list[ConversationEntry]` plus two transient buffers (`thinking_buffer`, `stream_buffer`). Buffers accumulate deltas; they flush to completed entries on transitions.
+The fold maintains `conversation: list[ConversationEntry]` plus two pending fields (`pending_thinking`, `pending_text`). These accumulate deltas from the LLM; they flush to completed entries on transitions.
 
 | Event | Action |
 |-------|--------|
-| `thinking` (primary only) | Flush `stream_buffer` → TextEntry. Append delta to `thinking_buffer`. |
-| `stream_delta` (primary only) | Flush `thinking_buffer` → ThinkingEntry. Append delta to `stream_buffer`. |
-| `tool_*` (primary, non-koan) | Flush both buffers. Append typed tool entry (`in_flight=True`). |
+| `thinking` (primary only) | Flush `pending_text` → TextEntry. Append delta to `pending_thinking`. Set `is_thinking = True`. |
+| `stream_delta` (primary only) | Flush `pending_thinking` → ThinkingEntry. Append delta to `pending_text`. Set `is_thinking = False`. |
+| `tool_*` (primary, non-koan) | Flush both pending fields. Append typed tool entry (`in_flight=True`). Set `is_thinking = False`. |
 | `tool_called` (koan MCP — `koan_*`) | Ignore for conversation. |
 | `tool_completed` (primary only) | Set `in_flight=False` on matching `call_id`. |
-| `agent_step_advanced` (primary) | Flush both buffers. Append StepEntry if `step >= 1`. Update agent step/tokens. |
+| `agent_step_advanced` (primary) | Flush both pending fields. Append StepEntry if `step >= 1`. Update agent step/tokens. Set `is_thinking = False`. |
 | `agent_step_advanced` (scout) | Update scout step/tokens only. |
-| `stream_cleared` (primary only) | Flush both buffers. |
+| `stream_cleared` (primary only) | Flush both pending fields. Set `is_thinking = False`. |
 | Tool events (scout) | Update scout's `last_tool`. |
 | `agent_exited` | Set `status`, `error` on agent. Move to `completed_agents`. |
 
@@ -299,10 +277,9 @@ class Projection(KoanBaseModel):    # inherits alias_generator=to_camel
     completed_agents: list[AgentProjection] = []
 
     conversation: list[ConversationEntry] = []
-    thinking_buffer: str = ""                # partial thinking in progress
-    stream_buffer: str = ""                  # partial text output in progress
-    # NOTE: stream_buffer already exists in the current Projection.
-    # thinking_buffer is new. Both are required for the delta SSE path.
+    pending_thinking: str = ""               # in-progress thinking (wire: "pendingThinking")
+    pending_text: str = ""                   # in-progress text output (wire: "pendingText")
+    is_thinking: bool = False                # wire: "isThinking" — True while thinking deltas are arriving
 
     active_interaction: InteractionState | None = None
     artifacts: dict[str, ArtifactInfo] = {}
@@ -417,7 +394,7 @@ class AgentProjection(KoanBaseModel):
 - Tool call patches: ~100 bytes each (add entry to conversation array)
 - Step advance patches: ~200 bytes (flush + add)
 - `tool_completed`: ~80 bytes (replace one `in_flight` field)
-- Thinking/stream deltas: bypassed entirely (raw delta events)
+- Thinking deltas: `replace` on `/pendingThinking` — O(accumulated_size) per delta, ~200KB/s peak. Acceptable on localhost (see "Protocol" section).
 - Snapshot size at peak: ~50MB (dominated by artifact content references)
 - Snapshot sent only on connect/reconnect — not per-event
 
@@ -433,14 +410,13 @@ class AgentProjection(KoanBaseModel):
 2. Define `KoanBaseModel` with `alias_generator=to_camel, populate_by_name=True` and `to_wire()` method
 3. Define `ConversationEntry` union and all entry types inheriting `KoanBaseModel`
 4. Migrate `Projection`, `AgentProjection`, and all sub-models to inherit `KoanBaseModel`
-5. Add `conversation`, `thinking_buffer` to `Projection`; remove `activity_log`
+5. Add `conversation`, `pending_thinking`, `pending_text`, `is_thinking` to `Projection`; remove `activity_log`
 6. Add `label`, `status`, `error`, `last_tool` to `AgentProjection`
 7. Rewrite fold cases for all 36 event types
 8. Update `ProjectionStore.push_event()`:
    - Use `projection.to_wire()` (not `model_dump()`) for camelCase dicts
    - Compute JSON Patch between old and new `to_wire()` output
-   - For `thinking`/`stream_delta`: broadcast `delta` message with camelCase path
-   - For all others: broadcast `patch` message (paths are automatically camelCase)
+   - Broadcast patch message (all events take the same path, no branching)
    - Store `prev_state` for next diff computation
 9. Update `sse_stream()`:
    - `since=0`: send snapshot via `to_wire()`, then live
@@ -455,7 +431,7 @@ class AgentProjection(KoanBaseModel):
 1. `npm install fast-json-patch`
 2. Define TypeScript `ConversationEntry` union matching the wire format (camelCase)
 3. Replace `connect.ts`:
-   - 3 event listeners: `snapshot`, `patch`, `delta`
+   - 2 event listeners: `snapshot`, `patch`
    - Module-level `storeState` variable for patch application
    - Remove KNOWN_EVENTS list and per-event-type listeners
    - Remove `fatal_error` listener (no longer emitted)
@@ -466,9 +442,9 @@ class AgentProjection(KoanBaseModel):
 
 ### Phase 3: Tests
 
-1. Backend fold tests: assert `conversation` entries, `thinking_buffer`, `in_flight` state
+1. Backend fold tests: assert `conversation` entries, `pending_thinking`, `is_thinking`, `in_flight` state
 2. JSON Patch tests: fold event → verify patch operations are correct
-3. Delta bypass tests: `thinking`/`stream_delta` produce delta messages, not patches
+3. Thinking/stream patch tests: `thinking`/`stream_delta` produce `replace` patches on `pendingThinking`/`pendingText`
 4. Snapshot round-trip: fold events → snapshot → verify frontend can read it directly
 5. Reconnect test: client with stale version gets fresh snapshot
 6. **Delete `events_since()` tests:** `test_projections.py` has tests that call `store.events_since()` directly (currently lines ~360–373). These must be deleted, not updated — the method no longer exists. Replace with tests that verify the snapshot contains the correct materialized state after N events.
@@ -479,8 +455,7 @@ class AgentProjection(KoanBaseModel):
 2. Remove `events_since()` from `ProjectionStore`
 3. Update `docs/projections.md`:
    - Replace `activity_log` with `conversation` model
-   - Document JSON Patch protocol
-   - Document delta bypass for streaming buffers
+   - Document JSON Patch protocol (two event types: snapshot, patch)
    - Update fold rules table
 4. Update `docs/architecture.md`:
    - Add invariant: "The fold runs only in Python. The frontend applies server-computed patches. It has no business logic."
@@ -492,7 +467,7 @@ class AgentProjection(KoanBaseModel):
 
 **JSON Patch array diffing:** `make_patch` uses positional indices for arrays. Conversation is append-only (entries are never reordered or removed), so patches are clean `add` operations at the end. The one mutation is `tool_completed` setting `in_flight=False` on an existing entry, which produces a targeted `replace` at `/conversation/N/in_flight`.
 
-**Patch computation cost:** `make_patch` diffs two dicts. At 50MB state, this could be expensive. Mitigation: most events change a small part of state; the diff is proportional to what changed, not total state. For the dominant case (thinking delta), the diff is bypassed entirely.
+**Patch computation cost:** `make_patch` diffs two dicts. At 50MB state, this could be expensive. Mitigation: most events change a small part of state; the diff is proportional to what changed, not total state. Thinking deltas produce a `replace` on a single string field — the diff is O(1) to detect, though the patch payload is O(accumulated_size). This is acceptable on localhost (see protocol section).
 
 **Library trust:** `jsonpatch` (Python, 10+ years, well-maintained) and `fast-json-patch` (JavaScript, RFC 6902 compliant, widely used). Both are mature.
 
@@ -506,10 +481,10 @@ These changes require corresponding updates to existing docs. Do not defer — o
 
 ### `docs/projections.md`
 
-1. **Projection model:** Replace `activity_log: list[dict]` with `conversation: list[ConversationEntry]` and `thinking_buffer: str`. Add the full `ConversationEntry` union definition with all 10 entry types.
-2. **SSE protocol section:** Replace the current "snapshot + raw events" description with the new three-message protocol (`snapshot`, `patch`, `delta`). Include the connection lifecycle diagram from this plan.
-3. **Fold rules table:** Rewrite the activity section — replace "append raw event to activity_log" with the actual fold rules (buffer accumulation, flush triggers, in-flight tracking, agent filtering, koan MCP filtering).
-4. **"Why catch-up uses snapshots":** Document the bandwidth analysis: thinking delta patches at 200KB/s vs 600B/s for raw deltas. Document the memory cost of storing 500K patches. This decision must be visible, not inferred.
+1. **Projection model:** Replace `activity_log: list[dict]` with `conversation: list[ConversationEntry]`, `pending_thinking: str`, `pending_text: str`, `is_thinking: bool`. Add the full `ConversationEntry` union definition with all 10 entry types.
+2. **SSE protocol section:** Replace the current "snapshot + raw events" description with the two-message protocol (`snapshot`, `patch`). Include the connection lifecycle diagram from this plan.
+3. **Fold rules table:** Rewrite the activity section — replace "append raw event to activity_log" with the actual fold rules (pending field accumulation, flush triggers, in-flight tracking, agent filtering, koan MCP filtering).
+4. **"Why catch-up uses snapshots":** Document the memory cost of storing 500K patches. Document the localhost assumption that makes uniform JSON Patch viable for streaming (no delta bypass needed). These decisions must be visible, not inferred.
 5. **Event types:** Add `scout_queued` and the 6 typed tool events (`tool_read` through `tool_ls`) which are currently missing.
 6. **`AgentProjection`:** Add `status`, `error`, `last_tool`, `label` fields.
 7. **Remove:** The "Why activity_log stores raw events" section — that rationale is obsolete.
@@ -532,7 +507,8 @@ ProjectionStore maintains:
   - prev_state: to_wire() of the previous projection, used for JSON Patch computation
 
 push_event() folds the event, computes a JSON Patch between prev_state and
-the new to_wire() output, and broadcasts either a patch or a delta message.
+the new to_wire() output, and broadcasts the patch. Every event takes the
+same path: fold → diff → broadcast. No branching on event type.
 All wire output is camelCase via KoanBaseModel.to_wire() (alias_generator).
 The fold is the only place where business logic runs. The frontend applies
 patches mechanically with no field renaming.
@@ -545,11 +521,11 @@ After the change, the file should have a comment explaining:
 State sync protocol:
   snapshot  → replace storeState + spread into Zustand
   patch     → apply RFC 6902 patch to storeState + spread into Zustand
-  delta     → append string delta to thinkingBuffer or streamBuffer
 
 Server emits camelCase JSON (via Pydantic alias_generator). No field
 renaming needed — wire keys match store keys. storeState is a plain JS
 object for fast-json-patch; Zustand state is updated by spreading it.
+All events — including thinking/text deltas — go through JSON Patch.
 The frontend has no fold logic — all business rules live in the Python fold.
 ```
 
@@ -561,7 +537,7 @@ The six core invariants are unchanged. The new architecture is a refinement of h
 
 ## Migration
 
-**Breaking change.** The SSE protocol changes from per-event-type messages to `snapshot`/`patch`/`delta`. Old clients cannot connect to new servers (they'd receive unknown event types). Old servers cannot serve new clients (missing `patch` event).
+**Breaking change.** The SSE protocol changes from per-event-type messages to `snapshot`/`patch`. Old clients cannot connect to new servers (they'd receive unknown event types). Old servers cannot serve new clients (missing `patch` event).
 
 **No on-disk migration.** All state is in-memory. Server restart already forces a full reload.
 
