@@ -57,12 +57,12 @@ Reconnect:         GET /events?since=N+4
 
 Server restart:    GET /events?since=N+4
                    ← snapshot {version: 0, state: <empty projection>}
-                   (client detects version regression, resets UI)
+                   (client detects version < lastVersion, resets UI)
 ```
 
 **Catch-up always uses snapshots.** Storing patches for replay is expensive (200K–500K events over a full epic, thinking patches are large). On reconnect, the server sends a fresh snapshot at the current version. The `since` parameter is a version check: if it matches the server's version, skip the snapshot and go straight to live events. Otherwise, send a snapshot.
 
-This eliminates `events_since()` and the catch-up replay code path entirely.
+This eliminates `events_since()` and the catch-up replay code path entirely. It also **eliminates `fatal_error`**: the current code sends `fatal_error` when `since > store.version` (after server restart), requiring the user to manually reload. The new design always sends a snapshot instead — the client detects the version regression (`snapshot.version < lastVersion`) and resets its UI automatically. One code path for all reconnects.
 
 ### What the server stores
 
@@ -89,12 +89,22 @@ def push_event(self, event_type, payload, agent_id=None):
 
     # Streaming deltas: bypass JSON Patch, send raw delta
     if event_type in ("thinking", "stream_delta"):
-        broadcast_delta(version, path_for(event_type), payload["delta"])
+        msg = {"type": "delta", "version": self.version,
+               "path": "thinking_buffer" if event_type == "thinking" else "stream_buffer",
+               "delta": payload["delta"]}
     else:
         patch = jsonpatch.make_patch(old_state, new_state)
-        if patch:
-            broadcast_patch(version, patch.to_string())
+        if not patch:
+            return  # no-op event (e.g. koan MCP tool filtered by fold)
+        msg = {"type": "patch", "version": self.version,
+               "patch": patch.to_string()}
+
+    # Broadcast to all subscribers as a plain dict
+    for q in list(self.subscribers):
+        q.put_nowait(msg)
 ```
+
+Subscriber queues carry **plain dicts**, not `VersionedEvent` objects. The dict shape matches the SSE JSON payload directly — the `sse_stream()` consumer just serializes and sends. This is a deliberate simplification: the raw event is for the audit log, the dict message is for the wire.
 
 ### Frontend event handling — complete implementation
 
@@ -116,13 +126,15 @@ es.addEventListener('delta', (e) => {
     if (path === 'thinking_buffer')
       return { lastVersion: version, thinkingBuffer: s.thinkingBuffer + delta, isThinking: true }
     if (path === 'stream_buffer')
-      return { lastVersion: version, streamBuffer: s.streamBuffer + delta }
+      return { lastVersion: version, streamBuffer: s.streamBuffer + delta, isThinking: false }
     return { lastVersion: version }
   })
 })
 ```
 
 That is the **entire** frontend sync implementation. No `applyEvent`. No 33-case switch. No fold logic. No buffer flushing. No agent filtering. No `completedCallIds` sets.
+
+**`isThinking` is a stored field, not derived.** The `delta` handler for `thinking_buffer` sets `isThinking: true`. When the fold flushes `thinking_buffer` into a `ThinkingEntry` (on transition to a tool call or text output), the patch clears `thinking_buffer` to `""` and the next `mapProjectionToStore` call sees the empty buffer. The `patch` handler also sets `isThinking: false` when it detects `thinkingBuffer` was cleared. This avoids the component needing to derive `isThinking` from buffer length — it reads a definitive boolean.
 
 `mapProjectionToStore` is a pure mapping from Python snake_case field names to the Zustand store's shape. It does not interpret, filter, or transform — it renames fields. Example: `state.primary_agent` → `primaryAgent`, `state.config_active_profile` → `configActiveProfile`. Agent and artifact sub-objects go through lightweight transform helpers (`transformAgent`, `transformArtifact`) that handle field renaming and type coercion from JSON to TypeScript types.
 
@@ -264,8 +276,10 @@ class Projection(BaseModel):
     completed_agents: list[AgentProjection] = []
 
     conversation: list[ConversationEntry] = []
-    thinking_buffer: str = ""
-    stream_buffer: str = ""
+    thinking_buffer: str = ""                # partial thinking in progress
+    stream_buffer: str = ""                  # partial text output in progress
+    # NOTE: stream_buffer already exists in the current Projection.
+    # thinking_buffer is new. Both are required for the delta SSE path.
 
     active_interaction: InteractionState | None = None
     artifacts: dict[str, ArtifactInfo] = {}
@@ -285,17 +299,19 @@ class Projection(BaseModel):
 class AgentProjection(BaseModel):
     agent_id: str
     role: str
-    label: str = ""
+    label: str = ""                 # NEW — scout identifier (e.g. "engine-methods")
     model: str | None = None
     step: int = 0
     step_name: str = ""
-    started_at_ms: int = 0
+    started_at_ms: int = 0          # existing field
     input_tokens: int = 0
     output_tokens: int = 0
-    status: Literal["running", "done", "failed"] = "running"
-    error: str | None = None
-    last_tool: str = ""
+    status: Literal["running", "done", "failed"] = "running"  # NEW
+    error: str | None = None        # NEW
+    last_tool: str = ""             # NEW — last tool summary for scout monitor
 ```
+
+`label`, `status`, `error`, `last_tool` are the four additions. The frontend's `transformAgent()` already reads these fields from the snapshot — they are expected but not yet emitted by the backend's `AgentProjection`. This plan closes that gap.
 
 ---
 
@@ -405,6 +421,7 @@ class AgentProjection(BaseModel):
    - `since=N` where N == server version: skip snapshot, go straight to live
    - `since=N` where N != server version: send fresh snapshot (not event replay)
    - Remove `events_since()` — no longer used for catch-up
+   - Remove `fatal_error` path — replaced by always-snapshot (client auto-recovers from version regression)
 8. Update `get_snapshot()` — unchanged; `model_dump()` naturally includes `conversation`
 
 ### Phase 2: Frontend — dumb renderer
@@ -413,10 +430,12 @@ class AgentProjection(BaseModel):
 2. Define TypeScript `ConversationEntry` union matching Python exactly (snake_case)
 3. Replace `connect.ts`:
    - 3 event listeners: `snapshot`, `patch`, `delta`
+   - Module-level `projectionState` variable for patch application
    - Remove KNOWN_EVENTS list and per-event-type listeners
-4. Replace `applySnapshot`: direct field mapping, no re-folding
+   - Remove `fatal_error` listener (no longer emitted)
+4. Replace `applySnapshot`: direct field mapping from `mapProjectionToStore()`, no re-folding
 5. Delete `applyEvent` entirely
-6. Keep `mapProjectionToStore()` as a pure field-rename function
+6. `mapProjectionToStore()`: pure field-rename function. Reads `projectionState` and produces Zustand-shaped state. `isThinking` is set: `true` when `thinkingBuffer !== ''`, `false` otherwise. The `delta` handler also sets `isThinking: true` directly for immediate reactivity.
 7. Update `ActivityFeed` and components to read `ConversationEntry` field names
 
 ### Phase 3: Tests
@@ -426,6 +445,7 @@ class AgentProjection(BaseModel):
 3. Delta bypass tests: `thinking`/`stream_delta` produce delta messages, not patches
 4. Snapshot round-trip: fold events → snapshot → verify frontend can read it directly
 5. Reconnect test: client with stale version gets fresh snapshot
+6. **Delete `events_since()` tests:** `test_projections.py` has tests that call `store.events_since()` directly (currently lines ~360–373). These must be deleted, not updated — the method no longer exists. Replace with tests that verify the snapshot contains the correct materialized state after N events.
 
 ### Phase 4: Cleanup & docs
 
