@@ -171,47 +171,38 @@ class StepEntry(BaseModel):
     step_name: str
     total_steps: int | None = None
 
-class ToolReadEntry(BaseModel):
-    type: Literal["tool_read"] = "tool_read"
+class BaseToolEntry(BaseModel):
+    """Shared fields for all tool conversation entries."""
     call_id: str
     in_flight: bool
+
+class ToolReadEntry(BaseToolEntry):
+    type: Literal["tool_read"] = "tool_read"
     file: str
     lines: str = ""                       # optional line range "10-20"
 
-class ToolWriteEntry(BaseModel):
+class ToolWriteEntry(BaseToolEntry):
     type: Literal["tool_write"] = "tool_write"
-    call_id: str
-    in_flight: bool
     file: str
 
-class ToolEditEntry(BaseModel):
+class ToolEditEntry(BaseToolEntry):
     type: Literal["tool_edit"] = "tool_edit"
-    call_id: str
-    in_flight: bool
     file: str
 
-class ToolBashEntry(BaseModel):
+class ToolBashEntry(BaseToolEntry):
     type: Literal["tool_bash"] = "tool_bash"
-    call_id: str
-    in_flight: bool
     command: str
 
-class ToolGrepEntry(BaseModel):
+class ToolGrepEntry(BaseToolEntry):
     type: Literal["tool_grep"] = "tool_grep"
-    call_id: str
-    in_flight: bool
     pattern: str
 
-class ToolLsEntry(BaseModel):
+class ToolLsEntry(BaseToolEntry):
     type: Literal["tool_ls"] = "tool_ls"
-    call_id: str
-    in_flight: bool
     path: str
 
-class ToolGenericEntry(BaseModel):
+class ToolGenericEntry(BaseToolEntry):
     type: Literal["tool_generic"] = "tool_generic"
-    call_id: str
-    in_flight: bool
     tool_name: str                        # original unrecognized tool name
     summary: str = ""
 
@@ -223,8 +214,8 @@ ConversationEntry = Annotated[
 ]
 ```
 
-**`tool_completed` handling across union types:**
-All 7 tool types share `call_id` and `in_flight`. The fold scans `conversation` for an entry with matching `call_id` using duck-type checking (`hasattr(entry, 'call_id')` in Python, `'callId' in entry` in TypeScript) and sets `in_flight = False`. No base class needed — this is a structural convention enforced by the fact that all tool types must have these fields.
+**`tool_completed` handling:**
+All tool types inherit from `BaseToolEntry`, which carries `call_id` and `in_flight`. The fold scans `conversation` for an entry where `isinstance(entry, BaseToolEntry) and entry.call_id == target` and sets `in_flight = False` via `model_copy(update={"in_flight": False})`. On the TypeScript side, a `BaseToolEntry` interface provides the same fields, and a type guard `isToolEntry(e): e is BaseToolEntry` enables the same pattern.
 
 **Extensibility:** Adding a future `ToolWebFetchEntry` means: define the Pydantic model (4 lines), add to the union, add a fold case in Python, add a TypeScript type, add a fold case in TS, add a rendering component. Each step is mechanical. No existing types are modified.
 
