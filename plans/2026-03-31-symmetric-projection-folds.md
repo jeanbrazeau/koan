@@ -35,31 +35,29 @@ The server sends two types of SSE messages:
 | `snapshot` | First connect, reconnect | `{version, state}` — full materialized projection (camelCase) | Replace entire store |
 | `patch` | After each event | `{version, patch}` — RFC 6902 JSON Patch operations (camelCase paths) | `applyPatch(store, patch)` |
 
-**Everything goes through JSON Patch — including thinking and text deltas.** A thinking delta produces a `replace` on `/pendingThinking` carrying the full accumulated string. At 10KB of accumulated thinking with 20 deltas/second, this is ~200KB/s of patches. On a remote server this would warrant a special-cased delta bypass. But koan is a localhost tool — loopback traffic doesn't hit a NIC, and 200KB/s is noise compared to the LLM API traffic that dwarfs it. The simplicity of a uniform protocol (two event types, two handlers, zero special cases) is worth more than the bandwidth savings of a third event type that only matters at scale we'll never hit.
+**Everything goes through JSON Patch — including thinking and text deltas.** A thinking delta produces a `replace` on the agent's `pendingThinking` field carrying the full accumulated string. At 10KB of accumulated thinking with 20 deltas/second, this is ~200KB/s of patches. On a remote server this would warrant a special-cased delta bypass. But koan is a localhost tool — loopback traffic doesn't hit a NIC, and 200KB/s is noise compared to the LLM API traffic that dwarfs it. **The simplicity of a uniform protocol (two event types, two handlers, zero special cases) is worth more than the bandwidth savings of a third event type that only matters at scale we'll never hit.**
 
 ### Connection lifecycle
 
 ```
 First connect:     GET /events?since=0
-                   ← snapshot {version: N, state: <Projection>}      (camelCase keys)
-                   ← patch {version: N+1, patch: [...]}              (camelCase paths)
-                   ← patch {version: N+2, patch: [{op:"replace", path:"/pendingThinking", value:"The user"}]}
-                   ← patch {version: N+3, patch: [{op:"replace", path:"/pendingThinking", value:"The user wants me"}]}
-                   ← patch {version: N+4, patch: [...]}
+                   ← snapshot {version: N, state: {...}}         (camelCase keys)
+                   ← patch {version: N+1, patch: [...]}          (camelCase paths)
+                   ← patch {version: N+2, patch: [...]}
                    ...
 
-Reconnect:         GET /events?since=N+4
-                   ← snapshot {version: M, state: <Projection>}
+Reconnect:         GET /events?since=N+2
+                   ← snapshot {version: M, state: {...}}
                    (always a fresh snapshot — no patch replay)
 
-Server restart:    GET /events?since=N+4
-                   ← snapshot {version: 0, state: <empty projection>}
+Server restart:    GET /events?since=N+2
+                   ← snapshot {version: 0, state: {settings: {...}, run: null}}
                    (client detects version < lastVersion, resets UI)
 ```
 
-**Catch-up always uses snapshots.** Storing patches for replay is expensive (200K–500K events over a full epic, thinking patches are large). On reconnect, the server sends a fresh snapshot at the current version. The `since` parameter is a version check: if it matches the server's version, skip the snapshot and go straight to live events. Otherwise, send a snapshot.
+**Catch-up always uses snapshots.** Storing patches for replay is expensive (200K–500K events over a full epic). On reconnect, the server sends a fresh snapshot at the current version. The `since` parameter is a version check: if it matches the server's version, skip the snapshot and go straight to live events. Otherwise, send a snapshot.
 
-This eliminates `events_since()` and the catch-up replay code path entirely. It also **eliminates `fatal_error`**: the current code sends `fatal_error` when `since > store.version` (after server restart), requiring the user to manually reload. The new design always sends a snapshot instead — the client detects the version regression (`snapshot.version < lastVersion`) and resets its UI automatically. One code path for all reconnects.
+This eliminates `events_since()` and the catch-up replay code path entirely. It also eliminates `fatal_error`: the current code sends `fatal_error` when `since > store.version` (after server restart), requiring manual reload. The new design always sends a snapshot — the client detects the version regression and resets automatically. One code path for all reconnects.
 
 ### What the server stores
 
@@ -93,13 +91,13 @@ def push_event(self, event_type, payload, agent_id=None):
         q.put_nowait(msg)
 ```
 
-Every event takes the same path: fold, diff, broadcast. No branching on event type. Subscriber queues carry **plain dicts**, not `VersionedEvent` objects. The dict shape matches the SSE JSON payload directly — the `sse_stream()` consumer just serializes and sends.
+Every event takes the same path: fold, diff, broadcast. No branching on event type. Subscriber queues carry **plain dicts** — the dict shape matches the SSE JSON payload directly, and the `sse_stream()` consumer just serializes and sends.
 
 ### Wire format: camelCase via Pydantic aliases
 
 The server emits camelCase JSON. The frontend applies it directly — no field renaming, no shadow state, no mapping function.
 
-Pydantic's `alias_generator` handles the conversion at serialization boundaries. Python fold code still uses snake_case attributes (`projection.pending_thinking`). Only `to_wire()` output is camelCase:
+Pydantic's `alias_generator` handles the conversion at serialization boundaries. Python fold code uses snake_case attributes (`agent.conversation.pending_thinking`). Only `to_wire()` output is camelCase:
 
 ```python
 from pydantic import ConfigDict
@@ -113,14 +111,14 @@ class KoanBaseModel(BaseModel):
         return self.model_dump(by_alias=True)
 ```
 
-All projection models (`Projection`, `AgentProjection`, `ConversationEntry` types, etc.) inherit from `KoanBaseModel`. Snapshot JSON and patch paths are all camelCase. The frontend receives `pendingThinking`, `primaryAgent`, `configActiveProfile` — matching JavaScript conventions natively.
+All projection models inherit from `KoanBaseModel`. Snapshot JSON and patch paths are all camelCase. The frontend receives `pendingThinking`, `scoutConcurrency`, `isThinking` — matching JavaScript conventions natively.
 
-**Why not keep snake_case on the wire and rename in the frontend?** Because that requires a `mapProjectionToStore()` function that renames every field, a `projectionState` shadow variable holding the snake_case dict for patch application (separate from the Zustand store), and maintenance of both in sync with the Projection model. Every new field needs a rename entry. That mapping layer *is* business logic — it contradicts the "frontend has zero business logic" principle. Emitting camelCase from the server eliminates the layer entirely: patches apply directly to the store, snapshots spread directly into the store, and adding a field to the Projection requires zero frontend changes.
+**Why not keep snake_case on the wire and rename in the frontend?** Because that requires a `mapProjectionToStore()` function that renames every field, a `projectionState` shadow variable for patch application, and maintenance of both in sync with the Projection model. Every new field needs a rename entry. That mapping layer *is* business logic — it contradicts the "frontend has zero business logic" principle. Emitting camelCase from the server eliminates the layer entirely: patches apply directly to the store, snapshots spread directly into the store, adding a field to the Projection requires zero frontend changes.
 
-### Frontend event handling — complete implementation
+### Frontend — complete implementation
 
 ```typescript
-let storeState: Record<string, unknown> = {}  // raw state for patch application
+let storeState: Record<string, unknown> = {}
 
 es.addEventListener('snapshot', (e) => {
   const { version, state } = JSON.parse(e.data)
@@ -135,69 +133,252 @@ es.addEventListener('patch', (e) => {
 })
 ```
 
-That is the **entire** frontend sync implementation. Two handlers. No `applyEvent`. No 33-case switch. No fold logic. No buffer management. No agent filtering. No `completedCallIds` sets. No `mapProjectionToStore`. No field renaming. No special cases for streaming events.
+That is the **entire** frontend sync implementation. Two handlers. No `applyEvent`. No 33-case switch. No fold logic. No buffer management. No agent filtering. No field renaming. No special cases.
 
-**`storeState`** is a module-level variable in `connect.ts` that holds the current raw projection dict for patch application. It must be a plain JS object (not Zustand state) because `fast-json-patch`'s `applyPatch` operates on plain objects. On snapshot, it is replaced wholesale. On patch, `applyPatch` returns a `newDocument` (the immutable variant — avoids mutating the previous state in case Zustand still references it). The Zustand store is updated by spreading `storeState` into it.
+**`storeState`** is a module-level variable in `connect.ts` — the raw projection dict for patch application. It must be a plain JS object because `fast-json-patch`'s `applyPatch` operates on plain objects. On snapshot, it is replaced wholesale. On patch, `applyPatch` returns a `newDocument` (immutable variant — avoids mutating state Zustand may still reference).
 
-**`isThinking`** is a projection field computed by the fold (`is_thinking = bool(self.pending_thinking)`). It arrives via patch like everything else. The frontend does not manage it — it reads a boolean from the store. When the fold flushes `pending_thinking` into a `ThinkingEntry`, it also sets `is_thinking = False`, and the patch carries both changes.
+**Error handling:** If `applyPatch` throws, the client's local state may be inconsistent. Recovery: log the error, close EventSource, reset `lastVersion` to 0, reconnect for a fresh snapshot.
 
-**Error handling:** If `applyPatch` throws (malformed patch, path mismatch, or stale state), the client cannot safely continue — its local state may be inconsistent. The correct recovery is to force a reconnect with `since=0` to get a fresh snapshot. The error handler should: log the error, close the EventSource, reset `lastVersion` to 0, and reconnect.
-
-**Ordering guarantee:** SSE messages are delivered in order over a single HTTP connection. Patches cannot arrive out of order. If the connection drops, the client reconnects and receives a fresh snapshot — there is no partial patch replay to misorder. The `version` field in each message is for diagnostics only; the client does not need to reorder messages.
+**Ordering guarantee:** SSE is connection-ordered. Patches cannot arrive out of order. If the connection drops, the client reconnects and gets a fresh snapshot. The `version` field is diagnostic only.
 
 ---
 
-## Why not dual folds?
+## Rejected alternatives
 
-The initial design considered symmetric folds: identical fold logic in Python and TypeScript. This was rejected:
+### Dual folds (symmetric fold in Python + TypeScript)
 
 | Concern | Dual folds | JSON Patch |
 |---------|-----------|------------|
-| Fold implementations | 2 (Python + TypeScript) — must stay in sync forever | **1 (Python only)** |
-| New event type cost | Python fold + TS fold + TS snapshot reconstruction | **Python fold only** — frontend unchanged |
-| Bug surface | Proportional to event_type_count × 2 | Proportional to event_type_count × 1 |
-| Frontend complexity | 33-case switch + buffer management + agent filtering | **2 event listeners, zero business logic** |
-| Correctness guarantee | Requires "symmetric fold invariant" — manual discipline | **Correct by construction** — frontend cannot diverge |
+| Fold implementations | 2 — must stay in sync forever | **1 (Python only)** |
+| New event type cost | Python fold + TS fold + TS snapshot | **Python fold only** |
+| Bug surface | event_type_count × 2 | event_type_count × 1 |
+| Frontend complexity | 33-case switch, buffer management, agent filtering | **2 event listeners, zero logic** |
+| Correctness | Requires discipline ("symmetric fold invariant") | **Correct by construction** |
 
-The dual-fold approach is *complected* in the Rich Hickey sense: fold logic interleaved with two language runtimes. The "symmetric fold invariant" is an admission that the architecture requires discipline to maintain. JSON Patch eliminates the problem: there is no invariant to enforce because the logic exists in one place.
+The dual-fold approach is *complected*: fold logic interleaved with two language runtimes. JSON Patch eliminates the invariant because the logic exists in one place.
 
-### Why not WASM shared fold?
+### WASM shared fold
 
 Compile fold to WASM, run in both Python and browser. Eliminates duplication but adds WASM toolchain, FFI boundaries, and build complexity. Over-engineered for a single-user local tool.
 
-### Why not server-rendered HTML (LiveView)?
+### Server-rendered HTML (LiveView)
 
 Server renders the full UI, sends DOM diffs. Zero client logic. But koan's UI has rich interactivity — question wizards, settings overlays, artifact browsing, drag interactions. LiveView fights against client-side interactivity.
+
+### Delta bypass for streaming
+
+Special-case `thinking`/`stream_delta` events: send raw string deltas instead of JSON Patch `replace` operations. Saves bandwidth (600B/s vs 200KB/s for thinking). Rejected because koan is localhost — loopback bandwidth is free, and the complexity of a third event type (third handler, branching in `push_event`, special-case in frontend) is not worth the savings. Two event types, two handlers, zero special cases.
 
 ---
 
 ## Projection Model
 
-The projection is the single materialized view of all state. The backend fold produces it, `get_snapshot()` serializes it, patches express incremental changes to it, the frontend renders it.
+### Top-level structure
 
-### ConversationEntry — discriminated union of distinct types
+The projection has three concerns with different lifetimes:
 
-The primary agent's activity is a timeline: reasoning blocks, text output, tool calls, step transitions. Each entry type has exactly the fields it needs — no optional fields that only apply to other variants.
+```python
+class Projection(KoanBaseModel):
+    settings: Settings = Settings()        # persistent config + probe results
+    run: Run | None = None                 # None when no run is active
+    notifications: list[Notification] = [] # transient UI toasts
+```
+
+`run is None` → show landing page. `run.completion is not None` → run finished. No boolean flags.
+
+### Settings
+
+Settings are what's *available* — they exist before any run, persist across runs to `~/.koan/config.json`, and describe the user's configured environment.
+
+```python
+class Installation(KoanBaseModel):
+    """A configured LLM CLI installation."""
+    alias: str                             # unique key: "claude-default", "claude-fast"
+    runner_type: str                       # "claude" | "codex" | "gemini"
+    binary: str                            # resolved path: "/usr/local/bin/claude"
+    extra_args: list[str] = []             # e.g. ["--effort", "low"]
+    available: bool = False                # probe result: binary exists and responds
+    # Everything except `available` persists to config.json.
+    # `available` is ephemeral — re-probed each server start.
+    # Replaces the separate `config_runners` concept: the list of available
+    # runner types is derivable from installations where available == True.
+
+class Profile(KoanBaseModel):
+    """Maps roles to installations for a workflow run."""
+    name: str                              # "balanced", "thorough", "fast"
+    read_only: bool = False                # built-in profiles can't be edited
+    tiers: dict[str, str] = {}             # role → installation alias
+                                           # {"primary": "claude-default", "scout": "haiku-default"}
+
+class Settings(KoanBaseModel):
+    installations: dict[str, Installation] = {}   # alias → Installation
+    profiles: dict[str, Profile] = {}             # name → Profile
+    default_profile: str = "balanced"             # pre-selected for next run
+    default_scout_concurrency: int = 8            # default for next run
+    # installations and profiles are dicts (not lists) because JSON Patch
+    # paths for named entities must be stable — /settings/installations/claude-fast
+    # not /settings/installations/2 which shifts on insert/delete.
+```
+
+### Run configuration
+
+Run configuration describes *how a specific run uses settings*. Resolved from settings at run start, frozen for the run's lifetime.
+
+```python
+class RunConfig(KoanBaseModel):
+    """Resolved configuration for a single workflow run."""
+    profile: str                           # which profile was selected
+    installations: dict[str, str]          # role → installation alias
+                                           # resolved from profile tiers + user overrides on landing page
+                                           # e.g. {"primary": "claude-default", "scout": "haiku-default"}
+    scout_concurrency: int                 # may differ from settings.default_scout_concurrency
+```
+
+The distinction between settings and run config:
+
+| | Settings | Run config |
+|--|---------|-----------|
+| Lifetime | Persists across runs | Single run |
+| Mutation | Settings overlay, any time | Frozen at run start |
+| `default_profile` | Pre-selected for next run | — |
+| `profile` | — | Which profile this run uses |
+| `scout_concurrency` | Default for next run | What this run uses |
+| `installations` (map) | All configured installations | Role → alias mapping for this run |
+
+### Agent
+
+All agents — primary, scouts, queued — live in one dict. The lifecycle is a state machine on `status`. No separate collections, no `QueuedScout` type.
+
+```python
+class Agent(KoanBaseModel):
+    # Identity — set at queue/spawn time, never changes
+    agent_id: str
+    role: str                              # "intake", "brief-writer", "implementer", ...
+    label: str = ""                        # human-readable: "engine-methods" for scouts
+    model: str | None = None               # "sonnet", "haiku", "opus"
+    is_primary: bool = False
+
+    # Lifecycle — state machine: queued → running → done | failed
+    status: Literal["queued", "running", "done", "failed"] = "queued"
+    error: str | None = None               # set when status → failed
+    started_at_ms: int = 0                 # 0 while queued
+
+    # Progress — shown in agent monitor, updated during execution
+    step: int = 0
+    step_name: str = ""
+    last_tool: str = ""                    # last tool summary for monitor display
+
+    # Content
+    conversation: Conversation = Conversation()
+```
+
+The frontend derives views by filtering:
+
+```typescript
+const primary = Object.values(agents).find(a => a.isPrimary && a.status === 'running')
+const running = Object.values(agents).filter(a => !a.isPrimary && a.status === 'running')
+const queued  = Object.values(agents).filter(a => a.status === 'queued')
+const done    = Object.values(agents).filter(a => a.status === 'done' || a.status === 'failed')
+```
+
+### Conversation
+
+Per-agent. Groups everything about what an agent has said, done, and cost. The primary agent's conversation is rendered in the activity feed. Scout conversations are available for the agent monitor.
+
+```python
+class Conversation(KoanBaseModel):
+    entries: list[ConversationEntry] = []   # materialized timeline
+    pending_thinking: str = ""              # in-progress LLM reasoning, not yet flushed to ThinkingEntry
+    pending_text: str = ""                  # in-progress LLM text output, not yet flushed to TextEntry
+    is_thinking: bool = False               # True while thinking deltas are arriving
+    input_tokens: int = 0                   # accumulated from usage reports in agent_step_advanced
+    output_tokens: int = 0
+```
+
+**Why `pending_thinking` / `pending_text`, not `thinkingBuffer` / `streamBuffer`?** "Buffer" describes the mechanism (accumulate, flush, reset). "Pending" describes the content: incomplete LLM output that will become a conversation entry on the next transition. The names should describe *what it is*, not *how it works*.
+
+**Why tokens are in Conversation, not Agent:** They're accumulated from conversation turns (each `agent_step_advanced` carries usage). They describe the cost of what the agent said, not the agent's identity or lifecycle.
+
+**Why `is_thinking` is a projection field, not derived:** The fold sets `is_thinking = True` when a thinking delta arrives and `False` on any transition. It arrives via patch like everything else. The frontend reads a boolean — no derivation logic.
+
+### Focus
+
+What the main content area renders. A discriminated union managed by the fold. Replaces the implicit "if interaction exists, show it, else show primary" logic.
+
+```python
+class ConversationFocus(KoanBaseModel):
+    """Default state: showing an agent's conversation."""
+    type: Literal["conversation"] = "conversation"
+    agent_id: str                          # whose conversation to render
+
+class QuestionFocus(KoanBaseModel):
+    """Agent is blocked, needs user input."""
+    type: Literal["question"] = "question"
+    agent_id: str                          # who asked (conversation is backdrop)
+    token: str                             # correlation ID for response
+    questions: list[AskQuestion]
+
+class ReviewFocus(KoanBaseModel):
+    """Agent is blocked, artifact needs review."""
+    type: Literal["review"] = "review"
+    agent_id: str
+    token: str
+    path: str                              # artifact under review
+    description: str
+    content: str
+
+class DecisionFocus(KoanBaseModel):
+    """Workflow decision needed from user."""
+    type: Literal["decision"] = "decision"
+    agent_id: str
+    token: str
+    chat_turns: list[ChatTurn]
+
+Focus = Annotated[
+    ConversationFocus | QuestionFocus | ReviewFocus | DecisionFocus,
+    Field(discriminator="type"),
+]
+```
+
+The fold manages transitions:
+
+| Event | Focus transition |
+|-------|-----------------|
+| `agent_spawned` (primary) | `ConversationFocus(agent_id=...)` |
+| `questions_asked` | `QuestionFocus(agent_id=..., token=..., questions=...)` |
+| `questions_answered` | `ConversationFocus(agent_id=primary_id)` |
+| `artifact_review_requested` | `ReviewFocus(...)` |
+| `artifact_reviewed` | `ConversationFocus(agent_id=primary_id)` |
+| `workflow_decision_requested` | `DecisionFocus(...)` |
+| `workflow_decided` | `ConversationFocus(agent_id=primary_id)` |
+
+The frontend rendering is a switch on `focus.type` — no conditional logic about "is there an active interaction."
+
+`agent_id` on every variant means the frontend always knows whose conversation is the backdrop. A question overlays the asking agent's scrolled-up conversation.
+
+### ConversationEntry — discriminated union
+
+Each entry type has exactly the fields it needs. No optional fields that only apply to other variants.
 
 ```python
 class ThinkingEntry(KoanBaseModel):
     type: Literal["thinking"] = "thinking"
-    content: str                          # full accumulated thinking text
+    content: str                           # full accumulated thinking text
 
 class TextEntry(KoanBaseModel):
     type: Literal["text"] = "text"
-    text: str                             # full accumulated stream text
+    text: str                              # full accumulated output text
 
 class StepEntry(KoanBaseModel):
     type: Literal["step"] = "step"
     step: int
-    step_name: str                        # wire: "stepName"
-    total_steps: int | None = None        # wire: "totalSteps"
+    step_name: str
+    total_steps: int | None = None
 
 class BaseToolEntry(KoanBaseModel):
-    """Shared fields for all tool conversation entries."""
-    call_id: str                          # wire: "callId"
-    in_flight: bool                       # wire: "inFlight"
+    """Shared fields for all tool entries."""
+    call_id: str                           # unique per tool invocation
+    in_flight: bool                        # True until tool_completed
 
 class ToolReadEntry(BaseToolEntry):
     type: Literal["tool_read"] = "tool_read"
@@ -237,90 +418,144 @@ ConversationEntry = Annotated[
 ]
 ```
 
-**Why one type per variant:** Invalid states are unrepresentable. You cannot access `.command` on a `ThinkingEntry`. The type system enforces valid field combinations. Each type maps 1:1 to a frontend rendering component.
+**`tool_completed` handling:** The fold scans `agent.conversation.entries` for `isinstance(entry, BaseToolEntry) and entry.call_id == target`, sets `in_flight = False`.
 
-**`tool_completed` handling:** All tool types inherit `BaseToolEntry` with `call_id` and `in_flight`. The fold scans `conversation` for `isinstance(entry, BaseToolEntry) and entry.call_id == target`, sets `in_flight = False`.
+**Extensibility:** Adding `ToolWebFetchEntry` means: define the model, add to the union, add a fold case. The frontend is unchanged — JSON Patch carries the new structure automatically.
 
-**Extensibility:** Adding `ToolWebFetchEntry` means: define the Pydantic model, add to the union, add a fold case. The frontend is unchanged — JSON Patch carries the new entry structure automatically.
+### Run
 
-### Fold rules
-
-The fold maintains `conversation: list[ConversationEntry]` plus two pending fields (`pending_thinking`, `pending_text`). These accumulate deltas from the LLM; they flush to completed entries on transitions.
-
-| Event | Action |
-|-------|--------|
-| `thinking` (primary only) | Flush `pending_text` → TextEntry. Append delta to `pending_thinking`. Set `is_thinking = True`. |
-| `stream_delta` (primary only) | Flush `pending_thinking` → ThinkingEntry. Append delta to `pending_text`. Set `is_thinking = False`. |
-| `tool_*` (primary, non-koan) | Flush both pending fields. Append typed tool entry (`in_flight=True`). Set `is_thinking = False`. |
-| `tool_called` (koan MCP — `koan_*`) | Ignore for conversation. |
-| `tool_completed` (primary only) | Set `in_flight=False` on matching `call_id`. |
-| `agent_step_advanced` (primary) | Flush both pending fields. Append StepEntry if `step >= 1`. Update agent step/tokens. Set `is_thinking = False`. |
-| `agent_step_advanced` (scout) | Update scout step/tokens only. |
-| `stream_cleared` (primary only) | Flush both pending fields. Set `is_thinking = False`. |
-| Tool events (scout) | Update scout's `last_tool`. |
-| `agent_exited` | Set `status`, `error` on agent. Move to `completed_agents`. |
-
-**Why primary-agent filtering is in the fold:** The fold owns the semantics of what belongs in the conversation. A single authoritative filter prevents the inconsistency bugs that triggered this plan.
-
-**Why koan MCP tools are filtered:** `koan_complete_step` et al. are infrastructure — their effects are captured by `agent_step_advanced`, `questions_asked`, etc. Showing them as tool lines is noise.
-
-### Full projection
+Ephemeral workflow state. Exists only during a run.
 
 ```python
-class Projection(KoanBaseModel):    # inherits alias_generator=to_camel
-    run_started: bool = False
-    phase: str = ""
-
-    primary_agent: AgentProjection | None = None
-    scouts: dict[str, AgentProjection] = {}
-    queued_scouts: list[QueuedScout] = []
-    completed_agents: list[AgentProjection] = []
-
-    conversation: list[ConversationEntry] = []
-    pending_thinking: str = ""               # in-progress thinking (wire: "pendingThinking")
-    pending_text: str = ""                   # in-progress text output (wire: "pendingText")
-    is_thinking: bool = False                # wire: "isThinking" — True while thinking deltas are arriving
-
-    active_interaction: InteractionState | None = None
+class Run(KoanBaseModel):
+    config: RunConfig                      # frozen at run start
+    phase: str = ""                        # current workflow phase
+    agents: dict[str, Agent] = {}          # all agents by ID, all lifecycle states
+    focus: Focus | None = None             # None before first agent spawns
     artifacts: dict[str, ArtifactInfo] = {}
-    notifications: list[NotificationEntry] = []
     completion: CompletionInfo | None = None
-
-    config_runners: list[RunnerInfo] = []
-    config_profiles: list[ProfileInfo] = []
-    config_installations: list[InstallationInfo] = []
-    config_active_profile: str = "balanced"
-    config_scout_concurrency: int = 8
 ```
 
-### Agent model
+### Complete Projection
 
 ```python
-class AgentProjection(KoanBaseModel):
-    agent_id: str
-    role: str
-    label: str = ""                 # NEW — scout identifier (e.g. "engine-methods")
-    model: str | None = None
-    step: int = 0
-    step_name: str = ""
-    started_at_ms: int = 0          # existing field
-    input_tokens: int = 0
-    output_tokens: int = 0
-    status: Literal["running", "done", "failed"] = "running"  # NEW
-    error: str | None = None        # NEW
-    last_tool: str = ""             # NEW — last tool summary for scout monitor
+class Projection(KoanBaseModel):
+    settings: Settings = Settings()
+    run: Run | None = None
+    notifications: list[Notification] = []
 ```
 
-`label`, `status`, `error`, `last_tool` are the four additions. The frontend's `transformAgent()` already reads these fields from the snapshot — they are expected but not yet emitted by the backend's `AgentProjection`. This plan closes that gap.
+Three top-level fields. Everything else is nested where it belongs.
+
+**JSON Patch paths:**
+
+```
+Settings:    /settings/installations/claude-default/available
+             /settings/profiles/balanced/tiers/primary
+             /settings/defaultProfile
+             /settings/defaultScoutConcurrency
+
+Run config:  /run/config/profile
+             /run/config/scoutConcurrency
+
+Agent:       /run/agents/abc123/status
+             /run/agents/abc123/step
+             /run/agents/abc123/lastTool
+
+Conversation:/run/agents/abc123/conversation/pendingThinking
+             /run/agents/abc123/conversation/entries/-
+             /run/agents/abc123/conversation/isThinking
+             /run/agents/abc123/conversation/inputTokens
+
+Focus:       /run/focus
+Artifacts:   /run/artifacts/docs~1architecture.md/size
+Phase:       /run/phase
+```
+
+Named entities (installations, profiles, agents, artifacts) are dicts for stable patch paths. Ordered collections (conversation entries, notifications) are lists — append-only, so positional indices are stable.
 
 ---
 
-## Event Types (36 total)
+## Fold rules
 
-### Lifecycle (7)
+### Agent conversation
+
+These rules apply to the agent identified by `event.agent_id`. Since every agent has its own conversation, there is no primary-agent filtering — the fold appends to the relevant agent's conversation unconditionally. The frontend chooses which conversation to render via `focus`.
+
+| Event | Action on agent's conversation |
+|-------|-------------------------------|
+| `thinking` | Flush `pending_text` → TextEntry. Append delta to `pending_thinking`. Set `is_thinking = True`. |
+| `stream_delta` | Flush `pending_thinking` → ThinkingEntry. Append delta to `pending_text`. Set `is_thinking = False`. |
+| typed tool (`tool_read`, `tool_write`, etc.) | Flush both pending fields. Append typed entry (`in_flight=True`). Set `is_thinking = False`. |
+| `tool_called` where tool starts with `koan_` | Skip — koan MCP tools are infrastructure noise. |
+| `tool_completed` | Set `in_flight=False` on matching `call_id`. |
+| `agent_step_advanced` | Flush both pending fields. Append StepEntry if `step >= 1`. Update `step`, `step_name`. Accumulate `input_tokens`, `output_tokens` from usage. Set `is_thinking = False`. |
+| `stream_cleared` | Flush both pending fields. Set `is_thinking = False`. |
+
+"Flush" means: if the pending field is non-empty, create a completed entry (ThinkingEntry or TextEntry) with its content, append to `entries`, reset the field to `""`.
+
+**Why koan MCP tools are filtered:** `koan_complete_step`, `koan_request_scouts`, etc. are infrastructure. Their effects are captured by `agent_step_advanced`, `questions_asked`, etc. Showing them as tool lines is noise.
+
+### Agent lifecycle
+
+| Event | Action |
+|-------|--------|
+| `scout_queued` | Add `Agent(agent_id=scout_id, status="queued", ...)` to `run.agents`. |
+| `agent_spawned` | If agent exists (queued scout), update `status="running"`, `started_at_ms`. If new (primary), add to `run.agents` with `status="running"`, `is_primary=True`. |
+| `agent_exited` | Set `status="done"` or `"failed"`, set `error` if present. Accumulate final usage into conversation tokens. |
+| `agent_spawn_failed` | Append to `notifications`. |
+
+### Focus transitions
+
+| Event | Action |
+|-------|--------|
+| `agent_spawned` (primary) | `run.focus = ConversationFocus(agent_id=...)` |
+| `questions_asked` | `run.focus = QuestionFocus(agent_id=..., token=..., questions=...)` |
+| `questions_answered` | `run.focus = ConversationFocus(agent_id=primary_agent_id)` |
+| `artifact_review_requested` | `run.focus = ReviewFocus(...)` |
+| `artifact_reviewed` | `run.focus = ConversationFocus(agent_id=primary_agent_id)` |
+| `workflow_decision_requested` | `run.focus = DecisionFocus(...)` |
+| `workflow_decided` | `run.focus = ConversationFocus(agent_id=primary_agent_id)` |
+
+### Run lifecycle
+
+| Event | Action |
+|-------|--------|
+| `run_started` | `projection.run = Run(config=RunConfig(...))` |
+| `phase_started` | `run.phase = phase` |
+| `workflow_completed` | `run.completion = CompletionInfo(...)` |
+
+### Settings
+
+| Event | Action |
+|-------|--------|
+| `probe_completed` | Set `available` flag on each installation in `settings.installations`. |
+| `installation_created` | Add to `settings.installations`. |
+| `installation_modified` | Update in `settings.installations`. |
+| `installation_removed` | Remove from `settings.installations`. |
+| `profile_created` | Add to `settings.profiles`. |
+| `profile_modified` | Update in `settings.profiles`. |
+| `profile_removed` | Remove from `settings.profiles`. |
+| `default_profile_changed` | Set `settings.default_profile`. |
+| `default_scout_concurrency_changed` | Set `settings.default_scout_concurrency`. |
+
+### Artifacts
+
+| Event | Action |
+|-------|--------|
+| `artifact_created` | Add to `run.artifacts`. |
+| `artifact_modified` | Update in `run.artifacts`. |
+| `artifact_removed` | Remove from `run.artifacts`. |
+
+---
+
+## Event Types (37 total)
+
+### Lifecycle (8)
 
 | Event | Payload |
 |-------|---------|
+| `run_started` | `{profile, installations, scout_concurrency}` |
 | `phase_started` | `{phase}` |
 | `agent_spawned` | `{agent_id, role, label, model, is_primary, started_at_ms}` |
 | `agent_spawn_failed` | `{role, error_code, message, details?}` |
@@ -345,7 +580,7 @@ class AgentProjection(KoanBaseModel):
 | `stream_delta` | `{delta}` |
 | `stream_cleared` | `{}` |
 
-### Interactions (6)
+### Focus (6)
 
 | Event | Payload |
 |-------|---------|
@@ -364,181 +599,126 @@ class AgentProjection(KoanBaseModel):
 | `artifact_modified` | `{path, size, modified_at}` |
 | `artifact_removed` | `{path}` |
 
-### Configuration (9)
+### Settings (9)
 
 | Event | Payload |
 |-------|---------|
-| `probe_completed` | `{runners}` |
+| `probe_completed` | `{results: {alias: available, ...}}` |
 | `installation_created` | `{alias, runner_type, binary, extra_args}` |
 | `installation_modified` | `{alias, runner_type, binary, extra_args}` |
 | `installation_removed` | `{alias}` |
 | `profile_created` | `{name, read_only, tiers}` |
 | `profile_modified` | `{name, read_only, tiers}` |
 | `profile_removed` | `{name}` |
-| `active_profile_changed` | `{name}` |
-| `scout_concurrency_changed` | `{value}` |
+| `default_profile_changed` | `{name}` |
+| `default_scout_concurrency_changed` | `{value}` |
 
 ---
 
 ## Scale considerations
 
 **Projected state over a full epic:**
-- 20 markdown documents × 10 tickets = 200 artifacts (~2MB of content references)
-- 5 agent sessions per ticket × 10 tickets = 50 primary agent runs
-- 5 batches of 10 scouts = 250 scout sessions
-- Each scout: ~50 tool calls, ~20 thinking blocks
-- Primary agents: ~200 tool calls, ~100 thinking blocks per session
-- Total events: ~200K–500K over the epic
+- 200 artifacts, 50 primary agent runs, 250 scout sessions
+- 200K–500K total events
 
-**Why JSON Patch works at this scale:**
-- Tool call patches: ~100 bytes each (add entry to conversation array)
-- Step advance patches: ~200 bytes (flush + add)
-- `tool_completed`: ~80 bytes (replace one `in_flight` field)
-- Thinking deltas: `replace` on `/pendingThinking` — O(accumulated_size) per delta, ~200KB/s peak. Acceptable on localhost (see "Protocol" section).
-- Snapshot size at peak: ~50MB (dominated by artifact content references)
-- Snapshot sent only on connect/reconnect — not per-event
+**Patch sizes:**
+- Tool call: ~100 bytes (add entry to conversation array)
+- Step advance: ~200 bytes (flush + add)
+- `tool_completed`: ~80 bytes (replace `inFlight`)
+- Thinking delta: `replace` on agent's `pendingThinking` — O(accumulated_size), ~200KB/s peak. Acceptable on localhost.
+- Snapshot at peak: ~50MB. Sent only on connect/reconnect.
 
-**Why patch replay was rejected for catch-up:** 500K events × variable patch size = unbounded memory. A fresh snapshot (50MB once) is cheaper and simpler than replaying patches.
+**Why patch replay was rejected:** 500K events × variable patch size = unbounded memory. A fresh snapshot is cheaper and simpler.
 
 ---
 
 ## Implementation Plan
 
-### Phase 1: Backend — materialized projection with JSON Patch
+### Phase 1: Backend — projection model + JSON Patch
 
 1. `pip install jsonpatch` — add to dependencies
-2. Define `KoanBaseModel` with `alias_generator=to_camel, populate_by_name=True` and `to_wire()` method
-3. Define `ConversationEntry` union and all entry types inheriting `KoanBaseModel`
-4. Migrate `Projection`, `AgentProjection`, and all sub-models to inherit `KoanBaseModel`
-5. Add `conversation`, `pending_thinking`, `pending_text`, `is_thinking` to `Projection`; remove `activity_log`
-6. Add `label`, `status`, `error`, `last_tool` to `AgentProjection`
-7. Rewrite fold cases for all 36 event types
-8. Update `ProjectionStore.push_event()`:
-   - Use `projection.to_wire()` (not `model_dump()`) for camelCase dicts
-   - Compute JSON Patch between old and new `to_wire()` output
-   - Broadcast patch message (all events take the same path, no branching)
-   - Store `prev_state` for next diff computation
-9. Update `sse_stream()`:
-   - `since=0`: send snapshot via `to_wire()`, then live
-   - `since=N` where N == server version: skip snapshot, go straight to live
-   - `since=N` where N != server version: send fresh snapshot (not event replay)
-   - Remove `events_since()` — no longer used for catch-up
-   - Remove `fatal_error` path — replaced by always-snapshot (client auto-recovers from version regression)
-10. Update `get_snapshot()` to use `to_wire()` — output is camelCase, frontend reads it directly
+2. Define `KoanBaseModel` with `alias_generator=to_camel`, `populate_by_name=True`, and `to_wire()` method
+3. Define all model classes: `Settings`, `Installation`, `Profile`, `RunConfig`, `Run`, `Agent`, `Conversation`, `Focus` variants, `ConversationEntry` union — all inheriting `KoanBaseModel`
+4. Replace current `Projection` (15 top-level fields) with new `Projection` (3 fields: `settings`, `run`, `notifications`)
+5. Add `run_started` event — creates `Run` with `RunConfig`
+6. Rewrite fold: settings events → `projection.settings.*`, run events → `projection.run.*`, agent events → `projection.run.agents[id].*`, conversation events → `...agents[id].conversation.*`, focus events → `projection.run.focus`
+7. Update `ProjectionStore.push_event()`: `to_wire()` for camelCase dicts, `make_patch` for diffs, uniform broadcast
+8. Update `sse_stream()`: always-snapshot on reconnect, remove `events_since()`, remove `fatal_error`
+9. Update `get_snapshot()` to use `to_wire()`
 
 ### Phase 2: Frontend — dumb renderer
 
 1. `npm install fast-json-patch`
-2. Define TypeScript `ConversationEntry` union matching the wire format (camelCase)
-3. Replace `connect.ts`:
-   - 2 event listeners: `snapshot`, `patch`
-   - Module-level `storeState` variable for patch application
-   - Remove KNOWN_EVENTS list and per-event-type listeners
-   - Remove `fatal_error` listener (no longer emitted)
-4. Delete `applySnapshot` and `applyEvent` entirely — snapshot spreads directly into store
-5. Delete `mapProjectionToStore()` — no field renaming needed (server emits camelCase)
-6. Update Zustand store field names to match wire format where they diverge
-7. Update `ActivityFeed` and components to read `ConversationEntry` camelCase field names (`callId`, `inFlight`, `stepName`, `toolName`)
+2. Define TypeScript types matching wire format (camelCase): `Projection`, `Settings`, `Run`, `Agent`, `Conversation`, `Focus`, `ConversationEntry`
+3. Replace `connect.ts`: 2 event listeners (`snapshot`, `patch`), module-level `storeState`
+4. Delete `applySnapshot`, `applyEvent`, `mapProjectionToStore`, `transformAgent`, `transformArtifact`, KNOWN_EVENTS
+5. Update components: `ActivityFeed` reads `run.agents[focusId].conversation`, `AgentMonitor` filters `run.agents` by status, `SettingsOverlay` reads `settings.*`, `LandingPage` reads `settings.*` for defaults
 
 ### Phase 3: Tests
 
-1. Backend fold tests: assert `conversation` entries, `pending_thinking`, `is_thinking`, `in_flight` state
-2. JSON Patch tests: fold event → verify patch operations are correct
-3. Thinking/stream patch tests: `thinking`/`stream_delta` produce `replace` patches on `pendingThinking`/`pendingText`
-4. Snapshot round-trip: fold events → snapshot → verify frontend can read it directly
-5. Reconnect test: client with stale version gets fresh snapshot
-6. **Delete `events_since()` tests:** `test_projections.py` has tests that call `store.events_since()` directly (currently lines ~360–373). These must be deleted, not updated — the method no longer exists. Replace with tests that verify the snapshot contains the correct materialized state after N events.
+1. Fold tests: assert `conversation.entries`, `pending_thinking`, `is_thinking`, `in_flight` state per agent
+2. Patch tests: fold event → verify JSON Patch operations target correct camelCase paths
+3. Focus transition tests: interaction events produce correct focus variants
+4. Settings/run separation tests: settings events don't touch `run`, run events don't touch `settings`
+5. Snapshot round-trip: fold events → `to_wire()` → verify frontend-readable structure
+6. Delete `events_since()` tests — replace with snapshot-based assertions
 
 ### Phase 4: Cleanup & docs
 
-1. Remove dead frontend code: `applyEvent`, `applySnapshot`, `mapProjectionToStore`, `transformAgent`, `transformArtifact`, `ActivityEntry` type, buffer flush helpers, KNOWN_EVENTS
+1. Remove dead frontend code
 2. Remove `events_since()` from `ProjectionStore`
-3. Update `docs/projections.md`:
-   - Replace `activity_log` with `conversation` model
-   - Document JSON Patch protocol (two event types: snapshot, patch)
-   - Update fold rules table
-4. Update `docs/architecture.md`:
-   - Add invariant: "The fold runs only in Python. The frontend applies server-computed patches. It has no business logic."
-5. Code comments on `ProjectionStore.push_event()` explaining the patch computation flow
+3. Update `docs/projections.md`: new model, two-message protocol, fold rules, localhost assumption for uniform patches
+4. Update `docs/architecture.md`: "The fold runs only in Python. The frontend applies server-computed patches. It has no business logic."
+5. Docstrings on `ProjectionStore` and `KoanBaseModel`
 
 ---
 
 ## Risks
 
-**JSON Patch array diffing:** `make_patch` uses positional indices for arrays. Conversation is append-only (entries are never reordered or removed), so patches are clean `add` operations at the end. The one mutation is `tool_completed` setting `in_flight=False` on an existing entry, which produces a targeted `replace` at `/conversation/N/in_flight`.
+**JSON Patch array diffing:** `make_patch` uses positional indices. Conversation entries are append-only (never reordered or removed), so patches are clean `add` operations. The one mutation is `tool_completed` setting `in_flight=False`, which produces a targeted `replace` at `/run/agents/{id}/conversation/entries/{N}/inFlight`.
 
-**Patch computation cost:** `make_patch` diffs two dicts. At 50MB state, this could be expensive. Mitigation: most events change a small part of state; the diff is proportional to what changed, not total state. Thinking deltas produce a `replace` on a single string field — the diff is O(1) to detect, though the patch payload is O(accumulated_size). This is acceptable on localhost (see protocol section).
+**Nesting depth:** Paths like `/run/agents/abc123/conversation/entries/-` are 5 levels deep. Frontend access is `state.run?.agents?.[id]?.conversation?.entries`. Verbose, but selectors encapsulate the patterns. The nesting is meaningful — each level represents a real domain concept.
 
-**Library trust:** `jsonpatch` (Python, 10+ years, well-maintained) and `fast-json-patch` (JavaScript, RFC 6902 compliant, widely used). Both are mature.
+**Patch computation cost:** `make_patch` diffs two dicts. Proportional to what changed, not total state. Thinking deltas replace one string field — O(1) to detect, O(accumulated_size) payload. Acceptable on localhost.
 
-**Snapshot size:** At 50MB, the initial snapshot takes ~1 second on localhost. This is acceptable for a local tool. If it becomes a problem, the snapshot can be gzip-compressed (SSE supports `Content-Encoding: gzip`).
+**Library trust:** `jsonpatch` (Python) and `fast-json-patch` (JavaScript) — both mature, RFC 6902 compliant, widely used.
+
+**Snapshot size:** ~50MB at peak. ~1 second on localhost. Gzip-compressible if needed.
 
 ---
 
-## Documentation Updates
-
-These changes require corresponding updates to existing docs. Do not defer — out-of-date docs create invisible knowledge debt.
+## Documentation updates
 
 ### `docs/projections.md`
 
-1. **Projection model:** Replace `activity_log: list[dict]` with `conversation: list[ConversationEntry]`, `pending_thinking: str`, `pending_text: str`, `is_thinking: bool`. Add the full `ConversationEntry` union definition with all 10 entry types.
-2. **SSE protocol section:** Replace the current "snapshot + raw events" description with the two-message protocol (`snapshot`, `patch`). Include the connection lifecycle diagram from this plan.
-3. **Fold rules table:** Rewrite the activity section — replace "append raw event to activity_log" with the actual fold rules (pending field accumulation, flush triggers, in-flight tracking, agent filtering, koan MCP filtering).
-4. **"Why catch-up uses snapshots":** Document the memory cost of storing 500K patches. Document the localhost assumption that makes uniform JSON Patch viable for streaming (no delta bypass needed). These decisions must be visible, not inferred.
-5. **Event types:** Add `scout_queued` and the 6 typed tool events (`tool_read` through `tool_ls`) which are currently missing.
-6. **`AgentProjection`:** Add `status`, `error`, `last_tool`, `label` fields.
-7. **Remove:** The "Why activity_log stores raw events" section — that rationale is obsolete.
+1. Replace `activity_log` with per-agent `Conversation` model. Document `ConversationEntry` union.
+2. Replace "snapshot + raw events" SSE description with two-message protocol (`snapshot`, `patch`).
+3. Rewrite fold rules: per-agent conversation, focus transitions, settings vs run separation.
+4. Document localhost assumption for uniform JSON Patch (no delta bypass).
+5. Document settings vs run config distinction.
+6. Add all event types including `run_started`, `scout_queued`, typed tool events.
+7. Remove "Why activity_log stores raw events" section.
 
 ### `docs/architecture.md`
 
-Add a principle to the projection invariant section:
+Add invariant:
 
 > **The fold runs only in Python.** The frontend applies server-computed JSON Patches mechanically. It has no fold logic, no event interpretation, and no business rules. When the frontend's view of state differs from the backend's, the bug is in the fold or the patch computation — not in the frontend.
 
-This replaces any "symmetric fold invariant" language, which implied two folds that needed to stay in sync.
-
 ### `koan/projections.py`
 
-Add module-level docstring:
-```
-ProjectionStore maintains:
-  - events: append-only audit log of all VersionedEvents
-  - projection: materialized view produced by fold() — the source of truth
-  - prev_state: to_wire() of the previous projection, used for JSON Patch computation
-
-push_event() folds the event, computes a JSON Patch between prev_state and
-the new to_wire() output, and broadcasts the patch. Every event takes the
-same path: fold → diff → broadcast. No branching on event type.
-All wire output is camelCase via KoanBaseModel.to_wire() (alias_generator).
-The fold is the only place where business logic runs. The frontend applies
-patches mechanically with no field renaming.
-```
+Module-level docstring documenting `ProjectionStore`: events (audit log), projection (materialized state), prev_state (for patch computation). Push flow: fold → to_wire → make_patch → broadcast. Uniform path, no branching. CamelCase via `KoanBaseModel`.
 
 ### `frontend/src/sse/connect.ts`
 
-After the change, the file should have a comment explaining:
-```
-State sync protocol:
-  snapshot  → replace storeState + spread into Zustand
-  patch     → apply RFC 6902 patch to storeState + spread into Zustand
-
-Server emits camelCase JSON (via Pydantic alias_generator). No field
-renaming needed — wire keys match store keys. storeState is a plain JS
-object for fast-json-patch; Zustand state is updated by spreading it.
-All events — including thinking/text deltas — go through JSON Patch.
-The frontend has no fold logic — all business rules live in the Python fold.
-```
-
-### `AGENTS.md` — no changes required
-
-The six core invariants are unchanged. The new architecture is a refinement of how Invariant 5 (projections) is implemented, not a change to the invariant itself.
+Comment documenting: snapshot → replace, patch → apply. Server emits camelCase. No field renaming. All events go through JSON Patch. Frontend has no fold logic.
 
 ---
 
 ## Migration
 
-**Breaking change.** The SSE protocol changes from per-event-type messages to `snapshot`/`patch`. Old clients cannot connect to new servers (they'd receive unknown event types). Old servers cannot serve new clients (missing `patch` event).
+**Breaking change.** The SSE protocol changes from per-event-type messages to `snapshot`/`patch`. The projection structure changes completely (3 top-level fields, nested model). Old clients cannot connect to new servers.
 
-**No on-disk migration.** All state is in-memory. Server restart already forces a full reload.
+**No on-disk migration.** All state is in-memory. Server restart forces a full reload. `~/.koan/config.json` schema is unchanged — the projection model restructuring is in-memory only.
 
-**Deployment:** Single-user local tool. The user runs `pip install --upgrade koan` and restarts. No coordinated rollout needed.
+**Deployment:** Single-user local tool. `pip install --upgrade koan` and restart.
