@@ -140,46 +140,93 @@ Server sends:      event: <type>\ndata: {"version": N+3, ...}\n\n  (catch-up)
 
 The projection is the single source of truth. Backend `fold()` produces it, `get_snapshot()` serializes it, frontend `applySnapshot()` reads it directly, frontend `applyEvent()` updates it identically. No field in the snapshot should require the frontend to re-fold, filter, or merge.
 
-### `ConversationEntry` — why this model
+### `ConversationEntry` — discriminated union of distinct types
 
-The primary agent's activity is a timeline of events: reasoning blocks, text output, tool calls, step transitions. These form a sequential conversation that the UI renders as-is. The model name `ConversationEntry` reflects this — it is one entry in that conversation.
+The primary agent's activity is a timeline of events: reasoning blocks, text output, tool calls, step transitions. These form a sequential conversation that the UI renders as-is.
 
-The key properties of this model:
+**Design decision: one type per variant, not a flat struct with optionals.**
 
-- **Discriminated union on `type`** (`thinking`, `text`, `tool`, `step`): the frontend branch on this field to pick the right rendering component. All other fields are optional and type-specific.
-- **Merged, not incremental**: a `thinking` entry holds the full accumulated thinking text, not a delta. The fold merges consecutive deltas before flushing to an entry. This is what the live path already does via `thinkingBuffer`.
+Each entry type has *exactly* the fields it needs — no optional fields that only apply to other variants. This makes invalid states unrepresentable: you cannot access `.command` on a `ThinkingEntry` because the field doesn't exist. The type system enforces valid field combinations at compile time in both Python and TypeScript.
+
+The key properties:
+
+- **Discriminated union on `type`**: Pydantic's `Annotated[Union[...], Field(discriminator="type")]` serializes each variant with only its fields + discriminator. TypeScript narrows automatically on `entry.type === "tool_read"`.
+- **1:1 component mapping**: Each type maps to exactly one frontend rendering component (ThinkingCard, TextBlock, StepHeader, ReadLine, BashLine, etc.). The dispatch is an exhaustive `switch(entry.type)`.
+- **Merged, not incremental**: a `ThinkingEntry` holds the full accumulated thinking text, not a delta. The fold merges consecutive deltas before flushing to an entry.
 - **Agent-filtered**: only primary agent entries appear in `conversation`. Scout activity is tracked on the scout's own `AgentProjection.last_tool`.
-- **In-flight tracking in the model**: `in_flight: bool` on tool entries lets the frontend show spinner vs checkmark without needing a separate `completedCallIds` set.
+- **In-flight tracking built in**: tool entries carry `in_flight: bool` — the fold sets it `True` on creation, `False` on matching `tool_completed`.
 
 ```python
-class ConversationEntry(BaseModel):
-    """A single entry in the primary agent's conversation timeline."""
-    type: Literal["thinking", "text", "tool", "step"]
+class ThinkingEntry(BaseModel):
+    type: Literal["thinking"] = "thinking"
+    content: str                          # full accumulated thinking text
 
-    # -- thinking --
-    content: str | None = None            # accumulated thinking text (all deltas merged)
+class TextEntry(BaseModel):
+    type: Literal["text"] = "text"
+    text: str                             # full accumulated stream text
 
-    # -- text --
-    text: str | None = None               # accumulated stream text (all deltas merged)
-
-    # -- tool --
-    tool_type: str | None = None          # "read", "bash", "write", "edit", "grep", "ls", "other"
-    tool_name: str | None = None          # display name (= tool_type, or original name for "other")
-    call_id: str | None = None            # matched against tool_completed to clear in_flight
-    in_flight: bool = False               # True until matching tool_completed received
-    # typed tool metadata — set for the relevant tool_type, None otherwise:
-    file: str | None = None               # read, write, edit
-    lines: str | None = None              # read line range (e.g. "10-20")
-    command: str | None = None            # bash
-    pattern: str | None = None            # grep
-    path: str | None = None               # ls
-    summary: str | None = None            # tool_called (generic) fallback
-
-    # -- step --
-    step: int | None = None
-    step_name: str | None = None
+class StepEntry(BaseModel):
+    type: Literal["step"] = "step"
+    step: int
+    step_name: str
     total_steps: int | None = None
+
+class ToolReadEntry(BaseModel):
+    type: Literal["tool_read"] = "tool_read"
+    call_id: str
+    in_flight: bool
+    file: str
+    lines: str = ""                       # optional line range "10-20"
+
+class ToolWriteEntry(BaseModel):
+    type: Literal["tool_write"] = "tool_write"
+    call_id: str
+    in_flight: bool
+    file: str
+
+class ToolEditEntry(BaseModel):
+    type: Literal["tool_edit"] = "tool_edit"
+    call_id: str
+    in_flight: bool
+    file: str
+
+class ToolBashEntry(BaseModel):
+    type: Literal["tool_bash"] = "tool_bash"
+    call_id: str
+    in_flight: bool
+    command: str
+
+class ToolGrepEntry(BaseModel):
+    type: Literal["tool_grep"] = "tool_grep"
+    call_id: str
+    in_flight: bool
+    pattern: str
+
+class ToolLsEntry(BaseModel):
+    type: Literal["tool_ls"] = "tool_ls"
+    call_id: str
+    in_flight: bool
+    path: str
+
+class ToolGenericEntry(BaseModel):
+    type: Literal["tool_generic"] = "tool_generic"
+    call_id: str
+    in_flight: bool
+    tool_name: str                        # original unrecognized tool name
+    summary: str = ""
+
+ConversationEntry = Annotated[
+    ThinkingEntry | TextEntry | StepEntry |
+    ToolReadEntry | ToolWriteEntry | ToolEditEntry |
+    ToolBashEntry | ToolGrepEntry | ToolLsEntry | ToolGenericEntry,
+    Field(discriminator="type"),
+]
 ```
+
+**`tool_completed` handling across union types:**
+All 7 tool types share `call_id` and `in_flight`. The fold scans `conversation` for an entry with matching `call_id` using duck-type checking (`hasattr(entry, 'call_id')` in Python, `'callId' in entry` in TypeScript) and sets `in_flight = False`. No base class needed — this is a structural convention enforced by the fact that all tool types must have these fields.
+
+**Extensibility:** Adding a future `ToolWebFetchEntry` means: define the Pydantic model (4 lines), add to the union, add a fold case in Python, add a TypeScript type, add a fold case in TS, add a rendering component. Each step is mechanical. No existing types are modified.
 
 **Edge cases covered:**
 - Multiple tool calls in one turn: each produces its own entry, accumulated in order.
