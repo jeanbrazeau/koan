@@ -10,6 +10,21 @@
   margin: 0 auto;
 }
 
+/* Loading state -- shown before first SSE snapshot arrives */
+.loading-state {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.loading-label {
+  font-family: var(--font-mono);
+  font-size: var(--font-size-sm);
+  color: var(--text-muted);
+  letter-spacing: 0.05em;
+}
+
 /* Header -- normal flex child, not fixed. Stays at top because .app is a
  * flex column with overflow:hidden; child areas scroll internally. */
 .header {

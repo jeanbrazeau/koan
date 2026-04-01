@@ -75,6 +75,21 @@ export default function App() {
     }
   }, []) // Empty dep array: connect once; reconnect is managed inside
 
+  const connected = useStore(s => s.connected)
+
+  // Show a minimal loading state until the first SSE snapshot arrives.
+  // This prevents a blank cornsilk void while the server is initializing.
+  if (!connected) {
+    return (
+      <div className="app">
+        <Header />
+        <div className="loading-state">
+          <span className="loading-label">connecting…</span>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <div className="app">
       <Header />
