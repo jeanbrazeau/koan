@@ -81,16 +81,17 @@
 
 /* ---- Activity cards (thinking, future: tool results) ---- */
 
+/* ---- Thinking card -- muted inset, recedes behind LLM text ---- */
 .activity-card {
-  background: var(--bg-elevated);
-  border: 1px solid var(--border);
-  border-radius: var(--radius-lg);
+  background: var(--plum-bg);
+  border-left: 3px solid var(--plum);
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
   margin: var(--space-1) 0;
   overflow: hidden;
 }
 
 .activity-card-active {
-  border-color: var(--copper-border);
+  border-left-color: var(--copper-border);
 }
 
 .activity-card-header {
@@ -99,11 +100,11 @@
   align-items: center;
   padding: var(--space-2) var(--space-4);
   font-family: var(--font-mono);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-xs);
 }
 
 .activity-card-tool {
-  color: var(--text-muted);
+  color: var(--plum);
 }
 
 .activity-card-thinking .activity-card-tool {
@@ -122,7 +123,7 @@
 .activity-card-body {
   padding: 0 var(--space-4) var(--space-2);
   font-family: var(--font-mono);
-  font-size: 13px;
+  font-size: 12px;
   color: var(--text-muted);
   white-space: pre-wrap;
   word-break: break-word;
@@ -262,17 +263,19 @@
   text-transform: capitalize;
 }
 
-/* Stream output -- wrapping text block for LLM text */
+/* Stream output -- elevated white card for LLM text (primary content) */
 .stream-output {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
   font-family: var(--font-mono);
   font-size: var(--font-size-sm);
   color: var(--text);
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
-  padding: var(--space-2) 0;
-  margin-top: var(--space-2);
-  border-top: 1px solid var(--border);
+  padding: var(--space-4);
+  margin: var(--space-1) 0;
 }
 
 /* Thinking indicator */
