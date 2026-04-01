@@ -32,9 +32,9 @@ The server sends three types of SSE messages:
 
 | SSE event | When | Payload | Client action |
 |-----------|------|---------|---------------|
-| `snapshot` | First connect, reconnect | `{version, state}` — full materialized projection | Replace entire store |
-| `patch` | After each event (except deltas) | `{version, patch}` — RFC 6902 JSON Patch operations | `jsonpatch.apply(state, patch)` |
-| `delta` | `thinking` / `stream_delta` events | `{version, path, delta}` — string append | `state[path] += delta` |
+| `snapshot` | First connect, reconnect | `{version, state}` — full materialized projection (camelCase) | Replace entire store |
+| `patch` | After each event (except deltas) | `{version, patch}` — RFC 6902 JSON Patch operations (camelCase paths) | `applyPatch(store, patch)` |
+| `delta` | `thinking` / `stream_delta` events | `{version, path, delta}` — string append (camelCase path) | `store[path] += delta` |
 
 **Why three types, not just patches?**
 
@@ -44,10 +44,10 @@ JSON Patch's `replace` operation for a growing string buffer is O(buffer_size) p
 
 ```
 First connect:     GET /events?since=0
-                   ← snapshot {version: N, state: <Projection>}
-                   ← patch {version: N+1, patch: [...]}
-                   ← delta {version: N+2, path: "thinking_buffer", delta: "The user"}
-                   ← delta {version: N+3, path: "thinking_buffer", delta: " wants me"}
+                   ← snapshot {version: N, state: <Projection>}      (camelCase keys)
+                   ← patch {version: N+1, patch: [...]}              (camelCase paths)
+                   ← delta {version: N+2, path: "thinkingBuffer", delta: "The user"}
+                   ← delta {version: N+3, path: "thinkingBuffer", delta: " wants me"}
                    ← patch {version: N+4, patch: [...]}
                    ...
 
@@ -70,7 +70,7 @@ This eliminates `events_since()` and the catch-up replay code path entirely. It 
 |-------|---------|----------|
 | `self.events: list[VersionedEvent]` | Audit log, debugging | Session (in-memory) |
 | `self.projection: Projection` | Materialized state for snapshots + diff computation | Session |
-| `self.prev_state: dict` | Previous `model_dump()` for computing patches | Overwritten each event |
+| `self.prev_state: dict` | Previous `to_wire()` for computing patches | Overwritten each event |
 
 No stored patches. No catch-up replay buffer.
 
@@ -84,13 +84,13 @@ def push_event(self, event_type, payload, agent_id=None):
 
     old_state = self.prev_state
     self.projection = fold(self.projection, event)
-    new_state = self.projection.model_dump()
+    new_state = self.projection.to_wire()              # camelCase via alias_generator
     self.prev_state = new_state
 
     # Streaming deltas: bypass JSON Patch, send raw delta
     if event_type in ("thinking", "stream_delta"):
         msg = {"type": "delta", "version": self.version,
-               "path": "thinking_buffer" if event_type == "thinking" else "stream_buffer",
+               "path": "thinkingBuffer" if event_type == "thinking" else "streamBuffer",
                "delta": payload["delta"]}
     else:
         patch = jsonpatch.make_patch(old_state, new_state)
@@ -106,41 +106,64 @@ def push_event(self, event_type, payload, agent_id=None):
 
 Subscriber queues carry **plain dicts**, not `VersionedEvent` objects. The dict shape matches the SSE JSON payload directly — the `sse_stream()` consumer just serializes and sends. This is a deliberate simplification: the raw event is for the audit log, the dict message is for the wire.
 
+### Wire format: camelCase via Pydantic aliases
+
+The server emits camelCase JSON. The frontend applies it directly — no field renaming, no shadow state, no mapping function.
+
+Pydantic's `alias_generator` handles the conversion at serialization boundaries. Python fold code still uses snake_case attributes (`projection.thinking_buffer`). Only `to_wire()` output is camelCase:
+
+```python
+from pydantic import ConfigDict
+from pydantic.alias_generators import to_camel
+
+class KoanBaseModel(BaseModel):
+    model_config = ConfigDict(alias_generator=to_camel, populate_by_name=True)
+
+    def to_wire(self) -> dict:
+        """Serialize for snapshots and patch computation. Always camelCase."""
+        return self.model_dump(by_alias=True)
+```
+
+All projection models (`Projection`, `AgentProjection`, `ConversationEntry` types, etc.) inherit from `KoanBaseModel`. Snapshot JSON, patch paths, and delta paths are all camelCase. The frontend receives `thinkingBuffer`, `primaryAgent`, `configActiveProfile` — matching JavaScript conventions natively.
+
+**Why not keep snake_case on the wire and rename in the frontend?** Because that requires a `mapProjectionToStore()` function that renames every field, a `projectionState` shadow variable holding the snake_case dict for patch application (separate from the Zustand store), and maintenance of both in sync with the Projection model. Every new field needs a rename entry. That mapping layer *is* business logic — it contradicts the "frontend has zero business logic" principle. Emitting camelCase from the server eliminates the layer entirely: patches apply directly to the store, snapshots spread directly into the store, and adding a field to the Projection requires zero frontend changes.
+
 ### Frontend event handling — complete implementation
 
 ```typescript
+let storeState: Record<string, unknown> = {}  // raw state for patch application
+
 es.addEventListener('snapshot', (e) => {
   const { version, state } = JSON.parse(e.data)
-  set({ lastVersion: version, ...mapProjectionToStore(state) })
+  storeState = state
+  set({ lastVersion: version, ...state })
 })
 
 es.addEventListener('patch', (e) => {
   const { version, patch } = JSON.parse(e.data)
-  projectionState = jsonpatch.apply(projectionState, patch)
-  set({ lastVersion: version, ...mapProjectionToStore(projectionState) })
+  storeState = applyPatch(storeState, patch).newDocument
+  set({ lastVersion: version, ...storeState })
 })
 
 es.addEventListener('delta', (e) => {
   const { version, path, delta } = JSON.parse(e.data)
   set(s => {
-    if (path === 'thinking_buffer')
+    if (path === 'thinkingBuffer')
       return { lastVersion: version, thinkingBuffer: s.thinkingBuffer + delta, isThinking: true }
-    if (path === 'stream_buffer')
+    if (path === 'streamBuffer')
       return { lastVersion: version, streamBuffer: s.streamBuffer + delta, isThinking: false }
     return { lastVersion: version }
   })
 })
 ```
 
-That is the **entire** frontend sync implementation. No `applyEvent`. No 33-case switch. No fold logic. No buffer flushing. No agent filtering. No `completedCallIds` sets.
+That is the **entire** frontend sync implementation. No `applyEvent`. No 33-case switch. No fold logic. No buffer flushing. No agent filtering. No `completedCallIds` sets. No `mapProjectionToStore`. No field renaming.
 
-**`isThinking` is a stored field, not derived.** The `delta` handler for `thinking_buffer` sets `isThinking: true`. When the fold flushes `thinking_buffer` into a `ThinkingEntry` (on transition to a tool call or text output), the patch clears `thinking_buffer` to `""` and the next `mapProjectionToStore` call sees the empty buffer. The `patch` handler also sets `isThinking: false` when it detects `thinkingBuffer` was cleared. This avoids the component needing to derive `isThinking` from buffer length — it reads a definitive boolean.
+**`storeState`** is a module-level variable in `connect.ts` that holds the current raw projection dict for patch application. It must be a plain JS object (not Zustand state) because `fast-json-patch`'s `applyPatch` operates on plain objects. On snapshot, it is replaced wholesale. On patch, `applyPatch` returns a `newDocument` (the immutable variant — avoids mutating the previous state in case Zustand still references it). The Zustand store is updated by spreading `storeState` into it.
 
-`mapProjectionToStore` is a pure mapping from Python snake_case field names to the Zustand store's shape. It does not interpret, filter, or transform — it renames fields. Example: `state.primary_agent` → `primaryAgent`, `state.config_active_profile` → `configActiveProfile`. Agent and artifact sub-objects go through lightweight transform helpers (`transformAgent`, `transformArtifact`) that handle field renaming and type coercion from JSON to TypeScript types.
+**`isThinking` is a stored field, not derived.** The `delta` handler for `thinkingBuffer` sets `isThinking: true`. When the fold flushes `thinking_buffer` into a `ThinkingEntry` (on transition to a tool call or text output), the patch clears `thinkingBuffer` to `""` and the spread into the store updates it. The `patch` handler implicitly sets `isThinking` to `false` when the snapshot state has an empty `thinkingBuffer`. Components read a definitive boolean, not a derived check.
 
-**`projectionState`** is a module-level variable in `connect.ts` that holds the current raw projection dict (the last received snapshot or the result of applying all patches). It is the source of truth for patch application — patches mutate it, and `mapProjectionToStore` reads from it. It is separate from the Zustand store because `fast-json-patch` operates on plain JS objects, not Zustand state. On snapshot, it is replaced wholesale. On patch, it is mutated in-place (RFC 6902 `applyPatch` is destructive by default; the immutable variant produces a new object).
-
-**Error handling:** If `jsonpatch.apply` fails (malformed patch, version gap, or stale state), the client cannot safely continue — its local state may be inconsistent. The correct recovery is to force a reconnect with `since=0` to get a fresh snapshot. The error handler should: log the error, close the EventSource, reset `lastVersion` to 0, and reconnect. This is analogous to how `fatal_error` is handled today.
+**Error handling:** If `applyPatch` throws (malformed patch, path mismatch, or stale state), the client cannot safely continue — its local state may be inconsistent. The correct recovery is to force a reconnect with `since=0` to get a fresh snapshot. The error handler should: log the error, close the EventSource, reset `lastVersion` to 0, and reconnect.
 
 **Ordering guarantee:** SSE messages are delivered in order over a single HTTP connection. Patches cannot arrive out of order. If the connection drops, the client reconnects and receives a fresh snapshot — there is no partial patch replay to misorder. The `version` field in each message is for diagnostics only; the client does not need to reorder messages.
 
@@ -179,24 +202,24 @@ The projection is the single materialized view of all state. The backend fold pr
 The primary agent's activity is a timeline: reasoning blocks, text output, tool calls, step transitions. Each entry type has exactly the fields it needs — no optional fields that only apply to other variants.
 
 ```python
-class ThinkingEntry(BaseModel):
+class ThinkingEntry(KoanBaseModel):
     type: Literal["thinking"] = "thinking"
     content: str                          # full accumulated thinking text
 
-class TextEntry(BaseModel):
+class TextEntry(KoanBaseModel):
     type: Literal["text"] = "text"
     text: str                             # full accumulated stream text
 
-class StepEntry(BaseModel):
+class StepEntry(KoanBaseModel):
     type: Literal["step"] = "step"
     step: int
-    step_name: str
-    total_steps: int | None = None
+    step_name: str                        # wire: "stepName"
+    total_steps: int | None = None        # wire: "totalSteps"
 
-class BaseToolEntry(BaseModel):
+class BaseToolEntry(KoanBaseModel):
     """Shared fields for all tool conversation entries."""
-    call_id: str
-    in_flight: bool
+    call_id: str                          # wire: "callId"
+    in_flight: bool                       # wire: "inFlight"
 
 class ToolReadEntry(BaseToolEntry):
     type: Literal["tool_read"] = "tool_read"
@@ -266,7 +289,7 @@ The fold maintains `conversation: list[ConversationEntry]` plus two transient bu
 ### Full projection
 
 ```python
-class Projection(BaseModel):
+class Projection(KoanBaseModel):    # inherits alias_generator=to_camel
     run_started: bool = False
     phase: str = ""
 
@@ -296,7 +319,7 @@ class Projection(BaseModel):
 ### Agent model
 
 ```python
-class AgentProjection(BaseModel):
+class AgentProjection(KoanBaseModel):
     agent_id: str
     role: str
     label: str = ""                 # NEW — scout identifier (e.g. "engine-methods")
@@ -407,36 +430,39 @@ class AgentProjection(BaseModel):
 ### Phase 1: Backend — materialized projection with JSON Patch
 
 1. `pip install jsonpatch` — add to dependencies
-2. Define `ConversationEntry` union and all entry types in `koan/projections.py`
-3. Add `conversation`, `thinking_buffer` to `Projection`; remove `activity_log`
-4. Add `status`, `error`, `last_tool` to `AgentProjection`
-5. Rewrite fold cases for all 33 event types
-6. Update `ProjectionStore.push_event()`:
-   - Compute JSON Patch between old and new `model_dump()`
-   - For `thinking`/`stream_delta`: broadcast `delta` message instead of patch
-   - For all others: broadcast `patch` message
+2. Define `KoanBaseModel` with `alias_generator=to_camel, populate_by_name=True` and `to_wire()` method
+3. Define `ConversationEntry` union and all entry types inheriting `KoanBaseModel`
+4. Migrate `Projection`, `AgentProjection`, and all sub-models to inherit `KoanBaseModel`
+5. Add `conversation`, `thinking_buffer` to `Projection`; remove `activity_log`
+6. Add `label`, `status`, `error`, `last_tool` to `AgentProjection`
+7. Rewrite fold cases for all 36 event types
+8. Update `ProjectionStore.push_event()`:
+   - Use `projection.to_wire()` (not `model_dump()`) for camelCase dicts
+   - Compute JSON Patch between old and new `to_wire()` output
+   - For `thinking`/`stream_delta`: broadcast `delta` message with camelCase path
+   - For all others: broadcast `patch` message (paths are automatically camelCase)
    - Store `prev_state` for next diff computation
-7. Update `sse_stream()`:
-   - `since=0`: send snapshot, then live
+9. Update `sse_stream()`:
+   - `since=0`: send snapshot via `to_wire()`, then live
    - `since=N` where N == server version: skip snapshot, go straight to live
    - `since=N` where N != server version: send fresh snapshot (not event replay)
    - Remove `events_since()` — no longer used for catch-up
    - Remove `fatal_error` path — replaced by always-snapshot (client auto-recovers from version regression)
-8. Update `get_snapshot()` — unchanged; `model_dump()` naturally includes `conversation`
+10. Update `get_snapshot()` to use `to_wire()` — output is camelCase, frontend reads it directly
 
 ### Phase 2: Frontend — dumb renderer
 
 1. `npm install fast-json-patch`
-2. Define TypeScript `ConversationEntry` union matching Python exactly (snake_case)
+2. Define TypeScript `ConversationEntry` union matching the wire format (camelCase)
 3. Replace `connect.ts`:
    - 3 event listeners: `snapshot`, `patch`, `delta`
-   - Module-level `projectionState` variable for patch application
+   - Module-level `storeState` variable for patch application
    - Remove KNOWN_EVENTS list and per-event-type listeners
    - Remove `fatal_error` listener (no longer emitted)
-4. Replace `applySnapshot`: direct field mapping from `mapProjectionToStore()`, no re-folding
-5. Delete `applyEvent` entirely
-6. `mapProjectionToStore()`: pure field-rename function. Reads `projectionState` and produces Zustand-shaped state. `isThinking` is set: `true` when `thinkingBuffer !== ''`, `false` otherwise. The `delta` handler also sets `isThinking: true` directly for immediate reactivity.
-7. Update `ActivityFeed` and components to read `ConversationEntry` field names
+4. Delete `applySnapshot` and `applyEvent` entirely — snapshot spreads directly into store
+5. Delete `mapProjectionToStore()` — no field renaming needed (server emits camelCase)
+6. Update Zustand store field names to match wire format where they diverge
+7. Update `ActivityFeed` and components to read `ConversationEntry` camelCase field names (`callId`, `inFlight`, `stepName`, `toolName`)
 
 ### Phase 3: Tests
 
@@ -449,7 +475,7 @@ class AgentProjection(BaseModel):
 
 ### Phase 4: Cleanup & docs
 
-1. Remove dead frontend code: `applyEvent`, `ActivityEntry` type, buffer flush helpers, KNOWN_EVENTS
+1. Remove dead frontend code: `applyEvent`, `applySnapshot`, `mapProjectionToStore`, `transformAgent`, `transformArtifact`, `ActivityEntry` type, buffer flush helpers, KNOWN_EVENTS
 2. Remove `events_since()` from `ProjectionStore`
 3. Update `docs/projections.md`:
    - Replace `activity_log` with `conversation` model
@@ -503,12 +529,13 @@ Add module-level docstring:
 ProjectionStore maintains:
   - events: append-only audit log of all VersionedEvents
   - projection: materialized view produced by fold() — the source of truth
-  - prev_state: model_dump() of the previous projection, used for JSON Patch computation
+  - prev_state: to_wire() of the previous projection, used for JSON Patch computation
 
-push_event() folds the event, computes a JSON Patch against prev_state,
-and broadcasts either a patch or a delta message (for thinking/stream_delta).
+push_event() folds the event, computes a JSON Patch between prev_state and
+the new to_wire() output, and broadcasts either a patch or a delta message.
+All wire output is camelCase via KoanBaseModel.to_wire() (alias_generator).
 The fold is the only place where business logic runs. The frontend applies
-patches mechanically.
+patches mechanically with no field renaming.
 ```
 
 ### `frontend/src/sse/connect.ts`
@@ -516,12 +543,13 @@ patches mechanically.
 After the change, the file should have a comment explaining:
 ```
 State sync protocol:
-  snapshot  → replace entire projectionState and Zustand store
-  patch     → apply RFC 6902 patch to projectionState, then re-map to store
-  delta     → append string delta to thinking_buffer or stream_buffer directly
+  snapshot  → replace storeState + spread into Zustand
+  patch     → apply RFC 6902 patch to storeState + spread into Zustand
+  delta     → append string delta to thinkingBuffer or streamBuffer
 
-projectionState is the raw dict that patches operate on.
-mapProjectionToStore() renames fields for the Zustand store.
+Server emits camelCase JSON (via Pydantic alias_generator). No field
+renaming needed — wire keys match store keys. storeState is a plain JS
+object for fast-json-patch; Zustand state is updated by spreading it.
 The frontend has no fold logic — all business rules live in the Python fold.
 ```
 
