@@ -92,7 +92,38 @@ def push_event(self, event_type, payload, agent_id=None):
         q.put_nowait(msg)
 ```
 
-Every event takes the same path: fold, diff, broadcast. No branching on event type. Subscriber queues carry **plain dicts** — the dict shape matches the SSE JSON payload directly, and the `sse_stream()` consumer just serializes and sends.
+Every event takes the same path: fold, diff, broadcast. No branching on event type. Subscriber queues carry **plain dicts** — the dict shape matches the SSE JSON payload directly.
+
+### Server-side sse_stream flow
+
+```python
+async def sse_stream(request: Request, since: int = 0):
+    queue = asyncio.Queue()
+    store = request.app.state.projection_store
+
+    # Version check: decide whether to send a snapshot first.
+    # The only branching is "same version or not" — no event replay, no fatal_error.
+    if since != store.version:
+        # Client is behind (reconnect) or ahead (server restarted).
+        # Either way, a fresh snapshot is the correct recovery.
+        yield sse_event("snapshot", {
+            "version": store.version,
+            "state": store.projection.to_wire(),
+        })
+
+    # Subscribe to live patches. From here, every message is a dict
+    # with {"type": "patch", "version": N, "patch": "..."} — we just
+    # forward it as an SSE event with the dict's "type" as the event name.
+    store.subscribers.add(queue)
+    try:
+        while True:
+            msg = await queue.get()           # plain dict from push_event
+            yield sse_event(msg["type"], msg) # "patch" event with JSON payload
+    finally:
+        store.subscribers.discard(queue)
+```
+
+The consumer is trivial — it reads dicts from the queue and serializes them. No interpretation, no filtering, no transformation.
 
 ### Wire format: camelCase via Pydantic aliases
 
@@ -156,7 +187,22 @@ That is the **entire** frontend sync implementation. Two handlers. No `applyEven
 
 **`storeState`** is a module-level variable in `connect.ts` — the raw projection dict for patch application. It must be a plain JS object because `fast-json-patch`'s `applyPatch` operates on plain objects. On snapshot, it is replaced wholesale. On patch, `applyPatch` returns a `newDocument` (immutable variant — avoids mutating state Zustand may still reference).
 
-**Error handling:** If `applyPatch` throws, the client's local state may be inconsistent. Recovery: log the error, close EventSource, reset `lastVersion` to 0, reconnect for a fresh snapshot.
+**Error handling:** If `applyPatch` throws, the client's local state may be inconsistent. The recovery path is the same as any connection failure — reconnect for a fresh snapshot:
+
+```typescript
+es.addEventListener('patch', (e) => {
+  try {
+    const { version, patch } = JSON.parse(e.data)
+    storeState = applyPatch(storeState, patch, false, false).newDocument
+    set({ lastVersion: version, ...storeState })
+  } catch (err) {
+    console.error('Patch failed, reconnecting for fresh snapshot:', err)
+    es.close()                               // tear down broken connection
+    set({ lastVersion: 0 })                  // force snapshot on reconnect
+    setTimeout(() => connect(set), 1000)     // reconnect after brief backoff
+  }
+})
+```
 
 **Ordering guarantee:** SSE is connection-ordered. Patches cannot arrive out of order. If the connection drops, the client reconnects and gets a fresh snapshot. The `version` field is diagnostic only.
 
@@ -192,6 +238,23 @@ Special-case `thinking`/`stream_delta` events: send raw string deltas instead of
 
 ## Projection Model
 
+The projection is the single materialized view of all state. It has a layered structure:
+
+- **Projection** — top level: `settings`, `run`, `notifications`
+  - **Settings** — persistent config: installations, profiles, defaults
+    - **Installation** — a configured LLM CLI binary
+    - **Profile** — maps roles to installations
+  - **Run** — ephemeral workflow state (or `None`)
+    - **RunConfig** — frozen configuration for this run
+    - **Agent** — identity + lifecycle + progress + conversation
+      - **Conversation** — timeline entries + pending fields + token stats
+        - **ConversationEntry** — discriminated union of 10 entry types
+    - **Focus** — discriminated union: what the main content area renders
+    - **ArtifactInfo**, **CompletionInfo** — existing types, unchanged
+  - **Notification** — transient UI toasts
+
+Each class is defined below in dependency order.
+
 ### Top-level structure
 
 The projection has three concerns with different lifetimes:
@@ -203,7 +266,9 @@ class Projection(KoanBaseModel):
     notifications: list[Notification] = [] # transient UI toasts
 ```
 
-`run is None` → show landing page. `run.completion is not None` → run finished. No boolean flags.
+`run is None` → show landing page. `run.completion is not None` → run finished (show results + summary). The `run` object is **not** set to `None` on completion — it persists so the user can review the final conversation, artifacts, and token usage. It resets to `None` only when the user starts a new run (the `run_started` event creates a fresh `Run`).
+
+`notifications` are transient UI toasts (e.g. "agent spawn failed", "probe completed"). They span both settings and run events, which is why they live at the top level rather than inside `run`. They are currently append-only; a future `notification_dismissed` event could remove them. No boolean flags anywhere.
 
 ### Settings
 
@@ -293,13 +358,21 @@ class Agent(KoanBaseModel):
     conversation: Conversation = Conversation()
 ```
 
-The frontend derives views by filtering:
+The frontend derives views by filtering on `status` and `is_primary`. These are Zustand selectors — React components subscribe to them and re-render when the result changes:
 
 ```typescript
-const primary = Object.values(agents).find(a => a.isPrimary && a.status === 'running')
+// Agent monitor: grouped sections
+const agents = useStore(s => s.run?.agents ?? {})
+const primary = Object.values(agents).find(a => a.isPrimary)       // at most one
 const running = Object.values(agents).filter(a => !a.isPrimary && a.status === 'running')
 const queued  = Object.values(agents).filter(a => a.status === 'queued')
 const done    = Object.values(agents).filter(a => a.status === 'done' || a.status === 'failed')
+
+// Activity feed: conversation of the focused agent
+const focusId = useStore(s => s.run?.focus?.agentId)
+const conversation = useStore(s =>
+  focusId ? s.run?.agents?.[focusId]?.conversation : undefined
+)
 ```
 
 ### Conversation
@@ -375,9 +448,32 @@ The fold manages transitions. `run.focus` starts as `None` (no agents yet). The 
 | `workflow_decision_requested` | `DecisionFocus(...)` |
 | `workflow_decided` | `ConversationFocus(agent_id=primary_id)` |
 
-The frontend rendering is a switch on `focus.type` — no conditional logic about "is there an active interaction."
+The frontend rendering is a switch on `focus.type`:
 
-`agent_id` on every variant means the frontend always knows whose conversation is the backdrop. A question overlays the asking agent's scrolled-up conversation.
+```tsx
+function MainContent({ focus, agents }: Props) {
+  if (!focus) return null                    // no agents yet — nothing to show
+
+  // Every focus variant has agentId — the conversation is always the backdrop
+  const conversation = agents[focus.agentId]?.conversation
+
+  switch (focus.type) {
+    case 'conversation':                     // default: just the conversation
+      return <ActivityFeed conversation={conversation} />
+    case 'question':                         // agent blocked, needs user answer
+      return <>
+        <ActivityFeed conversation={conversation} dimmed />
+        <QuestionWizard questions={focus.questions} token={focus.token} />
+      </>
+    case 'review':                           // agent blocked, artifact needs review
+      return <ArtifactReview path={focus.path} content={focus.content} token={focus.token} />
+    case 'decision':                         // workflow decision needed
+      return <DecisionChat turns={focus.chatTurns} token={focus.token} />
+  }
+}
+```
+
+No conditional logic about "is there an active interaction." No implicit fallback to the primary agent. Every state of the main content area is explicitly modeled and rendered.
 
 ### ConversationEntry — discriminated union
 
@@ -405,33 +501,34 @@ class BaseToolEntry(KoanBaseModel):
 
 class ToolReadEntry(BaseToolEntry):
     type: Literal["tool_read"] = "tool_read"
-    file: str
-    lines: str = ""
+    file: str                              # path that was read
+    lines: str = ""                        # line range, e.g. "1-50"
 
 class ToolWriteEntry(BaseToolEntry):
     type: Literal["tool_write"] = "tool_write"
-    file: str
+    file: str                              # path that was created or overwritten
 
 class ToolEditEntry(BaseToolEntry):
     type: Literal["tool_edit"] = "tool_edit"
-    file: str
+    file: str                              # path that was edited in-place
 
 class ToolBashEntry(BaseToolEntry):
     type: Literal["tool_bash"] = "tool_bash"
-    command: str
+    command: str                           # shell command executed
 
 class ToolGrepEntry(BaseToolEntry):
     type: Literal["tool_grep"] = "tool_grep"
-    pattern: str
+    pattern: str                           # search pattern
 
 class ToolLsEntry(BaseToolEntry):
     type: Literal["tool_ls"] = "tool_ls"
-    path: str
+    path: str                              # directory listed
 
 class ToolGenericEntry(BaseToolEntry):
+    """Catch-all for tools without a typed variant (e.g. custom MCP tools)."""
     type: Literal["tool_generic"] = "tool_generic"
-    tool_name: str
-    summary: str = ""
+    tool_name: str                         # original tool name from the LLM
+    summary: str = ""                      # human-readable one-liner from the runner parser
 
 ConversationEntry = Annotated[
     ThinkingEntry | TextEntry | StepEntry |
@@ -445,27 +542,75 @@ ConversationEntry = Annotated[
 
 **Extensibility:** Adding `ToolWebFetchEntry` means: define the model, add to the union, add a fold case. The frontend is unchanged — JSON Patch carries the new structure automatically.
 
+### Supporting types
+
+These existing types are referenced by `Run` and `Projection`. Key fields listed for completeness — full definitions remain in their current modules.
+
+```python
+class ArtifactInfo(KoanBaseModel):
+    """A markdown document managed by the workflow."""
+    path: str                              # relative to epic directory
+    size: int                              # bytes
+    modified_at: str                       # ISO 8601 timestamp
+
+class CompletionInfo(KoanBaseModel):
+    """Set when the workflow finishes."""
+    success: bool
+    summary: str = ""                      # human-readable result summary
+    error: str | None = None               # set on failure
+
+class Notification(KoanBaseModel):
+    """Transient UI toast. Shown briefly, then fades."""
+    message: str
+    level: Literal["info", "warning", "error"] = "info"
+    timestamp_ms: int
+```
+
 ### Run
 
-Ephemeral workflow state. Exists only during a run.
+Ephemeral workflow state. Created by `run_started`, persists through completion for result viewing.
 
 ```python
 class Run(KoanBaseModel):
-    config: RunConfig                      # frozen at run start
-    phase: str = ""                        # current workflow phase
-    agents: dict[str, Agent] = {}          # all agents by ID, all lifecycle states
-    focus: Focus | None = None             # None before first agent spawns
-    artifacts: dict[str, ArtifactInfo] = {}  # existing type; keyed by path
-    completion: CompletionInfo | None = None  # existing type; set by workflow_completed event
+    config: RunConfig                      # frozen at run start — never modified
+    phase: str = ""                        # current workflow phase (e.g. "intake", "execution")
+    agents: dict[str, Agent] = {}          # all agents by ID — primary, scouts, queued, completed
+    focus: Focus | None = None             # what the main content area renders; None before first agent
+    artifacts: dict[str, ArtifactInfo] = {}  # keyed by relative path (e.g. "docs/architecture.md")
+    completion: CompletionInfo | None = None  # None during run; set by workflow_completed
+```
+
+### End-to-end: starting a run
+
+```
+1. User opens koan web UI
+   ← Frontend connects to /events?since=0
+   ← snapshot {settings: {installations: {...}, profiles: {...}, ...}, run: null}
+   → Landing page renders: profile selector (from settings.defaultProfile),
+     installation selector (from settings.installations where available == true)
+
+2. User selects profile + installations, clicks "Start Run"
+   → POST /api/start-run {profile: "balanced", installations: {"primary": "claude-default", ...}, scout_concurrency: 8}
+
+3. Backend validates binaries, emits run_started event
+   → fold creates Run(config=RunConfig(...))
+   ← patch [{op: "add", path: "/run", value: {config: {...}, phase: "", agents: {}, ...}}]
+   → Frontend: run is no longer null → switch from landing page to run view
+
+4. Driver starts first phase, spawns primary agent
+   → phase_started {phase: "intake"}
+   → agent_spawned {agent_id: "intake-0", role: "intake", is_primary: true, ...}
+   → fold: adds agent, sets focus = ConversationFocus(agent_id="intake-0")
+   ← patches flow to frontend → activity feed appears
 ```
 
 ### Complete Projection
 
 ```python
 class Projection(KoanBaseModel):
-    settings: Settings = Settings()
-    run: Run | None = None
-    notifications: list[Notification] = []
+    settings: Settings = Settings()        # persists across runs, loaded from config.json + probe
+    run: Run | None = None                 # None → landing page; set by run_started; persists after completion
+    notifications: list[Notification] = [] # append-only toasts from both settings and run events
 ```
 
 Three top-level fields. Everything else is nested where it belongs.
@@ -501,6 +646,8 @@ Named entities (installations, profiles, agents, artifacts) are dicts for stable
 
 ## Fold rules
 
+The fold is a pure function: `fold(projection, event) → projection`. It is the **only** place where business logic runs. Rules are grouped by the part of the projection they modify. An event may trigger rules in multiple groups (e.g. `agent_step_advanced` updates the agent's conversation AND its progress fields).
+
 ### Agent conversation
 
 These rules apply to the agent identified by `event.agent_id`. Since every agent has its own conversation, there is no primary-agent filtering — the fold appends to the relevant agent's conversation unconditionally. The frontend chooses which conversation to render via `focus`.
@@ -511,11 +658,13 @@ These rules apply to the agent identified by `event.agent_id`. Since every agent
 |-------|-------------------------------|
 | `thinking` | Flush `pending_text` → TextEntry. Append delta to `pending_thinking`. Set `is_thinking = True`. |
 | `stream_delta` | Flush `pending_thinking` → ThinkingEntry. Append delta to `pending_text`. Set `is_thinking = False`. |
-| typed tool (`tool_read`, `tool_write`, etc.) | Flush both pending fields. Append typed entry with `in_flight=True`. Set `is_thinking = False`. |
-| `tool_called` (non-koan, no typed variant) | Flush both pending fields. Append `ToolGenericEntry` with `in_flight=True`. Set `is_thinking = False`. |
+| typed tool (`tool_read`, `tool_write`, etc.) | Flush both pending fields. Append typed entry with `in_flight=True`. Set `is_thinking = False`. Update `agent.last_tool` with tool summary (e.g. `"read src/main.py:1-50"`). |
+| `tool_called` (non-koan, no typed variant) | Flush both pending fields. Append `ToolGenericEntry` with `in_flight=True`. Set `is_thinking = False`. Update `agent.last_tool`. |
 | `tool_called` where tool name starts with `koan_` | Skip — koan MCP tools are infrastructure. Effects already captured by `agent_step_advanced`, `questions_asked`, etc. |
+
+**`tool_called` vs typed tool events:** The runner's stream parser decides which to emit. When it can extract structured metadata (file path, command, pattern), it emits a typed event (`tool_read`, `tool_bash`, etc.) *instead of* `tool_called`. When it cannot (custom MCP tools, unknown tool names), it emits `tool_called` as a fallback. The fold never receives both for the same invocation — it's one or the other.
 | `tool_completed` | Set `in_flight=False` on the entry whose `call_id` matches. |
-| `agent_step_advanced` | Flush both pending fields. Append StepEntry if `step >= 1`. Update `step`, `step_name` on Agent. Accumulate `input_tokens`, `output_tokens` into Conversation. Set `is_thinking = False`. |
+| `agent_step_advanced` | Flush both pending fields. Append StepEntry if `step >= 1`. Set `is_thinking = False`. **Cross-cutting:** updates `agent.step`, `agent.step_name` (progress) and accumulates `usage.input_tokens`, `usage.output_tokens` into `agent.conversation` (stats). |
 | `stream_cleared` | Flush both pending fields. Set `is_thinking = False`. |
 
 ### Agent lifecycle
@@ -523,7 +672,7 @@ These rules apply to the agent identified by `event.agent_id`. Since every agent
 | Event | Action |
 |-------|--------|
 | `scout_queued` | Add `Agent(agent_id=scout_id, status="queued", ...)` to `run.agents`. |
-| `agent_spawned` | If agent exists (queued scout), update `status="running"`, `started_at_ms`. If new (primary), add to `run.agents` with `status="running"`, `is_primary=True`. |
+| `agent_spawned` | Look up `agent_id` in `run.agents`. If found (scout was previously queued via `scout_queued`), transition: set `status="running"`, `started_at_ms`. If not found (first time seeing this agent — always the primary), create a new `Agent` with `status="running"`, `is_primary=True`, and add to `run.agents`. |
 | `agent_exited` | Set `status="done"` or `"failed"`, set `error` if present. Accumulate final usage into conversation tokens. |
 | `agent_spawn_failed` | Append to `notifications`. |
 
@@ -639,18 +788,22 @@ These rules apply to the agent identified by `event.agent_id`. Since every agent
 
 ## Scale considerations
 
-**Projected state over a full epic:**
-- 200 artifacts, 50 primary agent runs, 250 scout sessions
-- 200K–500K total events
+A full koan epic spans 10 tickets, each with multiple agent sessions and scout batches. The numbers below project the upper bound of state that the projection must handle.
 
-**Patch sizes:**
-- Tool call: ~100 bytes (add entry to conversation array)
-- Step advance: ~200 bytes (flush + add)
-- `tool_completed`: ~80 bytes (replace `inFlight`)
-- Thinking delta: `replace` on agent's `pendingThinking` — O(accumulated_size), ~200KB/s peak. Acceptable on localhost.
-- Snapshot at peak: ~50MB. Sent only on connect/reconnect.
+**Event volume:** 20 markdown documents × 10 tickets = 200 artifacts. 5 primary agent sessions per ticket = 50 primary runs. 5 scout batches × 10 concurrent scouts = 250 scout sessions. Each scout produces ~50 tool calls and ~20 thinking blocks. Each primary agent produces ~200 tool calls and ~100 thinking blocks. Total: **200K–500K events over the epic.**
 
-**Why patch replay was rejected:** 500K events × variable patch size = unbounded memory. A fresh snapshot is cheaper and simpler.
+**Patch sizes by event type:**
+
+| Event type | Patch size | Notes |
+|-----------|-----------|-------|
+| Tool call | ~100 bytes | `add` to `/run/agents/{id}/conversation/entries/-` |
+| Step advance | ~200 bytes | Flush pending → `add` entry + `replace` step/step_name |
+| `tool_completed` | ~80 bytes | `replace` on `/...entries/{N}/inFlight` |
+| Thinking delta | ~10KB peak | `replace` on `pendingThinking` — O(accumulated_size). At 20 deltas/sec with 10KB accumulated = ~200KB/s. Acceptable on localhost. |
+| Focus transition | ~500 bytes | `replace` on `/run/focus` with full focus object |
+| Snapshot | ~50MB peak | Dominated by artifact content references. Sent only on connect/reconnect. |
+
+**Why patch replay was rejected for catch-up:** Storing 500K patches for replay requires unbounded memory (patches vary from 80 bytes to 10KB+). A fresh 50MB snapshot sent once on reconnect is both cheaper and simpler — no replay buffer, no ordering logic, no partial-replay edge cases.
 
 ---
 
