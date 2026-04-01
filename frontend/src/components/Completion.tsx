@@ -1,8 +1,8 @@
 import { useStore } from '../store/index'
 
 export function Completion() {
-  const completion = useStore(s => s.completion)
-  const artifacts = useStore(s => s.artifacts)
+  const completion = useStore(s => s.run?.completion)
+  const artifacts = useStore(s => s.run?.artifacts ?? {})
 
   if (!completion) return null
 
@@ -34,11 +34,6 @@ export function Completion() {
               Run Failed
             </h2>
             <p className="phase-status">{completion.error || 'An error occurred.'}</p>
-            {completion.phase && (
-              <p className="phase-status" style={{ color: 'var(--text-muted)' }}>
-                Failed during: {completion.phase}
-              </p>
-            )}
           </>
         )}
       </div>

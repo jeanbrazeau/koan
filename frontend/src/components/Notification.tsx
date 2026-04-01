@@ -1,21 +1,24 @@
 import { useEffect, useState } from 'react'
-import { useStore, NotificationEntry } from '../store/index'
+import { useStore, Notification as NotificationData } from '../store/index'
 
-function NotificationItem({ entry }: { entry: NotificationEntry }) {
-  const dismissNotification = useStore(s => s.dismissNotification)
+function NotificationItem({ entry }: { entry: NotificationData }) {
   const [fading, setFading] = useState(false)
+  const [hidden, setHidden] = useState(false)
 
+  // Server notifications are append-only — auto-dismiss after timeout via local state
   useEffect(() => {
     const fadeTimer = setTimeout(() => setFading(true), 4700)
-    const removeTimer = setTimeout(() => dismissNotification(entry.id), 5000)
+    const hideTimer = setTimeout(() => setHidden(true), 5000)
     return () => {
       clearTimeout(fadeTimer)
-      clearTimeout(removeTimer)
+      clearTimeout(hideTimer)
     }
-  }, [entry.id, dismissNotification])
+  }, [])
+
+  if (hidden) return null
 
   return (
-    <div className={`notification ${entry.severity}${fading ? ' fade-out' : ''}`}>
+    <div className={`notification ${entry.level}${fading ? ' fade-out' : ''}`}>
       {entry.message}
     </div>
   )
@@ -26,8 +29,8 @@ export function Notification() {
 
   return (
     <div id="notifications">
-      {notifications.map(n => (
-        <NotificationItem key={n.id} entry={n} />
+      {notifications.map((n, i) => (
+        <NotificationItem key={`${n.timestampMs}-${i}`} entry={n} />
       ))}
     </div>
   )

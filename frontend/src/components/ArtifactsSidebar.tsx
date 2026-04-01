@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useArtifactTree } from '../store/selectors'
-import { ArtifactFile } from '../store/index'
+import { ArtifactInfo } from '../store/index'
 import { formatSize } from '../utils'
 import * as api from '../api/client'
 
@@ -44,7 +44,7 @@ function FolderNode({
   onFileClick,
 }: {
   dir: string
-  files: ArtifactFile[]
+  files: ArtifactInfo[]
   onFileClick: (path: string) => void
 }) {
   const [open, setOpen] = useState(true)

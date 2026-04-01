@@ -11,12 +11,16 @@ export function LandingPage() {
   const [selectedInstallations, setSelectedInstallations] = useState<Record<string, string>>({})
 
   // Read from store (fed by SSE — always current, no API fetch needed)
-  const profiles = useStore(s => s.configProfiles)
-  const installations = useStore(s => s.configInstallations)
-  const runners = useStore(s => s.configRunners)
-  const storeScoutConcurrency = useStore(s => s.configScoutConcurrency)
+  const profilesDict = useStore(s => s.settings.profiles)
+  const installationsDict = useStore(s => s.settings.installations)
+  const defaultProfile = useStore(s => s.settings.defaultProfile)
+  const defaultScoutConcurrency = useStore(s => s.settings.defaultScoutConcurrency)
 
-  const hasRunners = runners.some(r => r.available)
+  const profiles = useMemo(() => Object.values(profilesDict), [profilesDict])
+  const installations = useMemo(() => Object.values(installationsDict), [installationsDict])
+
+  // Available means the binary was probed and found
+  const hasRunners = installations.some(i => i.available)
 
   // Load initial prompt (one-shot, not config state)
   useEffect(() => {
@@ -25,48 +29,55 @@ export function LandingPage() {
     })
   }, [])
 
-  // Auto-select first profile when profiles arrive from store
+  // Auto-select default profile when profiles arrive from store
   useEffect(() => {
     if (profiles.length > 0 && !profile) {
-      setProfile(profiles[0].name)
+      const def = profiles.find(p => p.name === defaultProfile) ?? profiles[0]
+      setProfile(def.name)
     }
-  }, [profiles, profile])
+  }, [profiles, profile, defaultProfile])
 
   // Sync scout concurrency from store
   useEffect(() => {
-    setScoutConcurrency(storeScoutConcurrency)
-  }, [storeScoutConcurrency])
+    setScoutConcurrency(defaultScoutConcurrency)
+  }, [defaultScoutConcurrency])
 
-  // Derive preflight locally from store state (no API call)
+  // Derive preflight locally from store state — no API call needed
   const preflight = useMemo(() => {
     const selectedProfile = profiles.find(p => p.name === profile)
     if (!selectedProfile) return null
 
-    // Collect unique runner types from profile tiers
+    // Profile tiers map role → value. The fold normalizes tier configs to strings.
+    // The string may be an installation alias ("claude-default") or a runner type
+    // ("claude") depending on whether the profile was created from the new or
+    // legacy format. Try alias lookup first, fall back to runner type.
     const requiredTypes = new Set<string>()
-    for (const tier of Object.values(selectedProfile.tiers)) {
-      if (tier.runner_type) requiredTypes.add(tier.runner_type)
+    for (const tierVal of Object.values(selectedProfile.tiers)) {
+      if (typeof tierVal === 'string') {
+        const inst = installationsDict[tierVal]
+        if (inst) {
+          // Value is an installation alias — derive runner type from it
+          requiredTypes.add(inst.runnerType)
+        } else {
+          // Value is a runner type string (legacy fold normalization)
+          requiredTypes.add(tierVal)
+        }
+      }
     }
 
-    // Group installations by runner type with binary validity
-    const installationsByType: Record<string, { alias: string; binary: string; binary_valid: boolean }[]> = {}
+    // Group available installations by runner type
+    const installationsByType: Record<string, { alias: string; binary: string }[]> = {}
     for (const rt of requiredTypes) {
       installationsByType[rt] = installations
-        .filter(i => i.runner_type === rt)
-        .map(i => ({
-          alias: i.alias,
-          binary: i.binary,
-          // We can't check binary existence client-side, but the start-run
-          // endpoint validates. Show all installations as selectable.
-          binary_valid: true,
-        }))
+        .filter(i => i.runnerType === rt && i.available)
+        .map(i => ({ alias: i.alias, binary: i.binary }))
     }
 
     return {
       required_runner_types: [...requiredTypes].sort(),
       installations: installationsByType,
     }
-  }, [profile, profiles, installations])
+  }, [profile, profiles, installations, installationsDict])
 
   // Auto-select installations when preflight changes
   useEffect(() => {
@@ -77,7 +88,6 @@ export function LandingPage() {
     const selections: Record<string, string> = {}
     for (const rt of preflight.required_runner_types) {
       const insts = preflight.installations[rt] || []
-      // Prefer the {rt}-default installation, else first available
       const defaultInst = insts.find(i => i.alias === `${rt}-default`)
       const first = insts[0]
       if (defaultInst) selections[rt] = defaultInst.alias
@@ -149,7 +159,7 @@ export function LandingPage() {
               {profiles.map(p => (
                 <option key={p.name} value={p.name}>
                   {p.name}
-                  {p.read_only ? ' (built-in)' : ''}
+                  {p.readOnly ? ' (built-in)' : ''}
                 </option>
               ))}
             </select>
@@ -210,7 +220,7 @@ export function LandingPage() {
               disabled={!hasRunners || loading || !installationsReady}
               title={
                 !hasRunners
-                  ? 'No available runners. Install and authenticate at least one runner in Settings.'
+                  ? 'No available agent installations. Add and configure at least one in Settings.'
                   : undefined
               }
               onClick={handleStart}
@@ -221,7 +231,7 @@ export function LandingPage() {
 
           {!hasRunners && (
             <span className="no-runners-msg">
-              No available runners. Open Settings to install and authenticate a runner.
+              No available agent installations. Open Settings to add and configure one.
             </span>
           )}
         </div>

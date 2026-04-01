@@ -3,35 +3,25 @@ import { useStore } from '../../store/index'
 import * as api from '../../api/client'
 
 export function ArtifactReview() {
-  const interaction = useStore(s => s.activeInteraction)
-  const addNotification = useStore(s => s.addNotification)
+  const focus = useStore(s => s.run?.focus)
   const [feedback, setFeedback] = useState('')
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
-  if (!interaction || interaction.type !== 'artifact-review') return null
+  if (!focus || focus.type !== 'review') return null
 
-  const { content, description, token } = interaction
+  const { content, description, token } = focus
 
   const handleAccept = async () => {
     const res = await api.submitArtifactReview('', true, token)
     if (!res.ok) {
-      addNotification({
-        id: crypto.randomUUID(),
-        type: 'submit_error',
-        severity: 'error',
-        message: res.message ?? 'Failed to accept artifact',
-      })
+      setSubmitError(res.message ?? 'Failed to accept artifact')
     }
   }
 
   const handleSendFeedback = async () => {
     const res = await api.submitArtifactReview(feedback, false, token)
     if (!res.ok) {
-      addNotification({
-        id: crypto.randomUUID(),
-        type: 'submit_error',
-        severity: 'error',
-        message: res.message ?? 'Failed to send feedback',
-      })
+      setSubmitError(res.message ?? 'Failed to send feedback')
     }
   }
 
@@ -54,6 +44,8 @@ export function ArtifactReview() {
           value={feedback}
           onChange={e => setFeedback(e.target.value)}
         />
+
+        {submitError && <div className="no-runners-msg">{submitError}</div>}
 
         <div className="form-actions">
           <button

@@ -1,8 +1,14 @@
+import { useMemo } from 'react'
 import { useStore, ALL_PHASES } from '../store/index'
 
 export function PillStrip() {
-  const phase = useStore(s => s.phase)
-  const donePhases = useStore(s => s.donePhases)
+  const phase = useStore(s => s.run?.phase ?? '')
+
+  // Derive done phases locally — frontend-only computation from the phase string
+  const donePhases = useMemo(() => {
+    const idx = ALL_PHASES.indexOf(phase)
+    return idx === -1 ? [...ALL_PHASES] : ALL_PHASES.slice(0, idx)
+  }, [phase])
 
   return (
     <div className="pill-strip">

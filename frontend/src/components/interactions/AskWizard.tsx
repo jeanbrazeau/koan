@@ -2,6 +2,20 @@ import { useState } from 'react'
 import { useStore, AskQuestion } from '../../store/index'
 import * as api from '../../api/client'
 
+// Normalize raw question options from LLM output. Options may arrive as strings
+// or dicts with varying key names. This is data cleaning for LLM output
+// variability — not business logic.
+function normalizeOptions(
+  rawOpts: (string | Record<string, unknown>)[],
+): { value: string; label: string; recommended?: boolean }[] {
+  return rawOpts.map(o => {
+    if (typeof o === 'string') return { value: o, label: o }
+    const label = String(o['label'] ?? o['text'] ?? o['value'] ?? o['option'] ?? '')
+    const value = String(o['value'] ?? o['label'] ?? o['text'] ?? label)
+    return { value, label, recommended: (o['recommended'] as boolean) ?? false }
+  })
+}
+
 interface AnswerMap {
   [qIdx: number]: string | string[] | null
 }
@@ -51,7 +65,8 @@ function QuestionCard({
     }
   }
 
-
+  // Normalize options at render time to handle LLM output variability
+  const opts = normalizeOptions(question.options as (string | Record<string, unknown>)[])
 
   return (
     <div className="question-card">
@@ -66,7 +81,7 @@ function QuestionCard({
         <div className="question-multi-hint">Select all that apply</div>
       )}
       <div className="options-list">
-        {question.options.map(opt => (
+        {opts.map(opt => (
           <div
             key={opt.value}
             className={`option${selected.includes(opt.value) ? ' selected' : ''}${opt.recommended ? ' recommended' : ''}`}
@@ -104,15 +119,14 @@ function QuestionCard({
 }
 
 export function AskWizard() {
-  const interaction = useStore(s => s.activeInteraction)
-  const addNotification = useStore(s => s.addNotification)
-
+  const focus = useStore(s => s.run?.focus)
   const [currentIdx, setCurrentIdx] = useState(0)
   const [answers, setAnswers] = useState<AnswerMap>({})
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
-  if (!interaction || interaction.type !== 'ask') return null
+  if (!focus || focus.type !== 'question') return null
 
-  const { questions, token } = interaction
+  const { questions, token } = focus
   const total = questions.length
 
   const handleAnswer = (qIdx: number, val: string | string[] | null) => {
@@ -131,12 +145,7 @@ export function AskWizard() {
     const finalAnswers = questions.map((_, i) => answers[i] ?? null)
     const res = await api.submitAnswer(finalAnswers, token)
     if (!res.ok) {
-      addNotification({
-        id: crypto.randomUUID(),
-        type: 'submit_error',
-        severity: 'error',
-        message: res.message ?? 'Failed to submit answers',
-      })
+      setSubmitError(res.message ?? 'Failed to submit answers')
     }
   }
 
@@ -145,12 +154,7 @@ export function AskWizard() {
     const finalAnswers = questions.map((_, i) => defaults[i] ?? null)
     const res = await api.submitAnswer(finalAnswers, token)
     if (!res.ok) {
-      addNotification({
-        id: crypto.randomUUID(),
-        type: 'submit_error',
-        severity: 'error',
-        message: res.message ?? 'Failed to submit defaults',
-      })
+      setSubmitError(res.message ?? 'Failed to submit defaults')
     }
   }
 
@@ -168,6 +172,8 @@ export function AskWizard() {
           answer={answers[currentIdx] ?? null}
           onAnswer={handleAnswer}
         />
+
+        {submitError && <div className="no-runners-msg">{submitError}</div>}
 
         <div className="form-actions">
           {currentIdx > 0 && (

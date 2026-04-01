@@ -15,21 +15,23 @@ import { WorkflowDecision } from './components/interactions/WorkflowDecision'
 import { ArtifactReview } from './components/interactions/ArtifactReview'
 
 function InteractionView() {
-  const interaction = useStore(s => s.activeInteraction)
-  if (!interaction) return null
-  if (interaction.type === 'ask') return <AskWizard />
-  if (interaction.type === 'workflow-decision') return <WorkflowDecision />
-  if (interaction.type === 'artifact-review') return <ArtifactReview />
+  const focus = useStore(s => s.run?.focus)
+  if (!focus) return null
+  if (focus.type === 'question') return <AskWizard />
+  if (focus.type === 'decision') return <WorkflowDecision />
+  if (focus.type === 'review') return <ArtifactReview />
   return null
 }
 
 function WorkspaceMain() {
-  const interaction = useStore(s => s.activeInteraction)
-  const completion = useStore(s => s.completion)
+  const focus = useStore(s => s.run?.focus)
+  const completion = useStore(s => s.run?.completion)
+
+  const hasInteraction = focus && focus.type !== 'conversation'
 
   return (
     <div className="workspace-main">
-      {interaction ? (
+      {hasInteraction ? (
         <InteractionView />
       ) : completion ? (
         <Completion />
@@ -42,19 +44,14 @@ function WorkspaceMain() {
 }
 
 export default function App() {
-  const runStarted = useStore(s => s.runStarted)
+  const run = useStore(s => s.run)
   const settingsOpen = useStore(s => s.settingsOpen)
-  const fatalError = useStore(s => s.fatalError)
 
   useEffect(() => {
     let es: EventSource | null = null
     let retryDelay = 500
 
     function connect() {
-      // Do not reconnect after a fatal_error (server restart / stale version).
-      // User must reload the page.
-      if (useStore.getState().fatalError) return
-
       es = connectSSE(useStore)
       // Override the onerror set inside connectSSE to schedule our retry.
       es.onerror = () => {
@@ -72,29 +69,17 @@ export default function App() {
 
     connect()
 
-    // Cleanup on unmount -- prevents duplicate SSE connections in React StrictMode.
+    // Cleanup on unmount — prevents duplicate SSE connections in React StrictMode.
     return () => {
       es?.close()
     }
-  }, []) // Empty dep array: connect once, reconnect is managed inside
-
-  if (fatalError) {
-    return (
-      <div className="app">
-        <Header />
-        <div style={{ padding: '2rem', textAlign: 'center' }}>
-          <p>Connection lost. The server restarted or the session expired.</p>
-          <button onClick={() => window.location.reload()}>Reload page</button>
-        </div>
-      </div>
-    )
-  }
+  }, []) // Empty dep array: connect once; reconnect is managed inside
 
   return (
     <div className="app">
       <Header />
 
-      {!runStarted ? (
+      {!run ? (
         <LandingPage />
       ) : (
         <div className="workspace">

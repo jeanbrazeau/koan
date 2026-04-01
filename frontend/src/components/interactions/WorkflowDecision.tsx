@@ -3,33 +3,23 @@ import { useStore } from '../../store/index'
 import * as api from '../../api/client'
 
 export function WorkflowDecision() {
-  const interaction = useStore(s => s.activeInteraction)
-  const addNotification = useStore(s => s.addNotification)
+  const focus = useStore(s => s.run?.focus)
   const [selectedPhase, setSelectedPhase] = useState<string | null>(null)
   const [context, setContext] = useState('')
+  const [submitError, setSubmitError] = useState<string | null>(null)
 
-  if (!interaction || interaction.type !== 'workflow-decision') return null
+  if (!focus || focus.type !== 'decision') return null
 
-  const { chat_turns, token } = interaction
+  const { chatTurns, token } = focus
 
   const handleContinue = async () => {
     if (!selectedPhase) {
-      addNotification({
-        id: crypto.randomUUID(),
-        type: 'validation',
-        severity: 'warning',
-        message: 'Please select a phase before continuing',
-      })
+      setSubmitError('Please select a phase before continuing')
       return
     }
     const res = await api.submitWorkflowDecision(selectedPhase, context, token)
     if (!res.ok) {
-      addNotification({
-        id: crypto.randomUUID(),
-        type: 'submit_error',
-        severity: 'error',
-        message: res.message ?? 'Failed to submit decision',
-      })
+      setSubmitError(res.message ?? 'Failed to submit decision')
     }
   }
 
@@ -37,7 +27,7 @@ export function WorkflowDecision() {
     <div className="phase-content">
       <div className="phase-inner">
         <div className="workflow-chat">
-          {chat_turns.map((turn, i) => (
+          {chatTurns.map((turn, i) => (
             <div key={i} className="workflow-turn">
               {turn.role === 'orchestrator' ? (
                 <>
@@ -88,6 +78,7 @@ export function WorkflowDecision() {
               value={context}
               onChange={e => setContext(e.target.value)}
             />
+            {submitError && <div className="no-runners-msg">{submitError}</div>}
             <div className="form-actions">
               <button
                 id="btn-workflow-continue"

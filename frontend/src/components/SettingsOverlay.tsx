@@ -24,14 +24,14 @@ function getThinkingModes(runners: RunnerInfo[], rt: string, model: string) {
 
 function ProfileForm({
   initialName,
-  initialTiers,
+  initialRunnerType,   // best-effort from stored tier string
   isEdit,
   runners,
   onSave,
   onCancel,
 }: {
   initialName: string
-  initialTiers: TierMap
+  initialRunnerType: string  // pre-populate runner dropdown when editing
   isEdit: boolean
   runners: RunnerInfo[]
   onSave: () => void
@@ -41,7 +41,7 @@ function ProfileForm({
   const [tiers, setTiers] = useState<TierMap>(() => {
     const t: TierMap = {}
     for (const tier of TIER_NAMES) {
-      t[tier] = initialTiers[tier] ?? { runner_type: '', model: '', thinking: '' }
+      t[tier] = { runner_type: tier === 'strong' ? initialRunnerType : '', model: '', thinking: '' }
     }
     return t
   })
@@ -314,10 +314,19 @@ export function SettingsOverlay() {
   const setSettingsOpen = useStore(s => s.setSettingsOpen)
 
   // Read all config from the store (fed by SSE events — always current)
-  const profiles = useStore(s => s.configProfiles)
-  const installations = useStore(s => s.configInstallations)
-  const runners = useStore(s => s.configRunners)
-  const scoutConcurrency = useStore(s => s.configScoutConcurrency)
+  const profilesDict = useStore(s => s.settings.profiles)
+  const installationsDict = useStore(s => s.settings.installations)
+  const scoutConcurrency = useStore(s => s.settings.defaultScoutConcurrency)
+
+  const profiles = Object.values(profilesDict)
+  const installations = Object.values(installationsDict)
+
+  // Probe runner info is not in the projection store (only availability flags
+  // are stored). Fetch it once on open for the profile/installation forms.
+  const [runners, setRunners] = useState<RunnerInfo[]>([])
+  useEffect(() => {
+    api.getProbeInfo().then(data => setRunners(data.runners ?? []))
+  }, [])
 
   const availableRunners = runners.filter(r => r.available)
 
@@ -358,10 +367,10 @@ export function SettingsOverlay() {
   // Group installations by runner type
   const installationsByType: Record<string, Installation[]> = {}
   for (const inst of installations) {
-    if (!installationsByType[inst.runner_type]) {
-      installationsByType[inst.runner_type] = []
+    if (!installationsByType[inst.runnerType]) {
+      installationsByType[inst.runnerType] = []
     }
-    installationsByType[inst.runner_type].push(inst)
+    installationsByType[inst.runnerType].push(inst)
   }
   const runnerTypes = Object.keys(installationsByType).sort()
 
@@ -371,13 +380,8 @@ export function SettingsOverlay() {
     : runnerTypes[0] ?? null
   const currentTabInstallations = currentTab ? installationsByType[currentTab] ?? [] : []
 
-  const editingProfileData = editingProfile
-    ? profiles.find(p => p.name === editingProfile)
-    : null
-
-  const editingInstData = editingInstallation
-    ? installations.find(i => i.alias === editingInstallation)
-    : null
+  const editingProfileData = editingProfile ? profilesDict[editingProfile] : null
+  const editingInstData = editingInstallation ? installationsDict[editingInstallation] : null
 
   return (
     <div className="settings-overlay">
@@ -402,12 +406,12 @@ export function SettingsOverlay() {
               <div key={p.name} className="profile-row">
                 <span className="profile-row-name">
                   {p.name}
-                  {p.read_only && ' [locked]'}
+                  {p.readOnly && ' [locked]'}
                 </span>
                 <span className="profile-row-tiers">
                   {tierSummary(p.tiers)}
                 </span>
-                {!p.read_only && (
+                {!p.readOnly && (
                   <span className="profile-row-actions">
                     <button
                       className="btn btn-secondary"
@@ -434,7 +438,7 @@ export function SettingsOverlay() {
             {editingProfile && editingProfileData && (
               <ProfileForm
                 initialName={editingProfile}
-                initialTiers={editingProfileData.tiers}
+                initialRunnerType={Object.values(editingProfileData.tiers)[0] ?? ''}
                 isEdit
                 runners={availableRunners}
                 onSave={() => setEditingProfile(null)}
@@ -456,7 +460,7 @@ export function SettingsOverlay() {
             ) : (
               <ProfileForm
                 initialName=""
-                initialTiers={{}}
+                initialRunnerType=""
                 isEdit={false}
                 runners={availableRunners}
                 onSave={() => setShowNewProfile(false)}
@@ -497,10 +501,11 @@ export function SettingsOverlay() {
                           <div className="install-row-info">
                             <span className="install-row-alias">{inst.alias}</span>
                             {isDefault && <span className="install-row-badge">default</span>}
+                            {inst.available && <span className="install-row-badge">available</span>}
                           </div>
                           <span className="install-row-path">
                             {inst.binary || '--'}
-                            {inst.extra_args && inst.extra_args.length > 0 && ` ${inst.extra_args.join(' ')}`}
+                            {inst.extraArgs && inst.extraArgs.length > 0 && ` ${inst.extraArgs.join(' ')}`}
                           </span>
                           <span className="profile-row-actions">
                             <button
@@ -527,12 +532,12 @@ export function SettingsOverlay() {
                       )
                     })}
 
-                    {editingInstallation && editingInstData && editingInstData.runner_type === currentTab && (
+                    {editingInstallation && editingInstData && editingInstData.runnerType === currentTab && (
                       <InstallationForm
                         initialAlias={editingInstallation}
-                        initialRunnerType={editingInstData.runner_type}
+                        initialRunnerType={editingInstData.runnerType}
                         initialBinary={editingInstData.binary}
-                        initialExtraArgs={editingInstData.extra_args}
+                        initialExtraArgs={editingInstData.extraArgs}
                         isEdit
                         allRunners={runners}
                         onSave={() => setEditingInstallation(null)}
