@@ -68,7 +68,6 @@ class CodexRunner:
         installation: AgentInstallation,
         model: str,
         thinking: ThinkingMode,
-        read_only: bool = False,
     ) -> list[str]:
         if thinking != "disabled":
             raise RunnerError(RunnerDiagnostic(
@@ -83,8 +82,6 @@ class CodexRunner:
             "-c", f"mcp_servers.koan.url={mcp_url}",
             boot_prompt,
         ]
-        if read_only:
-            cmd.extend(["--sandbox", "read-only"])
         cmd.extend(["--model", model])
         cmd.extend(installation.extra_args)
         return cmd

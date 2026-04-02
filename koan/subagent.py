@@ -34,7 +34,6 @@ from .events import (
 from .logger import get_logger
 from .phases import PHASE_MODULE_MAP, PhaseContext
 from .runners import RunnerDiagnostic, RunnerError
-from .lib.permissions import READ_ONLY_ROLES
 from .runners.registry import RunnerRegistry
 
 if TYPE_CHECKING:
@@ -182,10 +181,9 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
         if installation is not None and thinking_mode is not None:
             cmd = runner.build_command(
                 boot_prompt(role), mcp_url, installation, model, thinking_mode,
-                read_only=(role in READ_ONLY_ROLES),
             )
         else:
-            cmd = runner.build_command(boot_prompt(role), mcp_url, model, read_only=(role in READ_ONLY_ROLES))
+            cmd = runner.build_command(boot_prompt(role), mcp_url, model)
     except RunnerError as e:
         await event_log.emit_runner_diagnostic(e.diagnostic)
         store.push_event(

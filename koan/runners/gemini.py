@@ -71,7 +71,6 @@ class GeminiRunner:
         installation: AgentInstallation,
         model: str,
         thinking: ThinkingMode,
-        read_only: bool = False,
     ) -> list[str]:
         if thinking not in self.supported_thinking_modes:
             raise RunnerError(RunnerDiagnostic(
@@ -88,29 +87,7 @@ class GeminiRunner:
         self._merge_mcp(existing, mcp_url, settings_path)
         self._write_settings(existing, settings_path, gemini_dir)
 
-        if read_only:
-            policy_path = config_dir / "read-only-policy.toml"
-            policy_content = (
-                '# Deny write tools for read-only agents.\n'
-                '[[rule]]\n'
-                'toolName = ["write_file", "replace"]\n'
-                'decision = "deny"\n'
-            )
-            try:
-                tmp = policy_path.with_suffix(".toml.tmp")
-                tmp.write_text(policy_content, "utf-8")
-                tmp.rename(policy_path)
-            except OSError as e:
-                raise RunnerError(RunnerDiagnostic(
-                    code="policy_write_failed",
-                    runner="gemini",
-                    stage="build_command",
-                    message=f"Failed to write read-only policy: {e}",
-                )) from e
-
         cmd = [installation.binary, "--output-format", "stream-json", "-p", boot_prompt]
-        if read_only:
-            cmd.extend(["--policy", str(policy_path)])
         if thinking != "disabled":
             cmd.extend(["--thinking-mode", thinking])
         cmd.extend(["--model", model])

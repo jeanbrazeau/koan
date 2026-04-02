@@ -44,7 +44,7 @@ class FakeAppState:
 class FakeRunner:
     name = "fake"
 
-    def build_command(self, boot_prompt, mcp_url, model, read_only=False):
+    def build_command(self, boot_prompt, mcp_url, model):
         # Return a command that exits immediately with code 1
         return ["python3", "-c", "import sys; sys.exit(1)"]
 
@@ -56,7 +56,7 @@ class FakeRunnerSuccess:
     """Runner that exits 0. Handshake is set via MCP path, not stream."""
     name = "fake"
 
-    def build_command(self, boot_prompt, mcp_url, model, read_only=False):
+    def build_command(self, boot_prompt, mcp_url, model):
         return ["python3", "-c", "pass"]
 
     def parse_stream_event(self, line):
