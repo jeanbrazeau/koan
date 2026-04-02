@@ -140,9 +140,18 @@ export function ActivityFeed() {
   const scrollRef = useRef<HTMLDivElement>(null)
   useAutoScroll(scrollRef)
 
+  const hasEntries = conversation?.entries && conversation.entries.length > 0
+  const isWaiting = !hasEntries && !conversation?.isThinking && !conversation?.pendingText
+
   return (
     <div className="activity-feed-scroll" ref={scrollRef}>
       <div id="activity-feed-inner" className="activity-feed-inner">
+        {isWaiting && (
+          <div className="activity-waiting">
+            <span className="thinking-dot">●</span>
+            <span>Starting agent…</span>
+          </div>
+        )}
         {conversation?.entries.map(renderEntry)}
 
         {/* Active thinking card — shown while LLM is reasoning */}
