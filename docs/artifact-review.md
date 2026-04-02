@@ -80,7 +80,7 @@ decide how to proceed.
 ## Web UI Component
 
 The artifact review is rendered by the `ArtifactReview.tsx` React component.
-The component subscribes to `active_interaction` in the Zustand store and
+The component subscribes to `run.focus` in the Zustand store and
 renders when an `artifact_review_requested` event sets it.
 
 **Layout:**
@@ -104,7 +104,7 @@ renders when an `artifact_review_requested` event sets it.
 - Component renders markdown content client-side
 - "Accept" -> `POST /api/artifact-review` with `{ feedback: "Accept" }`
 - "Send Feedback" -> `POST /api/artifact-review` with `{ feedback: text }`
-- Component unmounts when `artifact_reviewed` event clears `active_interaction`
+- Component unmounts when `artifact_reviewed` event clears `run.focus`
 
 ---
 
@@ -122,8 +122,8 @@ validation failure or missing pending interaction.
 
 | Event                        | Direction         | Payload                                                  |
 | ---------------------------- | ----------------- | -------------------------------------------------------- |
-| `artifact_review_requested`  | server -> browser | `{ token, path, content, description }` (sets `active_interaction`) |
-| `artifact_reviewed`          | server -> browser | `{ token, ?accepted, ?response, cancelled }` (clears `active_interaction`) |
+| `artifact_review_requested`  | server -> browser | `{ token, path, content, description }` (sets `run.focus`) |
+| `artifact_reviewed`          | server -> browser | `{ token, ?accepted, ?response, cancelled }` (clears `run.focus`) |
 
 SSE events are pushed directly from the tool handler. On browser reconnect,
 pending reviews are replayed so the user does not lose the review form.

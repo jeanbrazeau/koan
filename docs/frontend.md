@@ -22,7 +22,7 @@ frontend/                   # source tree (alongside koan/ Python package)
 │   │   ├── index.ts        # single Zustand store (the app-db equivalent)
 │   │   └── selectors.ts    # derived state computed from store slices
 │   ├── sse/
-│   │   └── connect.ts      # EventSource wrapper: version-negotiated catch-up + fold
+│   │   └── connect.ts      # EventSource wrapper: always-snapshot catch-up + JSON Patch
 │   ├── api/
 │   │   └── client.ts       # typed fetch wrappers for POST/PUT endpoints
 │   ├── components/         # one file per UI component (see Component Mapping)
@@ -82,91 +82,72 @@ Single Zustand store mirrors the backend projection. All live state enters
 through the SSE bridge — nothing else writes to the store from outside the
 component tree.
 
-Key slices:
+Store slices:
 
 | Slice | Type | Source |
 |---|---|---|
 | `connected` | `boolean` | EventSource open/error |
-| `lastVersion` | `number` | Snapshot or event version field |
-| `runStarted` | `boolean` | Derived from first `phase_started` event |
-| `phase` / `donePhases` | `string` / `string[]` | `phase_started` |
-| `primaryAgent` | `AgentInfo \| null` | `agent_spawned`, `agent_step_advanced`, `agent_exited` |
-| `scouts` | `Record<string, AgentInfo>` | `agent_spawned`, `agent_exited` |
-| `activityLog` | `ActivityEntry[]` | `tool_called`, `tool_completed`, `thinking` |
-| `streamBuffer` | `string` | `stream_delta`, `stream_cleared` |
-| `activeInteraction` | `Interaction \| null` | `questions_asked`, `artifact_review_requested`, `workflow_decision_requested`, and resolution events. Stores `interactionType` (the event type string) alongside payload for component discrimination. |
-| `artifacts` | `Record<string, ArtifactFile>` | `artifact_created`, `artifact_modified`, `artifact_removed` |
-| `completion` | `CompletionInfo \| null` | `workflow_completed` |
-| `notifications` | `NotificationEntry[]` | derived by fold from `agent_spawn_failed`, `agent_exited` with error |
+| `lastVersion` | `number` | Snapshot/patch version |
+| `settings` | `Settings` | installations, profiles, defaultProfile, defaultScoutConcurrency |
+| `run` | `Run \| null` | config, phase, agents, focus, artifacts, completion |
+| `notifications` | `Notification[]` | message, level, timestampMs |
+| `settingsOpen` | `boolean` | Local UI state (not from server) |
 
-`runStarted` gates top-level view (landing vs live). No router library — a
-conditional render covers the binary choice.
+`run` being `null` vs non-null gates the top-level view (landing vs live). No
+router library — a conditional render covers the binary choice.
 
-`lastVersion` tracks the version of the last applied event or snapshot. The
-SSE connection uses `?since=${lastVersion}` on connect/reconnect so the server
-knows whether to send a snapshot or replay missed events.
+`lastVersion` tracks the version of the last applied snapshot or patch. The SSE
+connection sends `?since=${lastVersion}` on connect/reconnect so the server
+knows where the client left off.
 
-### Store actions for the projection
+### Store actions
 
 ```typescript
-applySnapshot(data: SnapshotPayload): void
-// Atomically replaces the entire store state from a snapshot.
-// Called when the server sends event: snapshot.
-// Uses useStore.setState(transform(data)) — one update, no merge logic.
-// Any visual flash from the re-render is acceptable.
+setConnected(v: boolean): void
+// Sets the connected flag. Called by connectSSE on EventSource open/error.
 
-applyEvent(event: VersionedEvent): void
-// Applies a single versioned event via the frontend fold.
-// Called for every non-snapshot SSE event.
-// Mirrors the backend fold cases exactly.
+setSettingsOpen(v: boolean): void
+// Toggles the settings panel. Called by UI controls only.
 ```
+
+State updates from the server (snapshots and patches) are applied directly via
+`store.setState()` inside the SSE bridge — not through named actions.
 
 ---
 
 ## SSE Bridge
 
 `connectSSE(store)` in `sse/connect.ts` opens an
-`EventSource('/events?since=${store.lastVersion}')` and handles two event
-paths:
+`EventSource('/events?since=${lastVersion}')` and handles two event paths:
 
-1. **`snapshot` event** → `store.applySnapshot(data)` — atomic state replace
-2. **All other events** → `store.applyEvent(event)` — incremental fold
+1. **`snapshot` event** — atomically replaces the entire store state.
+   Parses `{ version, state }` from the event data, sets `storeState = state`,
+   then calls `store.setState({ lastVersion: version, ...state })`.
+
+2. **`patch` event** — applies an RFC 6902 JSON Patch via `fast-json-patch`.
+   Parses `{ version, patch }`, calls `applyPatch(storeState, patch, false, false)`
+   with `mutate: false` to get a new document, then spreads the result into the
+   store with the updated `lastVersion`.
+
+   On patch failure, the bridge logs the error, closes the `EventSource`, and
+   resets `lastVersion` to `0` to force a fresh snapshot on reconnect. The
+   `onerror` handler in `App.tsx` then schedules the reconnect.
 
 Returns the `EventSource`; `App.tsx` owns the reconnect lifecycle (exponential
 backoff, capped at 5 s).
 
-The bridge also handles `fatal_error` events (sent when `?since=N` references a
-version the server no longer has, e.g. after server restart). On `fatal_error`,
-the bridge closes the `EventSource` WITHOUT scheduling a reconnect and sets a
-`fatalError` flag in the store. The UI renders a "reload required" banner.
-
-### The frontend fold
-
-The frontend fold mirrors the backend fold in `koan/projections.py`. Both must
-produce the same projection shape from the same event sequence. When a new
-event type is added to the backend, a corresponding fold case must be added to
-the frontend `applyEvent`.
-
-Fold cases match the backend exactly. See
-[projections.md -- Fold cases](./projections.md#fold-cases) for the full table.
-
 ### Reconnect flow
 
 ```
-Browser loads     → connect ?since=0   → snapshot   → applySnapshot → full state
-Browser refreshes → connect ?since=0   → snapshot   → applySnapshot → full state
-Connection drops  → reconnect ?since=N → events N+1..M → applyEvent each → up to date
+Browser loads     → connect ?since=0   → snapshot → state replace → full state
+Browser refreshes → connect ?since=0   → snapshot → state replace → full state
+Connection drops  → reconnect ?since=N → snapshot (if N≠server version) → full state
+Patch failure     → reconnect ?since=0 → snapshot → state replace → full state
 ```
 
-**snake_case → camelCase mapping** happens in `applySnapshot` and `applyEvent`
-for all agent payloads (`agent_id` → `agentId`, `started_at_ms` → `startedAt`,
-etc.). The backend sends snake_case; the frontend transforms at the bridge
-boundary.
-
-**`phase_started` fold effect:** sets `runStarted = true` and derives
-`donePhases`. This ensures a mid-run page reload (which receives a snapshot
-with `run_started: true` and a current `phase`) restores the live view
-correctly.
+The server always sends a snapshot when the client's `since` version does not
+match the current server version, so clients never need to track or replay
+individual events — a reconnect always converges to current state.
 
 ---
 
@@ -177,8 +158,11 @@ payloads. Callers build complete payloads using helper functions; `push_event`
 does not enrich payloads. See [projections.md](./projections.md) for the full
 event type table and payload shapes.
 
-All time values are UTC epoch milliseconds (`started_at_ms`). All token counts
+All time values are UTC epoch milliseconds (`startedAtMs`). All token counts
 are raw integers. Formatting is done client-side (`useElapsed`, `formatTokens`).
+
+The backend sends camelCase field names natively via `KoanBaseModel.to_wire()`.
+No field name transformation is needed in the frontend.
 
 ### Event builder helpers (Python)
 
@@ -201,17 +185,20 @@ form state and cascade dropdown logic.
 
 | React component | Primary store subscription |
 |---|---|
-| `App.tsx` | `runStarted` |
-| `LandingPage.tsx` | `runStarted` (negated) |
-| `StatusSidebar.tsx` | `primaryAgent`, `phase` |
-| `AgentMonitor.tsx` | `scouts` |
-| `ArtifactsSidebar.tsx` | `artifacts` |
-| `AskWizard.tsx` | `activeInteraction` |
-| `WorkflowDecision.tsx` | `activeInteraction` |
-| `ArtifactReview.tsx` | `activeInteraction` |
-| `Completion.tsx` | `completion` |
+| `App.tsx` | `run` |
+| `LandingPage.tsx` | `run` (negated) |
+| `StatusSidebar.tsx` | `run.agents`, `run.phase` |
+| `AgentMonitor.tsx` | `run.agents` |
+| `ArtifactsSidebar.tsx` | `run.artifacts` |
+| `AskWizard.tsx` | `run.focus` |
+| `WorkflowDecision.tsx` | `run.focus` |
+| `ArtifactReview.tsx` | `run.focus` |
+| `Completion.tsx` | `run.completion` |
 | `SettingsOverlay.tsx` | `settingsOpen` + local state |
 | `Notification.tsx` | `notifications` |
+
+Scouts are agents where `isPrimary === false`. `AgentMonitor` filters
+`run.agents` by this flag — there is no separate `scouts` slice.
 
 ---
 
@@ -219,8 +206,8 @@ form state and cascade dropdown logic.
 
 **`story` events** — emitted during execution phase with story lifecycle status.
 Not implemented in v1: execution phase shows only primary agent status and
-activity feed. Add a `stories` store slice and `StoryProgress` component when
-designing the execution phase UI.
+activity feed. Add a `stories` field inside `Run` and a `StoryProgress`
+component when designing the execution phase UI.
 
 
 ---
@@ -229,7 +216,7 @@ designing the execution phase UI.
 
 ```json
 {
-  "dependencies":    { "react": "^19", "react-dom": "^19", "zustand": "^5" },
+  "dependencies":    { "react": "^19", "react-dom": "^19", "zustand": "^5", "fast-json-patch": "^3" },
   "devDependencies": { "typescript": "^5.7", "vite": "^6", "@vitejs/plugin-react": "^4" }
 }
 ```
