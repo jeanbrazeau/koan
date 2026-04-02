@@ -1,7 +1,6 @@
 import { useMemo } from 'react'
 import { useStore, Agent } from '../store/index'
 import { useElapsed } from '../hooks/useElapsed'
-import { formatTokens } from '../utils'
 
 function AgentRow({ agent }: { agent: Agent }) {
   const elapsed = useElapsed(agent.startedAtMs)
@@ -13,6 +12,10 @@ function AgentRow({ agent }: { agent: Agent }) {
   const statusCls = `agent-status-${status}`
   const nameCls = `agent-name-${status}`
   const doingCls = status === 'failed' ? 'agent-doing-failed' : 'agent-doing-dim'
+  const toolCount = agent.conversation.entries.filter(e =>
+    e.type.startsWith('tool_')
+  ).length
+
   const doingText = status === 'failed'
     ? (agent.error || 'failed')
     : status === 'done'
@@ -24,8 +27,9 @@ function AgentRow({ agent }: { agent: Agent }) {
       <span className={`agent-row-icon ${statusCls}`}>{statusIcon}</span>
       <span className={`agent-row-name ${nameCls}`}>{agent.label || agent.role}</span>
       <span className="agent-row-model">{agent.model ?? '--'}</span>
-      <span className="agent-row-tokens">
-        {formatTokens(agent.conversation.inputTokens, agent.conversation.outputTokens)}
+      <span className="agent-row-tools">
+        <span className="agent-row-tools-num">{toolCount}</span>
+        <span className="agent-row-tools-label"> tools</span>
       </span>
       <span className="agent-row-time">{elapsed}</span>
       <span className={`agent-row-doing ${doingCls}`}>{doingText}</span>
@@ -114,7 +118,7 @@ export function AgentMonitor() {
                 <span className="agent-row-icon agent-status-queued">○</span>
                 <span className="agent-row-name agent-name-queued">{a.label || 'scout'}</span>
                 <span className="agent-row-model">--</span>
-                <span className="agent-row-tokens">--</span>
+                <span className="agent-row-tools"><span className="agent-row-tools-num">0</span><span className="agent-row-tools-label"> tools</span></span>
                 <span className="agent-row-time">--</span>
                 <span className="agent-row-doing agent-doing-dim">queued</span>
               </div>

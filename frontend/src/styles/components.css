@@ -214,7 +214,9 @@
 .agent-row-icon   { width: 14px; text-align: center; flex-shrink: 0; }
 .agent-row-name   { width: 200px; flex-shrink: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .agent-row-model  { width: 70px; flex-shrink: 0; color: var(--text-muted); }
-.agent-row-tokens { width: 60px; flex-shrink: 0; text-align: right; color: var(--text-muted); }
+.agent-row-tools       { width: 65px; flex-shrink: 0; text-align: right; font-size: var(--font-size-xs); }
+.agent-row-tools-num   { color: var(--text); }
+.agent-row-tools-label { color: var(--text-muted); }
 .agent-row-time   { width: 55px; flex-shrink: 0; text-align: right; color: var(--text-muted); font-size: var(--font-size-xs); }
 .agent-row-doing  { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
