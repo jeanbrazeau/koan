@@ -21,17 +21,17 @@ This weight justifies a more elaborate workflow than other phases. Rather than
 a fixed sequence of steps, intake runs a **confidence-gated loop**: the LLM
 scouts the codebase, enumerates what it knows, asks the user questions, and
 then explicitly self-verifies its understanding. The loop repeats until the
-LLM declares it is "certain" the decomposer has everything it needs.
+LLM declares "high" confidence that the decomposer has everything it needs.
 
 ### Step structure
 
-| Step | Name       | Runs | Purpose                                                                            |
-| ---- | ---------- | ---- | ---------------------------------------------------------------------------------- |
-| 1    | Extract    | 1x   | Read conversation input. No side effects.                                          |
-| 2    | Scout      | 1-4x | Dispatch codebase investigators.                                                   |
-| 3    | Deliberate | 1-4x | Enumerate knowns/unknowns, ask user questions.                                     |
-| 4    | Reflect    | 1-4x | Self-verify completeness, declare confidence.                                      |
-| 5    | Synthesize | 1x   | Write `landscape.md`. Review gate: calls `koan_review_artifact` before completing. |
+| Step | Name    | Runs | Purpose                                                                         |
+| ---- | ------- | ---- | ------------------------------------------------------------------------------- |
+| 1    | Extract | 1x   | Read conversation input. No side effects.                                       |
+| 2    | Scout   | 1-4x | Dispatch codebase investigators.                                                |
+| 3    | Ask     | 1-4x | Enumerate knowns/unknowns, ask user questions.                                  |
+| 4    | Reflect | 1-4x | Self-verify completeness, declare confidence.                                   |
+| 5    | Write   | 1x   | Write `landscape.md`. Review gate: calls `koan_review_artifact` before completing. |
 
 Steps 2-4 form the loop. Each call to `koan_complete_step` during these steps
 either returns the next step in sequence or loops back from step 4 to step 2.
@@ -53,11 +53,11 @@ to implement non-linear flows.
 def get_next_step(step, ctx):
     """Pure query -- returns where to go, does not mutate state."""
     if step == 4:                          # Reflect step
-        if confidence == "certain" or is_exhausted:
-            return 5                       # -> Synthesize
+        if confidence == "high":
+            return 5                       # -> Write
         return 2                           # -> Scout (loop back)
     if step == 5:
-        return None                        # Synthesize -> done
+        return None                        # Write -> done
     return step + 1                        # linear for steps 1-3
 ```
 
@@ -66,7 +66,6 @@ def on_loop_back(from_step, to_step, ctx):
     """Side effects of the loop-back decision live here, not in get_next_step()."""
     ctx.iteration += 1
     ctx.intake_confidence = None           # reset for next round
-    emit_iteration_start(ctx.event_log, ctx.iteration, MAX_ITERATIONS)
 ```
 
 `get_next_step()` is a **pure query** -- it only decides where to go. All side
@@ -81,8 +80,8 @@ non-linear logic to the one module that needs it without touching other phases.
 
 For the intake phase, `total_steps = 5` reflects the number of distinct step
 definitions, not the number of `koan_complete_step` calls. The loop may
-execute steps 2-4 up to four times, producing up to 1 + (3 x 4) + 1 = 14
-calls in the worst case.
+execute steps 2-4 multiple times, with the total calls depending on when high
+confidence is reached.
 
 ---
 
@@ -126,12 +125,6 @@ backward transition and calls `on_loop_back()`. The intake module's
 `on_loop_back()` resets `ctx.intake_confidence = None`. This ensures that in
 the next Reflect step, the LLM must call `koan_set_confidence` again.
 
-### Maximum iterations
-
-The loop is bounded at 4 iterations. When exhausted, `get_next_step()` returns
-step 5 (Synthesize) instead of step 2. This prevents infinite loops if the LLM
-consistently declares non-certain confidence.
-
 ---
 
 ## Step-Aware Permission Gating
@@ -149,23 +142,14 @@ frontloads all work into step 1.
 `role == "intake" and intake_step == 1`:
 
 ```
-koan_request_scouts, koan_ask_question, koan_set_confidence, write, edit
+koan_request_scouts, koan_ask_question, write, edit
 ```
-
-### Step 3 (Deliberate): no confidence assessment
-
-Step 3 is for enumerating knowns/unknowns and asking questions. Confidence
-assessment belongs exclusively in step 4 (Reflect).
-
-`check_permission()` blocks `koan_set_confidence` when
-`role == "intake" and intake_step == 3`.
 
 ### Prompt + enforcement is not redundant
 
-The prompt tells the LLM not to use side-effecting tools in step 1 and not
-to assess confidence in step 3. The permission gates are fallbacks that catch
-prompt non-compliance. Together: the prompt prevents the behavior; the gate
-catches it when the prompt fails.
+The prompt tells the LLM not to use side-effecting tools in step 1. The
+permission gate is a fallback that catches prompt non-compliance. Together:
+the prompt prevents the behavior; the gate catches it when the prompt fails.
 
 ---
 
@@ -196,28 +180,28 @@ The intake loop prompts apply several techniques from the prompting literature.
 This section records the reasoning so future changes don't inadvertently remove
 mechanisms that address specific failure modes.
 
-### Prompt Chaining over Stepwise (Scout / Deliberate / Reflect as separate steps)
+### Prompt Chaining over Stepwise (Scout / Ask / Reflect as separate steps)
 
 A monolithic "investigate" step is rejected in favor of three separate
 `koan_complete_step` calls. The risk with a monolithic step is **simulated
 refinement**: the LLM artificially degrades its initial output to manufacture
 visible improvement. Separate steps enforce genuinely isolated reasoning.
 
-### Thread-of-Thought in Deliberate (explicit enumeration before questions)
+### Thread-of-Thought in Ask (explicit enumeration before questions)
 
-The Deliberate step instructs the LLM to walk through each area and explicitly
+The Ask step instructs the LLM to walk through each area and explicitly
 state what is known, unknown, and its source -- before formulating questions.
 This surfaces gaps that are not top-of-mind.
 
-### Anticipatory Reflection in Deliberate (downstream impact assessment)
+### Anticipatory Reflection in Ask (downstream impact assessment)
 
-Between enumeration and question formulation, the Deliberate step includes a
+Between enumeration and question formulation, the Ask step includes a
 downstream impact assessment. Each unknown is classified as ASK (user input
 needed), SCOUT (follow-up can resolve), or SAFE (implementation detail).
 
 ### Default-ask question framing (preventing question avoidance)
 
-The Deliberate step frames question-asking as the default, with skipping
+The Ask step frames question-asking as the default, with skipping
 requiring triple justification. This inverts the typical LLM bias toward
 advancing the workflow.
 
@@ -227,10 +211,11 @@ The Reflect step instructs the LLM to generate 3-5 verification questions
 framed from the decomposer's perspective, then answer each using only concrete
 evidence. This is the Chain-of-Verification (CoVe) pattern.
 
-### Contrastive confidence definitions (preventing premature "certain")
+### Contrastive confidence definitions (preventing premature "high")
 
-The Reflect step provides both positive ("certain means ALL of these are true")
-and negative ("you are NOT certain if ANY of these are true") definitions.
+The Reflect step provides both positive ("high confidence means ALL of these
+are true") and negative ("you do NOT have high confidence if ANY of these are
+true") definitions.
 The negative examples make failure modes concrete and explicit.
 
 ### Stakes framing (EmotionPrompt for accountability)
@@ -240,14 +225,14 @@ making up." This connects intake shortcuts directly to downstream failures.
 
 ### Iteration-aware guidance (first iteration vs. refinement)
 
-Steps 2 (Scout) and 3 (Deliberate) produce different instruction text for
+Steps 2 (Scout) and 3 (Ask) produce different instruction text for
 the first iteration vs. subsequent iterations. This prevents the LLM from
 repeating its initial exploration.
 
 ### Iteration expectations (soft minimum via GIoT)
 
 The Reflect step includes soft guidance that round 1 should rarely produce
-"certain" confidence. This provides directional pressure without forcing
+"high" confidence. This provides directional pressure without forcing
 unnecessary iterations on trivial tasks.
 
 ---
@@ -275,13 +260,7 @@ The reset must happen in `on_loop_back()`, not in `get_next_step()`.
 
 `koan_set_confidence` is gated to the intake role via permissions.
 
-### Don't allow koan_set_confidence during Deliberate (step 3)
-
-Without this gate, the LLM sets confidence during Deliberate, anchoring the
-subsequent Reflect step toward "certain". Confidence assessment must happen
-only during Reflect (step 4).
-
-### Don't make the "NOT certain" checklist vacuously satisfiable
+### Don't make the "NOT high" checklist vacuously satisfiable
 
 Every condition must be non-vacuously testable. Prefer conditions that require
 positive evidence: "you have not asked any questions" is mechanically true or

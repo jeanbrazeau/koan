@@ -257,9 +257,5 @@ Key projection fields common to all roles:
 | `tokens_sent`     | number | Cumulative tokens in                                    |
 | `tokens_received` | number | Cumulative tokens out                                   |
 
-Intake-specific fields (zero/null for all other roles):
-
-| Field               | Type                                                    | Meaning                          |
-| ------------------- | ------------------------------------------------------- | -------------------------------- |
-| `intake_confidence` | `"exploring"\|"low"\|"medium"\|"high"\|"certain"\|null` | Last confidence level            |
-| `intake_iteration`  | number                                                  | Current loop iteration (1-based) |
+Intake confidence and iteration counters are tracked in the in-memory
+`PhaseContext` during execution and are not persisted to the audit projection.

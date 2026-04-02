@@ -343,11 +343,11 @@ Agent registration and deregistration are tracked in the in-process
 
 Intake sub-phase derivation happens server-side based on step number:
 
-| Step | Pending ask? | Sub-phase      |
-| ---- | ------------ | -------------- |
-| 1    | --           | `"extract"`    |
-| 2    | --           | `"scout"`      |
-| 3    | yes          | `"questions"`  |
-| 3    | no           | `"deliberate"` |
-| 4    | --           | `"reflect"`    |
-| 5    | --           | `"synthesize"` |
+| Step | Pending ask? | Sub-phase   |
+| ---- | ------------ | ----------- |
+| 1    | --           | `"extract"` |
+| 2    | --           | `"scout"`   |
+| 3    | yes          | `"ask"`     |
+| 3    | no           | `"ask"`     |
+| 4    | --           | `"reflect"` |
+| 5    | --           | `"write"`   |
