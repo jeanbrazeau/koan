@@ -26,59 +26,40 @@ def _ctx(**kw) -> PhaseContext:
 # -- Intake --------------------------------------------------------------------
 
 class TestIntake:
-    # -- Linear progression (steps 1-3) ----------------------------------------
+    # -- Linear progression (steps 1-2) ----------------------------------------
 
-    @pytest.mark.parametrize("step", [1, 2, 3])
+    @pytest.mark.parametrize("step", [1, 2])
     def test_linear_steps(self, step):
         assert intake.get_next_step(step, _ctx()) == step + 1
 
-    # -- Confidence gate (step 4) ----------------------------------------------
+    # -- Review gate (step 3) --------------------------------------------------
 
-    def test_step_4_high_confidence_advances_to_5(self):
-        assert intake.get_next_step(4, _ctx(intake_confidence="high")) == 5
+    def test_step_3_accepted_completes(self):
+        assert intake.get_next_step(3, _ctx(last_review_accepted=True)) is None
 
-    def test_step_4_medium_confidence_loops_to_2(self):
-        assert intake.get_next_step(4, _ctx(intake_confidence="medium")) == 2
+    def test_step_3_not_accepted_loops(self):
+        assert intake.get_next_step(3, _ctx(last_review_accepted=False)) == 3
 
-    def test_step_4_low_confidence_loops_to_2(self):
-        assert intake.get_next_step(4, _ctx(intake_confidence="low")) == 2
-
-    def test_step_4_no_confidence_loops_to_2(self):
-        assert intake.get_next_step(4, _ctx(intake_confidence=None)) == 2
-
-    def test_validate_step_4_requires_confidence(self):
-        result = intake.validate_step_completion(4, _ctx(intake_confidence=None))
-        assert result is not None
-        assert "koan_set_confidence" in result
-
-    def test_validate_step_4_confidence_set_passes(self):
-        assert intake.validate_step_completion(4, _ctx(intake_confidence="medium")) is None
-
-    # -- Review gate (step 5) --------------------------------------------------
-
-    def test_step_5_accepted_completes(self):
-        assert intake.get_next_step(5, _ctx(last_review_accepted=True)) is None
-
-    def test_step_5_not_accepted_loops(self):
-        assert intake.get_next_step(5, _ctx(last_review_accepted=False)) == 5
-
-    def test_validate_step_5_never_reviewed(self):
-        result = intake.validate_step_completion(5, _ctx(last_review_accepted=None))
+    def test_validate_step_3_never_reviewed(self):
+        result = intake.validate_step_completion(3, _ctx(last_review_accepted=None))
         assert result is not None
         assert "koan_review_artifact" in result
 
-    def test_validate_step_5_feedback_pending(self):
-        result = intake.validate_step_completion(5, _ctx(last_review_accepted=False))
+    def test_validate_step_3_feedback_pending(self):
+        result = intake.validate_step_completion(3, _ctx(last_review_accepted=False))
         assert result is not None
         assert "revision" in result.lower() or "feedback" in result.lower()
 
-    def test_validate_step_5_accepted(self):
-        assert intake.validate_step_completion(5, _ctx(last_review_accepted=True)) is None
+    def test_validate_step_3_accepted(self):
+        assert intake.validate_step_completion(3, _ctx(last_review_accepted=True)) is None
 
     # -- No gate on other steps ------------------------------------------------
 
     def test_validate_step_1_no_gate(self):
         assert intake.validate_step_completion(1, _ctx()) is None
+
+    def test_validate_step_2_no_gate(self):
+        assert intake.validate_step_completion(2, _ctx()) is None
 
 
 # -- Brief Writer --------------------------------------------------------------
@@ -185,19 +166,11 @@ class TestLinearModules:
 # -- Purity invariant ----------------------------------------------------------
 
 class TestPurity:
-    def test_intake_confidence_gate_purity(self):
-        ctx = _ctx(intake_confidence="medium")
-        ctx_copy = copy.deepcopy(ctx)
-        r1 = intake.get_next_step(4, ctx)
-        r2 = intake.get_next_step(4, ctx)
-        assert r1 == r2
-        assert ctx == ctx_copy
-
     def test_intake_review_gate_purity(self):
         ctx = _ctx(last_review_accepted=False)
         ctx_copy = copy.deepcopy(ctx)
-        r1 = intake.get_next_step(5, ctx)
-        r2 = intake.get_next_step(5, ctx)
+        r1 = intake.get_next_step(3, ctx)
+        r2 = intake.get_next_step(3, ctx)
         assert r1 == r2
         assert ctx == ctx_copy
 

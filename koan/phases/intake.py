@@ -1,14 +1,10 @@
-# Intake phase -- 5-step workflow with confidence-gated loop.
+# Intake phase -- 3-step workflow.
 #
-#   Step 1 (Extract)  -- read-only comprehension of conversation.jsonl
-#   Step 2 (Scout)    -- dispatch codebase scouts, analyze results
-#   Step 3 (Ask)      -- enumerate knowns/unknowns, ask questions, follow up
-#   Step 4 (Reflect)  -- verify completeness, set confidence via koan_set_confidence
-#   Step 5 (Write)    -- write landscape.md, present for user review
+#   Step 1 (Gather)   -- read conversation, explore obvious files, dispatch scouts
+#   Step 2 (Evaluate) -- process scout results, verify, ask questions
+#   Step 3 (Write)    -- write landscape.md, present for user review
 #
-# Confidence gate: step 4 -> step 5 only when confidence is "high".
-# Otherwise loops back to step 2 (Scout) for another iteration.
-# Step 5 is review-gated: blocks until koan_review_artifact accepted.
+# Step 3 is review-gated: blocks until koan_review_artifact accepted.
 
 from __future__ import annotations
 
@@ -16,14 +12,12 @@ from . import PhaseContext, StepGuidance
 from .review_protocol import REVIEW_PROTOCOL
 
 ROLE = "intake"
-TOTAL_STEPS = 5
+TOTAL_STEPS = 3
 
 STEP_NAMES: dict[int, str] = {
-    1: "Extract",
-    2: "Scout",
-    3: "Ask",
-    4: "Reflect",
-    5: "Write",
+    1: "Gather",
+    2: "Evaluate",
+    3: "Write",
 }
 
 SYSTEM_PROMPT = (
@@ -114,9 +108,8 @@ SYSTEM_PROMPT = (
     "\n"
     "## Workflow\n"
     "\n"
-    "You work in stages: read the conversation, scout the codebase, ask the user"
-    " questions, verify your understanding, and write landscape.md. Each step"
-    " builds on the previous one.\n"
+    "You work in three steps: gather context (conversation + codebase + scouts),"
+    " evaluate findings and ask questions, then write landscape.md.\n"
     "\n"
     "## Output\n"
     "\n"
@@ -141,7 +134,9 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
     if step == 1:
         conversation_path = f"{ctx.epic_dir}/conversation.jsonl"
         lines = [
-            "Read the conversation file. Build a thorough mental model of what is being requested.",
+            "Read the conversation, orient yourself in the codebase, and dispatch scouts.",
+            "",
+            "## 1. Read the conversation",
             "",
             f"Conversation file: {conversation_path}",
             "",
@@ -149,9 +144,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "Read entries with type 'message' and role 'user' or 'assistant'.",
             "Ignore internal entries (header, compaction, etc.).",
             "",
-            "## What to internalize",
-            "",
-            "As you read, track these categories:",
+            "As you read, track:",
             "- **Topic**: What is being built or changed?",
             "- **File references**: Every file, directory, or module mentioned.",
             "- **Decisions already made**: Only those explicitly stated and agreed upon.",
@@ -159,12 +152,59 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "- **Gaps**: Questions raised but unanswered. Things unclear or unstated that would affect story boundaries.",
             "- **Conventions mentioned**: Any references to coding standards, test approaches, doc standards, or patterns to follow.",
             "",
-            "## Rules for this step",
+            "Be faithful to what was said. Do not invent context or infer unstated decisions.",
             "",
-            "- Do NOT call koan_request_scouts, koan_ask_question, write, or edit.",
-            "- This step is read-only. Understand the conversation before acting on it.",
-            "- Be faithful to what was said. Do not invent context or infer unstated decisions.",
-            "- If the conversation references specific files or systems, note them -- you will scout those next.",
+            "## 2. Quick orientation -- open obvious files",
+            "",
+            "Open up to **5 files** that any investigation would start from:",
+            "",
+            "- `ls` the project root.",
+            "- Open root-level orientation files if they exist: README.md, AGENTS.md, CLAUDE.md.",
+            "- Open any file the conversation explicitly referenced -- skim structure,",
+            "  exports, key patterns (first 50-100 lines is enough).",
+            "- If the conversation mentions a module by name without a path, one",
+            "  `find` or `ls` to locate it, then open the entry point.",
+            "",
+            "Budget: 5 file reads max. This is orientation, not investigation.",
+            "Just enough to write scout prompts that reference actual function names,",
+            "actual patterns, and actual file paths instead of conversation labels.",
+            "",
+            "## 3. Plan and dispatch scouts",
+            "",
+            "Using the conversation and what you observed in the files, identify the",
+            "concerns that need investigation. Consider both:",
+            "",
+            "- What the conversation explicitly references (files, modules, integration",
+            "  points, assumptions that need verification, project conventions).",
+            "- What the conversation did NOT mention but could matter (hidden callers,",
+            "  related subsystems, prior art, invariants, test coverage).",
+            "",
+            "Group related concerns into **3-5 clusters**. Each cluster becomes one",
+            "scout. A scout is a broad investigator -- it can examine multiple files,",
+            "trace dependencies, and answer several related questions in a single run.",
+            "Merge concerns that touch the same area of the codebase or the same",
+            "conceptual boundary into one scout with a multi-part prompt.",
+            "",
+            "3-5 scouts is the target. Fewer than 3 means your prompts are probably",
+            "too broad to produce focused findings. More than 5 means you are splitting",
+            "related concerns that a single scout could cover together.",
+            "",
+            "Use `koan_request_scouts` to dispatch all scouts in a single call.",
+            "",
+            "Each scout needs:",
+            "- id: short kebab-case identifier (e.g., 'auth-and-permissions', 'data-layer')",
+            "- role: investigator focus (e.g., 'authentication auditor', 'dependency tracer')",
+            "- prompt: a rich, multi-part investigation brief. Tell the scout what area",
+            "  to explore, what questions to answer, and what to look for. Include file",
+            "  paths and function names from the orientation step. A good prompt is 3-8",
+            "  sentences covering the full cluster.",
+            "",
+            "Example of a well-scoped scout prompt:",
+            "  'Investigate the authentication subsystem rooted at src/auth/. Find all",
+            "   callers of verifyToken(), identify the middleware chain in server.ts,",
+            "   check whether session storage uses Redis or in-memory, and note any",
+            "   TODO or FIXME comments related to auth. Report the permission model",
+            "   (RBAC, ACL, or ad-hoc checks) and how it integrates with the router.'",
         ]
         if ctx.phase_instructions:
             lines.extend(["", "## Additional Context from Workflow Orchestrator", "", ctx.phase_instructions])
@@ -174,98 +214,27 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
         return StepGuidance(
             title=STEP_NAMES[2],
             instructions=[
-                "Based on your reading of the conversation, identify areas of the codebase that need exploration.",
+                "Analyze scout results, verify findings, and ask the user questions.",
                 "",
-                "## Step 1: Understand -- what questions need answers?",
-                "",
-                "Before doing anything else, articulate what you need to find out.",
-                "Walk through the conversation findings from Extract and list:",
-                "",
-                "- What areas of the codebase does this task touch?",
-                "- What assumptions did the user make that need verification?",
-                "- What integration points, dependencies, or constraints are unclear?",
-                "- What was NOT mentioned that could matter?",
-                "",
-                "This is your question list. Everything downstream serves it.",
-                "",
-                "## Step 2: Ground -- open the files the conversation named",
-                "",
-                "Now read the actual code for files the conversation explicitly referenced.",
-                "You noted them during Extract -- open them now.",
-                "",
-                "- `ls` the project root if you haven't already.",
-                "- Open each file or directory the conversation explicitly mentioned.",
-                "  Skim structure, exports, key patterns -- first 50-100 lines is enough.",
-                "- If the conversation mentions a module by name without a path, one",
-                "  `find` or `ls` to locate it, then open the entry point.",
-                "",
-                "Stop here. This is orientation, not investigation -- just enough to write",
-                "scout prompts that reference actual function names, actual patterns, and",
-                "actual file paths instead of conversation labels.",
-                "",
-                "## Step 3: Plan -- cluster into 3-5 scout investigations",
-                "",
-                "Using your question list and what you observed in the code, identify the",
-                "concerns that need investigation. Consider both:",
-                "",
-                "- What the conversation explicitly references (files, modules, integration",
-                "  points, assumptions that need verification, project conventions).",
-                "- What the conversation did NOT mention but could matter (hidden callers,",
-                "  related subsystems, prior art, invariants, test coverage).",
-                "",
-                "Now group related concerns into **3-5 clusters**. Each cluster becomes one",
-                "scout. A scout is a broad investigator -- it can examine multiple files,",
-                "trace dependencies, and answer several related questions in a single run.",
-                "Merge concerns that touch the same area of the codebase or the same",
-                "conceptual boundary into one scout with a multi-part prompt.",
-                "",
-                "3-5 scouts is the target. Fewer than 3 means your prompts are probably",
-                "too broad to produce focused findings. More than 5 means you are splitting",
-                "related concerns that a single scout could cover together.",
-                "",
-                "## Step 4: Execute -- dispatch scouts",
-                "",
-                "Use `koan_request_scouts` to dispatch all scouts in a single call.",
-                "",
-                "Each scout needs:",
-                "- id: short kebab-case identifier (e.g., 'auth-and-permissions', 'data-layer')",
-                "- role: investigator focus (e.g., 'authentication auditor', 'dependency tracer')",
-                "- prompt: a rich, multi-part investigation brief. Tell the scout what area",
-                "  to explore, what questions to answer, and what to look for. Include file",
-                "  paths and function names from the Ground step. A good prompt is 3-8",
-                "  sentences covering the full cluster.",
-                "",
-                "Example of a well-scoped scout prompt:",
-                "  'Investigate the authentication subsystem rooted at src/auth/. Find all",
-                "   callers of verifyToken(), identify the middleware chain in server.ts,",
-                "   check whether session storage uses Redis or in-memory, and note any",
-                "   TODO or FIXME comments related to auth. Report the permission model",
-                "   (RBAC, ACL, or ad-hoc checks) and how it integrates with the router.'",
-                "",
-                "## Step 5: Analyze results",
+                "## 1. Analyze scout results",
                 "",
                 "When scouts return, analyze each report:",
                 "- Does the finding answer the questions you asked?",
                 "- Does it reveal anything unexpected about the codebase?",
-                "- Does it raise new questions that need user input?",
+                "- Does it conflict with what the conversation stated?",
                 "",
-                "If a finding reveals a concrete gap -- a specific file, dependency, or",
-                "integration point that no scout covered and that affects scope -- dispatch",
-                "1-2 targeted follow-up scouts. Do not dispatch follow-ups for vague",
-                "curiosity or marginal coverage improvements.",
+                "## 2. Verify -- read files to confirm",
                 "",
-                "Do NOT ask the user questions in this step -- that happens in the Ask step.",
-            ],
-        )
-
-    if step == 3:
-        return StepGuidance(
-            title=STEP_NAMES[3],
-            instructions=[
-                "Before asking questions, explicitly enumerate what you know and what you don't.",
-                "This grounds your questions in reality and prevents asking things already answered.",
+                "Scouts are good at exploration but their output should be verified.",
+                "For key findings that affect scope or story boundaries, open the",
+                "actual files and confirm what the scout reported. This is especially",
+                "important for:",
                 "",
-                "## Phase A: Recite what you know",
+                "- Integration points the scout identified",
+                "- Patterns or conventions the scout claims to have found",
+                "- Anything that conflicts with what the conversation stated",
+                "",
+                "## 3. Enumerate what you know and what you don't",
                 "",
                 "Walk through each area relevant to the task and state what you have learned.",
                 "Use this structure for each area:",
@@ -275,15 +244,16 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "  - Unknown: [what remains unclear or unverified]",
                 "  - Source: [conversation / scout findings]",
                 "",
-                "Cover every area relevant to the task. Be thorough -- gaps you miss here become gaps in the final output.",
+                "Cover every area relevant to the task. Be thorough -- gaps you miss here",
+                "become gaps in the final output.",
                 "",
                 "Include project conventions as an area: where are coding style, testing strategy,",
                 "architecture patterns, and documentation standards defined? If not explicitly",
                 "documented, note whether they are emergent from code patterns or absent entirely.",
                 "",
-                "## Phase A.5: Downstream impact assessment",
+                "## 4. Downstream impact assessment",
                 "",
-                "For each 'Unknown' item from Phase A, briefly assess:",
+                "For each 'Unknown' item, briefly assess:",
                 "- If you assume wrong about this, what happens to downstream planning?",
                 "- Could a wrong assumption split a story that should be one, or merge two that should be separate?",
                 "- Would the executor hit a surprise that requires re-planning?",
@@ -294,10 +264,9 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "",
                 "Mark each unknown as:",
                 "- **ASK**: user input needed -- this affects scope, boundaries, or sequencing.",
-                "- **SCOUT**: a follow-up scout can resolve this factually -- note for the Reflect step.",
                 "- **SAFE**: genuinely an implementation detail with no scope impact.",
                 "",
-                "## Phase B: Formulate and ask questions",
+                "## 5. Ask questions",
                 "",
                 "For each 'Unknown' marked ASK, ask yourself: if I get this wrong, does it affect",
                 "the decomposer's ability to define correct story boundaries? If yes or maybe -- ask.",
@@ -317,7 +286,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "Include the optional context field when background is needed for an informed decision.",
                 "Ground questions in specific findings: 'Scout found X -- should this story follow the same pattern?'",
                 "",
-                "## Phase C: Process answers and follow up",
+                "## 6. Process answers and follow up",
                 "",
                 "When answers arrive, think through each one carefully:",
                 "",
@@ -337,56 +306,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             ],
         )
 
-    if step == 4:
-        return StepGuidance(
-            title=STEP_NAMES[4],
-            instructions=[
-                "Step back and verify the completeness of your understanding. This is the last",
-                "chance to gather information before writing landscape.md.",
-                "",
-                "## Verification questions",
-                "",
-                "Generate 3-5 questions that test whether your understanding is complete.",
-                "Frame them from the decomposer's perspective -- the decomposer must split this work into stories.",
-                "",
-                "Example verification questions:",
-                "- 'Could I define the boundary between story 1 and story 2 right now?'",
-                "- 'If the user's codebase uses pattern X (per scout), does our understanding account for that?'",
-                "- 'Are there any user decisions that could split one story into two or merge two into one?'",
-                "",
-                "## Answer each question",
-                "",
-                "Answer each verification question using ONLY evidence you have:",
-                "- Direct quotes or facts from the conversation",
-                "- Specific findings from scouts",
-                "- Explicit answers from the user",
-                "",
-                "If you cannot answer a verification question with evidence, that is a gap.",
-                "",
-                "## Act on gaps",
-                "",
-                "If you identified gaps:",
-                "",
-                "- **Need codebase information?** Dispatch scouts via `koan_request_scouts`.",
-                "  Analyze the results when they return.",
-                "- **Need user input?** Ask via `koan_ask_question`. Think through the answers.",
-                "- **Need to read specific files?** Read them directly with read tools.",
-                "",
-                "## Set confidence",
-                "",
-                "After resolving gaps (or confirming none remain), you MUST call `koan_set_confidence`",
-                "to declare your confidence level before completing this step.",
-                "",
-                "- `high` -- you are confident the understanding is complete and ready for synthesis.",
-                "- `medium` -- some areas are uncertain; another Scout/Ask cycle would help.",
-                "- `low` -- significant gaps remain; another iteration is needed.",
-                "",
-                "If confidence is not high, the workflow will loop back to the Scout step",
-                "for another iteration. If confidence is high, you will proceed to write landscape.md.",
-            ],
-        )
-
-    if step == 5:
+    if step == 3:
         lines = [
             f"Write `{ctx.epic_dir}/landscape.md`."
             if ctx.epic_dir
@@ -488,7 +408,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 ' and description "Landscape document -- background information for downstream planning".'
             ),
         ]
-        return StepGuidance(title=STEP_NAMES[5], instructions=lines)
+        return StepGuidance(title=STEP_NAMES[3], instructions=lines)
 
     return StepGuidance(title=f"Step {step}", instructions=[f"Execute step {step}."])
 
@@ -496,28 +416,16 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
 # -- Lifecycle -----------------------------------------------------------------
 
 def get_next_step(step: int, ctx: PhaseContext) -> int | None:
-    if step < 4:
+    if step < 3:
         return step + 1
-    # Step 4 (Reflect): confidence gate.
-    if step == 4:
-        if ctx.intake_confidence == "high":
-            return 5
-        return 2  # loop back to Scout
-    # Step 5 (Write): review-gated.
+    # Step 3 (Write): review-gated.
     if ctx.last_review_accepted is True:
         return None
-    return 5
+    return 3
 
 
 def validate_step_completion(step: int, ctx: PhaseContext) -> str | None:
-    if step == 4:
-        if ctx.intake_confidence is None:
-            return (
-                "You must call koan_set_confidence to declare your confidence level"
-                " before completing the Reflect step."
-            )
-        return None
-    if step == 5:
+    if step == 3:
         if ctx.last_review_accepted is None:
             return "You must call koan_review_artifact to present landscape.md for review before completing this step."
         if ctx.last_review_accepted is False:
@@ -527,5 +435,4 @@ def validate_step_completion(step: int, ctx: PhaseContext) -> str | None:
 
 
 async def on_loop_back(from_step: int, to_step: int, ctx: PhaseContext) -> None:
-    ctx.intake_iteration += 1
-    ctx.intake_confidence = None
+    pass  # no loop-back in current workflow

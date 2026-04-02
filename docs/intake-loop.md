@@ -1,7 +1,7 @@
-# Intake Loop Design
+# Intake Phase Design
 
-How the intake phase implements a confidence-gated investigation loop, and the
-prompt engineering principles that govern it.
+How the intake phase gathers context in three steps, and the prompt
+engineering principles that govern it.
 
 > Parent doc: [architecture.md](./architecture.md)
 > Related: [subagents.md -- Step-First Workflow](./subagents.md#step-first-workflow)
@@ -17,256 +17,151 @@ produced downstream depends on the completeness and accuracy of that file.
 Gaps in `landscape.md` compound: a missed decision becomes a wrong story
 boundary becomes a wrong plan becomes wrong code.
 
-This weight justifies a more elaborate workflow than other phases. Rather than
-a fixed sequence of steps, intake runs a **confidence-gated loop**: the LLM
-scouts the codebase, enumerates what it knows, asks the user questions, and
-then explicitly self-verifies its understanding. The loop repeats until the
-LLM declares "high" confidence that the decomposer has everything it needs.
+The intake phase runs a focused **three-step workflow**: gather context
+(conversation + codebase orientation + scouts), evaluate findings and ask the
+user questions, then write `landscape.md`.
 
 ### Step structure
 
-| Step | Name    | Runs | Purpose                                                                         |
-| ---- | ------- | ---- | ------------------------------------------------------------------------------- |
-| 1    | Extract | 1x   | Read conversation input. No side effects.                                       |
-| 2    | Scout   | 1-4x | Dispatch codebase investigators.                                                |
-| 3    | Ask     | 1-4x | Enumerate knowns/unknowns, ask user questions.                                  |
-| 4    | Reflect | 1-4x | Self-verify completeness, declare confidence.                                   |
-| 5    | Write   | 1x   | Write `landscape.md`. Review gate: calls `koan_review_artifact` before completing. |
+| Step | Name     | Runs | Purpose                                                                           |
+| ---- | -------- | ---- | --------------------------------------------------------------------------------- |
+| 1    | Gather   | 1x   | Read conversation, open obvious files (≤5), dispatch 3-5 scouts.                  |
+| 2    | Evaluate | 1x   | Process scout results, verify by reading files, enumerate knowns/unknowns, ask Qs. |
+| 3    | Write    | 1x   | Write `landscape.md`. Review gate: calls `koan_review_artifact` before completing.  |
 
-Steps 2-4 form the loop. Each call to `koan_complete_step` during these steps
-either returns the next step in sequence or loops back from step 4 to step 2.
-Steps 1 and 5 execute exactly once.
+Step 3 is review-gated: it blocks until `koan_review_artifact` is accepted.
+All other steps advance linearly.
 
 ---
 
-## Non-Linear Step Progression
+## Step Design
 
-### `get_next_step()` hook
+### Step 1: Gather
 
-The default step engine provides linear progression: `step+1` until
-`total_steps`, then `None` (done). Phase modules override `get_next_step(step, ctx)`
-to implement non-linear flows.
+The Gather step combines what was previously three separate activities
+(reading the conversation, orienting in the codebase, and dispatching scouts)
+into a single `koan_complete_step` cycle. This avoids the latency and context
+re-derivation overhead of artificially separating them.
 
-`koan/phases/intake.py` overrides this to implement the confidence gate:
+The step has a **5-file budget** for initial exploration: project root listing,
+orientation files (README.md, AGENTS.md, CLAUDE.md), and files the conversation
+explicitly referenced. This is enough to write scout prompts that reference
+actual function names and file paths rather than conversation labels.
 
-```python
-def get_next_step(step, ctx):
-    """Pure query -- returns where to go, does not mutate state."""
-    if step == 4:                          # Reflect step
-        if confidence == "high":
-            return 5                       # -> Write
-        return 2                           # -> Scout (loop back)
-    if step == 5:
-        return None                        # Write -> done
-    return step + 1                        # linear for steps 1-3
-```
+No read-only permission gate -- the Gather step has full access to all intake
+tools including `koan_request_scouts`.
 
-```python
-def on_loop_back(from_step, to_step, ctx):
-    """Side effects of the loop-back decision live here, not in get_next_step()."""
-    ctx.iteration += 1
-    ctx.intake_confidence = None           # reset for next round
-```
+### Step 2: Evaluate
 
-`get_next_step()` is a **pure query** -- it only decides where to go. All side
-effects (counter increments, state resets, event emission) belong in
-`on_loop_back()`, which the step engine calls whenever `get_next_step()` returns
-a step number less than the current one.
+The Evaluate step processes scout results, verifies findings by reading source
+files directly, enumerates knowns and unknowns with a downstream impact
+assessment, and asks the user targeted questions.
 
-All other phase modules inherit the default linear behavior. The hook localizes
-non-linear logic to the one module that needs it without touching other phases.
+Key properties:
+- **Scout verification**: Scouts are good at exploration but their output should
+  be confirmed. The Evaluate step reads actual files to verify key scout findings
+  that affect scope or story boundaries.
+- **Thread-of-Thought enumeration**: The step walks through each area relevant
+  to the task, explicitly stating what is known and unknown before formulating
+  questions. This surfaces gaps that would otherwise go unnoticed.
+- **Impact classification**: Each unknown is classified as ASK (user input
+  needed) or SAFE (implementation detail). Only ASK items become questions.
+- **Default-ask framing**: Question-asking is the default; skipping requires
+  triple justification. This inverts the typical LLM bias toward advancing.
 
-### `total_steps` semantics with a loop
+### Step 3: Write
 
-For the intake phase, `total_steps = 5` reflects the number of distinct step
-definitions, not the number of `koan_complete_step` calls. The loop may
-execute steps 2-4 multiple times, with the total calls depending on when high
-confidence is reached.
+The Write step produces `landscape.md` with required sections (Task Summary,
+Prior Art, Codebase Findings, Project Conventions, Decisions, Constraints,
+Open Items). Review-gated: the step calls `koan_review_artifact` and loops
+on step 3 until the user accepts.
 
 ---
 
-## The Confidence Gate
-
-### Why a separate tool, not a parameter
-
-`koan_set_confidence` is a dedicated tool rather than a parameter on
-`koan_complete_step` for two reasons:
-
-1. **Optional parameters are skippable.** LLMs frequently omit optional
-   parameters, especially when under token pressure. A separate tool call is
-   harder to skip accidentally.
-
-2. **`koan_complete_step` is shared across all phases.** Adding confidence to
-   it would bloat the parameter schema for roles that never set confidence.
-   A dedicated `koan_set_confidence` tool, restricted to the intake role via
-   permissions, keeps the boundary clean.
-
-### Mandatory enforcement via `validate_step_completion()`
+## Review Gate
 
 The step engine calls `validate_step_completion(step, ctx)` before
-`get_next_step()`. It returns None to allow advancement or an error string that
-is returned as the `koan_complete_step` tool result -- the LLM sees it and
-must fix the pre-condition before retrying.
-
-The intake phase uses this to enforce that `koan_set_confidence` was called in
-the Reflect step:
+`get_next_step()`. For step 3, it verifies that `koan_review_artifact` was
+called and accepted:
 
 ```python
 def validate_step_completion(step, ctx):
-    if step == 4 and ctx.intake_confidence is None:
-        return "You must call koan_set_confidence before completing the Reflect step."
+    if step == 3:
+        if ctx.last_review_accepted is None:
+            return "You must call koan_review_artifact..."
+        if ctx.last_review_accepted is False:
+            return "The user requested revisions..."
     return None
 ```
 
-### Confidence reset on loop-back
-
-When `get_next_step()` returns step 2 (loop-back), the step engine detects the
-backward transition and calls `on_loop_back()`. The intake module's
-`on_loop_back()` resets `ctx.intake_confidence = None`. This ensures that in
-the next Reflect step, the LLM must call `koan_set_confidence` again.
-
----
-
-## Step-Aware Permission Gating
-
-The permission fence in `koan/lib/permissions.py` accepts the current step
-context and blocks specific tools during steps where they would undermine the
-workflow.
-
-### Step 1 (Extract): read-only
-
-Step 1 should only read the conversation. Without a mechanical gate, the LLM
-frontloads all work into step 1.
-
-`check_permission()` blocks all side-effecting tools when
-`role == "intake" and intake_step == 1`:
-
+```python
+def get_next_step(step, ctx):
+    if step < 3:
+        return step + 1
+    if ctx.last_review_accepted is True:
+        return None  # done
+    return 3  # loop on review
 ```
-koan_request_scouts, koan_ask_question, write, edit
-```
-
-### Prompt + enforcement is not redundant
-
-The prompt tells the LLM not to use side-effecting tools in step 1. The
-permission gate is a fallback that catches prompt non-compliance. Together:
-the prompt prevents the behavior; the gate catches it when the prompt fails.
-
----
-
-## Audit Events and SSE Propagation
-
-Two audit event types support UI visualization of confidence and iteration:
-
-| Event               | Emitted by                         | When                              |
-| ------------------- | ---------------------------------- | --------------------------------- |
-| `confidence_change` | `koan_set_confidence` tool         | Every call to koan_set_confidence |
-| `iteration_start`   | `on_loop_back()` + step transition | At every loop iteration start     |
-
-Both events are folded into the `state.json` projection:
-
-- `confidence_change` -> `intake_confidence`, `intake_iteration`
-- `iteration_start` -> `intake_iteration`
-
-Audit events are pushed directly from the tool handlers and step engine -- no
-polling loop. Browser-visible intake state (current phase, confidence level) is
-derived from `agent_step_advanced` and `phase_started` projection events, which
-the frontend renders from the Zustand store.
 
 ---
 
 ## Prompt Engineering Principles
 
-The intake loop prompts apply several techniques from the prompting literature.
+The intake prompts apply several techniques from the prompting literature.
 This section records the reasoning so future changes don't inadvertently remove
 mechanisms that address specific failure modes.
 
-### Prompt Chaining over Stepwise (Scout / Ask / Reflect as separate steps)
+### MARP (Maximizing Operations per Step)
 
-A monolithic "investigate" step is rejected in favor of three separate
-`koan_complete_step` calls. The risk with a monolithic step is **simulated
-refinement**: the LLM artificially degrades its initial output to manufacture
-visible improvement. Separate steps enforce genuinely isolated reasoning.
+The three-step structure applies the MARP principle: maximize operations
+per `koan_complete_step` call while minimizing planning or meta-reasoning
+steps. Each step does real work across multiple activities rather than
+artificially separating them into sequential tool calls.
 
-### Thread-of-Thought in Ask (explicit enumeration before questions)
+### Thread-of-Thought in Evaluate (explicit enumeration before questions)
 
-The Ask step instructs the LLM to walk through each area and explicitly
+The Evaluate step instructs the LLM to walk through each area and explicitly
 state what is known, unknown, and its source -- before formulating questions.
 This surfaces gaps that are not top-of-mind.
 
-### Anticipatory Reflection in Ask (downstream impact assessment)
-
-Between enumeration and question formulation, the Ask step includes a
-downstream impact assessment. Each unknown is classified as ASK (user input
-needed), SCOUT (follow-up can resolve), or SAFE (implementation detail).
-
 ### Default-ask question framing (preventing question avoidance)
 
-The Ask step frames question-asking as the default, with skipping
+The Evaluate step frames question-asking as the default, with skipping
 requiring triple justification. This inverts the typical LLM bias toward
 advancing the workflow.
-
-### Chain-of-Verification in Reflect (evidence-grounded self-assessment)
-
-The Reflect step instructs the LLM to generate 3-5 verification questions
-framed from the decomposer's perspective, then answer each using only concrete
-evidence. This is the Chain-of-Verification (CoVe) pattern.
-
-### Contrastive confidence definitions (preventing premature "high")
-
-The Reflect step provides both positive ("high confidence means ALL of these
-are true") and negative ("you do NOT have high confidence if ANY of these are
-true") definitions.
-The negative examples make failure modes concrete and explicit.
 
 ### Stakes framing (EmotionPrompt for accountability)
 
 The system prompt includes: "A question you don't ask is an answer you're
 making up." This connects intake shortcuts directly to downstream failures.
 
-### Iteration-aware guidance (first iteration vs. refinement)
+### Contrastive examples for thinking density
 
-Steps 2 (Scout) and 3 (Ask) produce different instruction text for
-the first iteration vs. subsequent iterations. This prevents the LLM from
-repeating its initial exploration.
-
-### Iteration expectations (soft minimum via GIoT)
-
-The Reflect step includes soft guidance that round 1 should rarely produce
-"high" confidence. This provides directional pressure without forcing
-unnecessary iterations on trivial tasks.
+The system prompt includes WRONG → RIGHT examples for processing scout reports,
+resolving conflicts, and classifying unknowns. These demonstrate the target
+density for internal reasoning without affecting tool arguments or written
+artifacts.
 
 ---
 
 ## Pitfalls
 
-### Don't put confidence in koan_complete_step's `thoughts` parameter
+### Don't re-add a step-1 read-only gate for intake
 
-`thoughts` is an escape hatch for models that can't mix text + tool_call.
-Parsing it for routing decisions would violate driver determinism. Confidence
-must flow through a structured tool call.
+Intake's Gather step needs all tools (especially `koan_request_scouts`) from
+the start. The brief-writer still has a step-1 read-only gate, but intake
+does not.
 
-### Don't rely on the Reflect prompt alone to enforce koan_set_confidence
+### Don't add a confidence loop
 
-The `validate_step_completion()` hook is the mechanical enforcement layer.
-Both prompt and hook must be present.
+Previous iterations had a confidence-gated loop (steps 2-4 repeating).
+This was removed because: (a) it produced unnecessary second scout batches,
+(b) the self-verification step (Reflect) risked intrinsic self-correction
+without external grounding, and (c) one focused pass is sufficient when the
+Evaluate step is thorough.
 
-### Don't remove the confidence null-reset on loop-back
+### Don't separate scout verification from question-asking
 
-Without this reset, `validate_step_completion()` sees the old confidence value
-and allows advancement without the LLM calling `koan_set_confidence` again.
-The reset must happen in `on_loop_back()`, not in `get_next_step()`.
-
-### Don't add koan_set_confidence to non-intake roles
-
-`koan_set_confidence` is gated to the intake role via permissions.
-
-### Don't make the "NOT high" checklist vacuously satisfiable
-
-Every condition must be non-vacuously testable. Prefer conditions that require
-positive evidence: "you have not asked any questions" is mechanically true or
-false based on whether `koan_ask_question` was called.
-
-### Don't skip step sync on loop-back
-
-The permission gate reads the current step at tool call time. If the step
-context is not updated on loop-back, gates fire at the wrong step.
+Scout result evaluation and question formulation are tightly coupled -- a scout
+finding directly informs what questions to ask. Separating them forces the LLM
+to defer questions it could ask immediately.

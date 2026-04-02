@@ -30,7 +30,6 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "koan_ask_question",
         "koan_request_scouts",
         "koan_review_artifact",
-        "koan_set_confidence",
         "edit",
         "write",
     }),
@@ -130,16 +129,6 @@ def check_permission(
     # Read tools always allowed -- check before role map lookup.
     if tool_name in READ_TOOLS:
         return {"allowed": True, "reason": None}
-
-    # Intake step 1 (Extract) is read-only.
-    if role == "intake" and current_step == 1 and tool_name in STEP_1_BLOCKED_TOOLS:
-        return {
-            "allowed": False,
-            "reason": (
-                f"{tool_name} is not available during the Extract step (step 1). "
-                "Complete koan_complete_step first to advance to the Scout step."
-            ),
-        }
 
     # Brief-writer step 1 (Read) is read-only.
     if role == "brief-writer" and current_step == 1 and tool_name in STEP_1_BLOCKED_TOOLS:

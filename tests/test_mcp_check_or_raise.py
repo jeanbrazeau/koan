@@ -69,7 +69,7 @@ class TestPermissionDeniedEnvelope:
     def test_envelope_has_error_and_message(self):
         agent = _make_agent(role="scout")
         with pytest.raises(ToolError) as exc_info:
-            _check_or_raise(agent, "koan_set_confidence", {"level": "high"})
+            _check_or_raise(agent, "koan_ask_question", {"questions": []})
         body = json.loads(str(exc_info.value))
         assert body["error"] == "permission_denied"
         assert "message" in body

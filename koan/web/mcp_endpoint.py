@@ -3,7 +3,7 @@
 # Exposes build_mcp_asgi_app() which returns an ASGI sub-app that:
 #   1. Validates agent_id from query params before reaching fastmcp.
 #   2. Runs check_permission() on every tool call.
-#   3. Implements koan_complete_step, koan_set_confidence, koan_request_scouts,
+#   3. Implements koan_complete_step, koan_request_scouts,
 #      koan_ask_question, koan_review_artifact, koan_propose_workflow,
 #      koan_set_next_phase.
 
@@ -174,27 +174,6 @@ async def koan_complete_step(thoughts: str = "") -> str:
         return result_str
     finally:
         end_tool_call(agent, call_id, "koan_complete_step", result_str)
-
-
-@mcp.tool(name="koan_set_confidence")
-async def koan_set_confidence(level: str = "") -> str:
-    agent = _get_agent()
-    _check_or_raise(agent, "koan_set_confidence", {"level": level})
-
-    call_id = begin_tool_call(agent, "koan_set_confidence", {"level": level}, level)
-    result_str: str | None = None
-    try:
-        valid_levels = {"high", "medium", "low"}
-        if level not in valid_levels:
-            raise ToolError(
-                json.dumps({"error": "invalid_confidence", "message": f"level must be one of {valid_levels}"})
-            )
-
-        agent.phase_ctx.intake_confidence = level
-        result_str = f"Confidence set to {level}."
-        return result_str
-    finally:
-        end_tool_call(agent, call_id, "koan_set_confidence", result_str)
 
 
 @mcp.tool(name="koan_request_scouts")

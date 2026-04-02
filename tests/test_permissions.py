@@ -55,16 +55,11 @@ class TestStep1Blocking:
     def setup_method(self):
         self.blocked = list(STEP_1_BLOCKED_TOOLS)
 
-    def test_intake_step_1_blocks(self):
+    def test_intake_step_1_allows(self):
+        """Intake no longer blocks tools at step 1 (gather step uses all tools)."""
         for tool in self.blocked:
             r = check_permission("intake", tool, current_step=1)
-            assert not r["allowed"], f"intake step 1 should block {tool}"
-            assert "step 1" in r["reason"].lower()
-
-    def test_intake_step_2_allows(self):
-        for tool in self.blocked:
-            r = check_permission("intake", tool, current_step=2)
-            assert r["allowed"], f"intake step 2 should allow {tool}"
+            assert r["allowed"], f"intake step 1 should allow {tool}"
 
     def test_brief_writer_step_1_blocks(self):
         for tool in self.blocked:
@@ -116,13 +111,15 @@ class TestExhaustiveRoleToolMatrix:
 # -- Exhaustive step-1 matrix -------------------------------------------------
 
 def _build_step1_matrix():
-    """For intake and brief-writer at step 1, verify blocked tools are denied
-    and all other allowed tools still pass."""
+    """For brief-writer at step 1, verify blocked tools are denied
+    and all other allowed tools still pass.  Intake no longer has a
+    step-1 gate so its step-1 expectations match normal permissions."""
     cases = []
     for role in ("intake", "brief-writer"):
         allowed_set = ROLE_PERMISSIONS[role] | READ_TOOLS
         for tool in sorted(ALL_KOAN_TOOLS):
-            if tool in STEP_1_BLOCKED_TOOLS:
+            # Only brief-writer blocks tools at step 1; intake does not.
+            if role == "brief-writer" and tool in STEP_1_BLOCKED_TOOLS:
                 expected = False
             elif tool in allowed_set:
                 expected = True
@@ -145,25 +142,6 @@ class TestExhaustiveStep1Matrix:
         assert r["allowed"] == expected, (
             f"role={role} step=1 tool={tool}: expected allowed={expected}, got {r}"
         )
-
-
-# -- Intake koan_set_confidence access -----------------------------------------
-
-class TestIntakeConfidenceTool:
-    def test_intake_can_call_set_confidence(self):
-        r = check_permission("intake", "koan_set_confidence", current_step=4)
-        assert r["allowed"]
-
-    def test_intake_set_confidence_blocked_step_1(self):
-        """koan_set_confidence is not in STEP_1_BLOCKED_TOOLS, so it should
-        still be allowed at step 1 (permission layer does not block it)."""
-        r = check_permission("intake", "koan_set_confidence", current_step=1)
-        assert r["allowed"]
-
-    def test_non_intake_roles_cannot_call_set_confidence(self):
-        for role in ("scout", "decomposer", "brief-writer", "executor"):
-            r = check_permission(role, "koan_set_confidence", current_step=2)
-            assert not r["allowed"], f"{role} should not have koan_set_confidence"
 
 
 # -- Path scoping --------------------------------------------------------------
