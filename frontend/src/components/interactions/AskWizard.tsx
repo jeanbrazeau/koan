@@ -7,8 +7,9 @@ import { Md } from '../Md'
 // or dicts with varying key names. This is data cleaning for LLM output
 // variability — not business logic.
 function normalizeOptions(
-  rawOpts: (string | Record<string, unknown>)[],
+  rawOpts: (string | Record<string, unknown>)[] | undefined,
 ): { value: string; label: string; recommended?: boolean }[] {
+  if (!rawOpts) return []
   return rawOpts.map(o => {
     if (typeof o === 'string') return { value: o, label: o }
     const label = String(o['label'] ?? o['text'] ?? o['value'] ?? o['option'] ?? '')
