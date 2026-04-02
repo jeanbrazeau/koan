@@ -52,12 +52,14 @@ class _LegacyRunnerAdapter:
         installation_or_model: AgentInstallation | str | None = None,
         model: str | None = None,
         thinking: ThinkingMode = "disabled",
+        read_only: bool = False,
     ) -> list[str]:
         # New 5-arg style: (boot_prompt, mcp_url, installation, model, thinking)
         if isinstance(installation_or_model, AgentInstallation):
             return self._inner.build_command(
                 boot_prompt, mcp_url, installation_or_model,
                 model or self._inner.name, thinking,
+                read_only=read_only,
             )
         # Legacy 3-arg style: (boot_prompt, mcp_url, model_str)
         legacy_model = installation_or_model if isinstance(installation_or_model, str) else None
@@ -70,6 +72,7 @@ class _LegacyRunnerAdapter:
         return self._inner.build_command(
             boot_prompt, mcp_url, installation,
             legacy_model or self._inner.name, "disabled",
+            read_only=read_only,
         )
 
 

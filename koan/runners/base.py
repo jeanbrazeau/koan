@@ -45,6 +45,7 @@ class Runner(Protocol):
         installation: AgentInstallation,
         model: str,
         thinking: ThinkingMode,
+        read_only: bool = False,
     ) -> list[str]: ...
 
     def list_models(self, binary: str) -> list[ModelInfo]: ...

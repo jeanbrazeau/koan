@@ -110,6 +110,8 @@ PLANNING_ROLES: frozenset[str] = frozenset({
     "cross-artifact-validator",
 })
 
+READ_ONLY_ROLES: frozenset[str] = frozenset({"scout"})
+
 STEP_1_BLOCKED_TOOLS: frozenset[str] = frozenset({
     "koan_request_scouts",
     "koan_ask_question",

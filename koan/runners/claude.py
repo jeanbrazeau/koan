@@ -102,6 +102,7 @@ class ClaudeRunner:
         installation: AgentInstallation,
         model: str,
         thinking: ThinkingMode,
+        read_only: bool = False,
     ) -> list[str]:
         if thinking not in self.supported_thinking_modes:
             raise RunnerError(RunnerDiagnostic(
@@ -138,6 +139,8 @@ class ClaudeRunner:
         if thinking != "disabled":
             cmd.extend(["--effort", _EFFORT_MAP[thinking]])
         cmd.extend(["--model", model])
+        if read_only:
+            cmd.extend(["--disallowedTools", "Write,Edit"])
         cmd.extend(installation.extra_args)
         return cmd
 
