@@ -449,6 +449,8 @@ async def run_phase(
         "role": role,
         "epic_dir": epic_dir,
         "subagent_dir": subagent_dir,
+        "project_dir": app_state.project_dir,
+        "task_description": app_state.task_description,
         "instructions": instructions,
     }
 

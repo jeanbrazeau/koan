@@ -77,6 +77,7 @@ def _build_phase_ctx(task: dict, subagent_dir: str) -> PhaseContext:
         epic_dir=task.get("epic_dir", ""),
         subagent_dir=subagent_dir,
         project_dir=task.get("project_dir", ""),
+        task_description=task.get("task_description", ""),
         phase_instructions=task.get("instructions") or task.get("phase_instructions") or task.get("task"),
         story_id=task.get("story_id"),
         step_sequence=task.get("step_sequence"),

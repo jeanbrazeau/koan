@@ -54,6 +54,7 @@ class AppState:
     phase: EpicPhase = "intake"
     epic_dir: str | None = None
     project_dir: str = ""
+    task_description: str = ""
     start_event: asyncio.Event = field(default_factory=asyncio.Event)
     agents: dict[str, AgentState] = field(default_factory=dict)
     projection_store: ProjectionStore = field(default_factory=ProjectionStore)

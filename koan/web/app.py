@@ -324,13 +324,7 @@ async def api_start_run(r: Request) -> Response:
         {"task": task, "created_at": time.time()},
     )
 
-    # Write conversation.jsonl so the intake phase can read it
-    import aiofiles as _aiofiles
-    conv_line = json.dumps({"type": "message", "role": "user", "content": task})
-    conv_path = epic_dir / "conversation.jsonl"
-    async with _aiofiles.open(conv_path, "w") as _f:
-        await _f.write(conv_line + "\n")
-
+    st.task_description = task
     st.epic_dir = str(epic_dir)
     st.start_event.set()
 

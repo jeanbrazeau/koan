@@ -22,6 +22,7 @@ class PhaseContext:
     epic_dir: str
     subagent_dir: str
     project_dir: str = ""
+    task_description: str = ""
     phase_instructions: str | None = None
     intake_confidence: str | None = None
     intake_iteration: int = 0

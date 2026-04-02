@@ -1,6 +1,6 @@
 # Intake phase -- 3-step workflow.
 #
-#   Step 1 (Gather)   -- read conversation, explore obvious files, dispatch scouts
+#   Step 1 (Gather)   -- read task description, explore obvious files, dispatch scouts
 #   Step 2 (Evaluate) -- process scout results, verify, ask questions
 #   Step 3 (Write)    -- write landscape.md, present for user review
 #
@@ -21,8 +21,8 @@ STEP_NAMES: dict[int, str] = {
 }
 
 SYSTEM_PROMPT = (
-    "You are an intake analyst for a coding task planner. You read a conversation"
-    " history, explore the codebase, and ask the user targeted questions until you"
+    "You are an intake analyst for a coding task planner. You read a task"
+    " description, explore the codebase, and ask the user targeted questions until you"
     " have complete context for planning.\n"
     "\n"
     "Your output -- a single landscape.md file -- is the sole foundation for all"
@@ -43,7 +43,7 @@ SYSTEM_PROMPT = (
     "\n"
     "## Strict rules\n"
     "\n"
-    "- MUST NOT infer decisions not explicitly stated in the conversation.\n"
+    "- MUST NOT infer decisions not explicitly stated in the task description.\n"
     "- MUST NOT add architectural opinions or suggest approaches.\n"
     "- MUST NOT produce implementation recommendations.\n"
     "- MUST NOT define deliverables, work units, or scope boundaries -- that"
@@ -91,8 +91,8 @@ SYSTEM_PROMPT = (
     "  correct. Since the user is describing the desired behavior and the code\n"
     "  shows the current behavior, this is likely a change they want to make. I\n"
     "  should note this as an existing gap and ask the user to confirm.\"\n"
-    "  RIGHT: \"[!!] conversation: pipeline runs hourly <-> scout: scheduler.py cron = daily@midnight\n"
-    "  conversation = desired vs code = current therefore likely a requested change -> ASK user to confirm\"\n"
+    "  RIGHT: \"[!!] task description: pipeline runs hourly <-> scout: scheduler.py cron = daily@midnight\n"
+    "  task description = desired vs code = current therefore likely a requested change -> ASK user to confirm\"\n"
     "\n"
     "Classifying unknowns:\n"
     "  WRONG: \"Looking at what I've gathered so far, I think I have a good\n"
@@ -108,7 +108,7 @@ SYSTEM_PROMPT = (
     "\n"
     "## Workflow\n"
     "\n"
-    "You work in three steps: gather context (conversation + codebase + scouts),"
+    "You work in three steps: gather context (task description + codebase + scouts),"
     " evaluate findings and ask questions, then write landscape.md.\n"
     "\n"
     "## Output\n"
@@ -117,7 +117,7 @@ SYSTEM_PROMPT = (
     "\n"
     "## Tools\n"
     "\n"
-    "- Read tools (read, bash, grep, glob, find, ls) -- reading the conversation and codebase.\n"
+    "- Read tools (read, bash, grep, glob, find, ls) -- reading the codebase.\n"
     "- `koan_request_scouts` -- request parallel codebase exploration.\n"
     "- `koan_ask_question` -- ask the user clarifying questions.\n"
     "- `koan_review_artifact` -- present landscape.md for user review (final step only).\n"
@@ -132,19 +132,20 @@ SYSTEM_PROMPT = (
 
 def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
     if step == 1:
-        conversation_path = f"{ctx.epic_dir}/conversation.jsonl"
+        project_dir = ctx.project_dir or ""
         lines = [
-            "Read the conversation, orient yourself in the codebase, and dispatch scouts.",
+            "Read the task description, orient yourself in the codebase, and dispatch scouts.",
             "",
-            "## 1. Read the conversation",
+            "## 1. Task description",
             "",
-            f"Conversation file: {conversation_path}",
+        ]
+        if ctx.task_description:
+            lines.append(f"<task_description>\n{ctx.task_description}\n</task_description>")
+        else:
+            lines.append("(No task description provided.)")
+        lines.extend([
             "",
-            "The file is JSONL. Each line is a JSON object.",
-            "Read entries with type 'message' and role 'user' or 'assistant'.",
-            "Ignore internal entries (header, compaction, etc.).",
-            "",
-            "As you read, track:",
+            "As you read the task, track:",
             "- **Topic**: What is being built or changed?",
             "- **File references**: Every file, directory, or module mentioned.",
             "- **Decisions already made**: Only those explicitly stated and agreed upon.",
@@ -156,27 +157,32 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "",
             "## 2. Quick orientation -- open obvious files",
             "",
+        ])
+        if project_dir:
+            lines.append(f"Project root: `{project_dir}`")
+            lines.append("")
+        lines.extend([
             "Open up to **5 files** that any investigation would start from:",
             "",
             "- `ls` the project root.",
             "- Open root-level orientation files if they exist: README.md, AGENTS.md, CLAUDE.md.",
-            "- Open any file the conversation explicitly referenced -- skim structure,",
+            "- Open any file the task description explicitly referenced -- skim structure,",
             "  exports, key patterns (first 50-100 lines is enough).",
-            "- If the conversation mentions a module by name without a path, one",
+            "- If the task description mentions a module by name without a path, one",
             "  `find` or `ls` to locate it, then open the entry point.",
             "",
             "Budget: 5 file reads max. This is orientation, not investigation.",
             "Just enough to write scout prompts that reference actual function names,",
-            "actual patterns, and actual file paths instead of conversation labels.",
+            "actual patterns, and actual file paths instead of vague labels.",
             "",
             "## 3. Plan and dispatch scouts",
             "",
-            "Using the conversation and what you observed in the files, identify the",
+            "Using the task description and what you observed in the files, identify the",
             "concerns that need investigation. Consider both:",
             "",
-            "- What the conversation explicitly references (files, modules, integration",
+            "- What the task description explicitly references (files, modules, integration",
             "  points, assumptions that need verification, project conventions).",
-            "- What the conversation did NOT mention but could matter (hidden callers,",
+            "- What the task description did NOT mention but could matter (hidden callers,",
             "  related subsystems, prior art, invariants, test coverage).",
             "",
             "Group related concerns into **3-5 clusters**. Each cluster becomes one",
@@ -205,7 +211,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "   check whether session storage uses Redis or in-memory, and note any",
             "   TODO or FIXME comments related to auth. Report the permission model",
             "   (RBAC, ACL, or ad-hoc checks) and how it integrates with the router.'",
-        ]
+        ])
         if ctx.phase_instructions:
             lines.extend(["", "## Additional Context from Workflow Orchestrator", "", ctx.phase_instructions])
         return StepGuidance(title=STEP_NAMES[1], instructions=lines)
@@ -221,7 +227,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "When scouts return, analyze each report:",
                 "- Does the finding answer the questions you asked?",
                 "- Does it reveal anything unexpected about the codebase?",
-                "- Does it conflict with what the conversation stated?",
+                "- Does it conflict with what the task description stated?",
                 "",
                 "## 2. Verify -- read files to confirm",
                 "",
@@ -232,7 +238,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "",
                 "- Integration points the scout identified",
                 "- Patterns or conventions the scout claims to have found",
-                "- Anything that conflicts with what the conversation stated",
+                "- Anything that conflicts with what the task description stated",
                 "",
                 "## 3. Enumerate what you know and what you don't",
                 "",
@@ -240,9 +246,9 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "Use this structure for each area:",
                 "",
                 "  **[Area name]** (e.g., 'Authentication', 'Database schema', 'API endpoints')",
-                "  - Known: [what the conversation and/or scouts established]",
+                "  - Known: [what the task description and/or scouts established]",
                 "  - Unknown: [what remains unclear or unverified]",
-                "  - Source: [conversation / scout findings]",
+                "  - Source: [task description / scout findings]",
                 "",
                 "Cover every area relevant to the task. Be thorough -- gaps you miss here",
                 "become gaps in the final output.",
@@ -379,7 +385,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "If no questions were needed: (no questions were needed -- context was sufficient)",
             "",
             "### Constraints",
-            "All constraints discovered: from conversation, codebase, user answers.",
+            "All constraints discovered: from task description, codebase, user answers.",
             "If none: (none identified)",
             "",
             "### Open Items",
