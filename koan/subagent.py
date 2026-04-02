@@ -7,6 +7,7 @@ import asyncio
 import json
 import os
 import uuid
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -33,6 +34,7 @@ from .events import (
 from .logger import get_logger
 from .phases import PHASE_MODULE_MAP, PhaseContext
 from .runners import RunnerDiagnostic, RunnerError
+from .lib.permissions import READ_ONLY_ROLES
 from .runners.registry import RunnerRegistry
 
 if TYPE_CHECKING:
@@ -45,6 +47,12 @@ log = get_logger("subagent")
 def _now_iso() -> str:
     from datetime import datetime, timezone
     return datetime.now(timezone.utc).isoformat()
+
+
+@dataclass
+class SubagentResult:
+    exit_code: int
+    final_response: str = ""
 
 
 # -- Boot prompt ---------------------------------------------------------------
@@ -75,7 +83,6 @@ def _build_phase_ctx(task: dict, subagent_dir: str) -> PhaseContext:
         completed_phase=task.get("completed_phase"),
         available_phases=task.get("available_phases", []),
         scout_question=task.get("question"),
-        scout_output_file=task.get("output_file"),
         scout_investigator_role=task.get("investigator_role"),
         retry_context=task.get("retryContext") or task.get("retry_context"),
     )
@@ -83,7 +90,7 @@ def _build_phase_ctx(task: dict, subagent_dir: str) -> PhaseContext:
 
 # -- Main spawn function -------------------------------------------------------
 
-async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None = None) -> int:
+async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None = None) -> SubagentResult:
     role = task["role"]
     agent_id = str(uuid.uuid4())
     store = app_state.projection_store
@@ -125,7 +132,7 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
                 "agent_spawn_failed",
                 build_agent_spawn_failed(role, e.diagnostic),
             )
-            return 1
+            return SubagentResult(exit_code=1)
     else:
         model = None
         installation = None
@@ -143,7 +150,7 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
     phase_module = PHASE_MODULE_MAP.get(role)
     if phase_module is None:
         log.error("no phase module for role %s", role)
-        return 1
+        return SubagentResult(exit_code=1)
 
     # Create EventLog
     event_log = EventLog(subagent_dir, role, phase=role, model=model)
@@ -175,9 +182,10 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
         if installation is not None and thinking_mode is not None:
             cmd = runner.build_command(
                 boot_prompt(role), mcp_url, installation, model, thinking_mode,
+                read_only=(role in READ_ONLY_ROLES),
             )
         else:
-            cmd = runner.build_command(boot_prompt(role), mcp_url, model)
+            cmd = runner.build_command(boot_prompt(role), mcp_url, model, read_only=(role in READ_ONLY_ROLES))
     except RunnerError as e:
         await event_log.emit_runner_diagnostic(e.diagnostic)
         store.push_event(
@@ -186,7 +194,7 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
         )
         await event_log.close()
         del app_state.agents[agent_id]
-        return 1
+        return SubagentResult(exit_code=1)
 
     # Emit agent_spawned only after build_command succeeds -- process is about to start
     store.push_event("agent_spawned", build_agent_spawned(agent), agent_id=agent_id)
@@ -227,6 +235,9 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
                     store.push_event("stream_delta", {"delta": ev.content or ""}, agent_id=agent_id)
                 elif ev.type == "thinking":
                     store.push_event("thinking", {"delta": ev.content or ""}, agent_id=agent_id)
+                elif ev.type == "assistant_text":
+                    if ev.content:
+                        agent.final_response = ev.content
                 elif ev.type == "tool_call":
                     # Close previous in-flight tool
                     if last_call_id is not None and last_tool_name is not None:
@@ -324,6 +335,8 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
     outcome = "completed" if exit_code == 0 else "failed"
     await event_log.emit_phase_end(outcome)
     await event_log.close()
+
+    final_response = agent.final_response
     del app_state.agents[agent_id]
 
     # Emit agent_exited to projection
@@ -338,7 +351,7 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
     )
 
     log.info("%s (agent_id=%s) exited with code %d", role, agent_id, exit_code)
-    return exit_code
+    return SubagentResult(exit_code=exit_code, final_response=final_response)
 
 
 # -- Interaction cleanup -------------------------------------------------------

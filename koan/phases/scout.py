@@ -2,7 +2,7 @@
 #
 #   Step 1 (Investigate) -- find entry points, read/trace code
 #   Step 2 (Verify)      -- spot-check critical claims with targeted tool calls
-#   Step 3 (Report)      -- write findings.md with verified facts
+#   Step 3 (Report)      -- output findings as final text response
 #
 # Scouts use cheap models for narrow codebase investigation.
 
@@ -56,14 +56,14 @@ SYSTEM_PROMPT = (
     "- SHOULD be thorough within the question scope: follow references, check related files.\n"
     "- SHOULD note explicitly when something is NOT present (e.g., \"No tests found for this module\").\n"
     "\n"
-    "## Output file\n"
+    "## Output\n"
     "\n"
-    "You write a single markdown file with your findings. The file location and format are provided in your final step.\n"
+    "Your findings are returned as your final text response. Do not write any files.\n"
+    "The format is provided in your final step.\n"
     "\n"
     "## Tools available\n"
     "\n"
     "- All read tools (read, bash, grep, glob, find, ls) -- for reading the codebase.\n"
-    "- `write` / `edit` -- for writing the output file only.\n"
     "- `koan_complete_step` -- to advance to the next workflow step."
 )
 
@@ -72,7 +72,6 @@ SYSTEM_PROMPT = (
 
 def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
     question = ctx.scout_question or ""
-    output_file = ctx.scout_output_file or ""
     investigator_role = ctx.scout_investigator_role or ""
 
     if step == 1:
@@ -120,12 +119,11 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
         return StepGuidance(
             title=STEP_NAMES[3],
             instructions=[
-                "Write your findings to the output file.",
+                "Output your findings as your final response.",
                 "",
-                f"**Output file:** {output_file}",
-                "",
-                "Write a compressed findings file. Optimize for signal density -- every line",
-                "should carry information the intake agent needs. No prose padding.",
+                "Write a compressed findings report directly as text. Optimize for signal",
+                "density -- every line should carry information the intake agent needs.",
+                "No prose padding. Do NOT write to any file.",
                 "",
                 "## Question",
                 "Restate the assigned question in one line.",

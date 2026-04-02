@@ -229,32 +229,18 @@ async def koan_request_scouts(questions: list[dict] | None = None) -> str:
                 "epic_dir": epic_dir,
                 "subagent_dir": subagent_dir,
                 "question": q.get("prompt", ""),
-                "output_file": "findings.md",
                 "investigator_role": q.get("role", "investigator"),
             })
 
         async def run_scout(scout_task: dict) -> str | None:
             async with semaphore:
                 from ..subagent import spawn_subagent
+                result = await spawn_subagent(scout_task, _app_state)
 
-                exit_code = await spawn_subagent(scout_task, _app_state)
-
-                # Require state.json with status=="completed"
-                state_path = Path(scout_task["subagent_dir"]) / "state.json"
-                try:
-                    async with aiofiles.open(state_path, "r") as f:
-                        projection = json.loads(await f.read())
-                except (FileNotFoundError, json.JSONDecodeError):
-                    return None
-                if projection.get("status") != "completed":
+                if result.exit_code != 0:
                     return None
 
-                findings_path = Path(scout_task["subagent_dir"]) / "findings.md"
-                try:
-                    async with aiofiles.open(findings_path, "r") as f:
-                        return await f.read()
-                except FileNotFoundError:
-                    return None
+                return result.final_response or None
 
         # Emit queued events for all scouts before concurrency-limited execution
         from ..events import build_scout_queued

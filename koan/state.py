@@ -44,6 +44,7 @@ class AgentState:
     pending_tool: asyncio.Future | None = None
     model: str | None = None
     token_count: dict = field(default_factory=lambda: {"sent": 0, "received": 0})
+    final_response: str = ""
     is_primary: bool = True
     started_at: datetime = field(default_factory=_utcnow)
 

@@ -44,7 +44,7 @@ class FakeAppState:
 class FakeRunner:
     name = "fake"
 
-    def build_command(self, boot_prompt, mcp_url, model):
+    def build_command(self, boot_prompt, mcp_url, model, read_only=False):
         # Return a command that exits immediately with code 1
         return ["python3", "-c", "import sys; sys.exit(1)"]
 
@@ -56,7 +56,7 @@ class FakeRunnerSuccess:
     """Runner that exits 0. Handshake is set via MCP path, not stream."""
     name = "fake"
 
-    def build_command(self, boot_prompt, mcp_url, model):
+    def build_command(self, boot_prompt, mcp_url, model, read_only=False):
         return ["python3", "-c", "pass"]
 
     def parse_stream_event(self, line):
@@ -253,9 +253,9 @@ class TestSpawnSubagent:
         with patch("koan.subagent.PHASE_MODULE_MAP", {"intake": _fake_phase_module()}):
             from koan.subagent import spawn_subagent
 
-            exit_code = await spawn_subagent(task, app_state, runner=FakeRunner())
+            result = await spawn_subagent(task, app_state, runner=FakeRunner())
 
-        assert exit_code == 1
+        assert result.exit_code == 1
 
         # Check that events.jsonl contains a runner_diagnostic
         events_path = Path(subagent_dir) / "events.jsonl"
@@ -292,9 +292,9 @@ class TestSpawnSubagent:
              patch("asyncio.create_subprocess_exec", side_effect=patched_subprocess):
             from koan.subagent import spawn_subagent
 
-            exit_code = await spawn_subagent(task, app_state, runner=FakeRunnerSuccess())
+            result = await spawn_subagent(task, app_state, runner=FakeRunnerSuccess())
 
-        assert exit_code == 0
+        assert result.exit_code == 0
 
         # Verify state.json shows completed
         state = json.loads((Path(subagent_dir) / "state.json").read_text())
@@ -397,12 +397,8 @@ class TestRequestScouts:
             nonlocal call_idx
             idx = call_idx
             call_idx += 1
-            sd = Path(task["subagent_dir"])
-            # Write state.json with completed status
-            (sd / "state.json").write_text(json.dumps({"status": "completed"}))
-            # Write findings
-            (sd / "findings.md").write_text(findings[idx])
-            return 0
+            from koan.subagent import SubagentResult
+            return SubagentResult(exit_code=0, final_response=findings[idx])
 
         import koan.web.mcp_endpoint as mcp_mod
         old_app_state = mcp_mod._app_state
@@ -460,10 +456,8 @@ class TestRequestScouts:
             await asyncio.sleep(0.01)
             async with lock:
                 current_concurrent -= 1
-            sd = Path(task["subagent_dir"])
-            (sd / "state.json").write_text(json.dumps({"status": "completed"}))
-            (sd / "findings.md").write_text("ok")
-            return 0
+            from koan.subagent import SubagentResult
+            return SubagentResult(exit_code=0, final_response="ok")
 
         import koan.web.mcp_endpoint as mcp_mod
         old_app_state = mcp_mod._app_state
@@ -503,10 +497,9 @@ class TestRequestScouts:
         )
 
         async def fake_spawn(task, app, runner=None):
-            sd = Path(task["subagent_dir"])
-            # Write findings but NO state.json
-            (sd / "findings.md").write_text("stale findings")
-            return 0
+            # Exit 0 but return no final_response — treated as no findings
+            from koan.subagent import SubagentResult
+            return SubagentResult(exit_code=0)
 
         import koan.web.mcp_endpoint as mcp_mod
         old_app_state = mcp_mod._app_state
@@ -641,9 +634,9 @@ class TestBinaryNotFoundSpawn:
         with patch("koan.subagent.PHASE_MODULE_MAP", {"intake": _fake_phase_module()}):
             from koan.subagent import spawn_subagent
 
-            exit_code = await spawn_subagent(task, app_state)
+            result = await spawn_subagent(task, app_state)
 
-        assert exit_code == 1
+        assert result.exit_code == 1
 
         # Verify agent_spawn_failed event in projection notifications (new model: Notification objects)
         notifs = app_state.projection_store.projection.notifications

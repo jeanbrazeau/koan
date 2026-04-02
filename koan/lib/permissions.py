@@ -36,8 +36,6 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
     }),
     "scout": frozenset({
         "koan_complete_step",
-        "edit",
-        "write",
     }),
     "decomposer": frozenset({
         "koan_complete_step",

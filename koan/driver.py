@@ -166,7 +166,8 @@ async def run_workflow_orchestrator(
     }
 
     try:
-        exit_code = await spawn_subagent(task, app_state)
+        result = await spawn_subagent(task, app_state)
+        exit_code = result.exit_code
     except NotImplementedError:
         log.warning("spawn_subagent not implemented; workflow orchestrator skipped")
         return None
@@ -216,7 +217,8 @@ async def run_story_execution(
     }
 
     try:
-        planner_exit = await spawn_subagent(planner_task, app_state)
+        result = await spawn_subagent(planner_task, app_state)
+        planner_exit = result.exit_code
     except NotImplementedError:
         log.warning("spawn_subagent not implemented; story execution skipped")
         return False
@@ -236,7 +238,8 @@ async def run_story_execution(
             "subagent_dir": executor_dir,
             "story_id": story_id,
         }
-        executor_exit = await spawn_subagent(executor_task, app_state)
+        result = await spawn_subagent(executor_task, app_state)
+        executor_exit = result.exit_code
         executor_ok = executor_exit == 0
     else:
         executor_ok = False
@@ -362,7 +365,8 @@ async def run_story_loop(app_state: AppState, instructions: str | None) -> dict:
     }
 
     try:
-        pre_exit = await spawn_subagent(pre_task, app_state)
+        result = await spawn_subagent(pre_task, app_state)
+        pre_exit = result.exit_code
     except NotImplementedError:
         log.warning("spawn_subagent not implemented; story loop skipped")
         return {"success": False, "summary": "spawn_subagent not implemented"}
@@ -449,7 +453,8 @@ async def run_phase(
     }
 
     try:
-        exit_code = await spawn_subagent(task, app_state)
+        result = await spawn_subagent(task, app_state)
+        exit_code = result.exit_code
     except NotImplementedError:
         log.warning("spawn_subagent not implemented; phase %s skipped", phase)
         return False

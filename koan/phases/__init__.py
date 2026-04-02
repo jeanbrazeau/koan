@@ -33,7 +33,6 @@ class PhaseContext:
     completed_phase: str | None = None
     available_phases: list[str] = field(default_factory=list)
     scout_question: str | None = None
-    scout_output_file: str | None = None
     scout_investigator_role: str | None = None
 
 
