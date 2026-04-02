@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../../store/index'
 import * as api from '../../api/client'
+import { Md } from '../Md'
 
 export function WorkflowDecision() {
   const focus = useStore(s => s.run?.focus)
@@ -35,7 +36,7 @@ export function WorkflowDecision() {
                     <div className="workflow-turn-header">
                       <span className="workflow-turn-role">Orchestrator</span>
                     </div>
-                    <div className="workflow-turn-body">{turn.status_report}</div>
+                    <div className="workflow-turn-body">{turn.status_report ? <Md>{turn.status_report}</Md> : null}</div>
                   </div>
                   {turn.recommended_phases && turn.recommended_phases.length > 0 && (
                     <div className="workflow-options">

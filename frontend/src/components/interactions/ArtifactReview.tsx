@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useStore } from '../../store/index'
 import * as api from '../../api/client'
+import { Md } from '../Md'
 
 export function ArtifactReview() {
   const focus = useStore(s => s.run?.focus)
@@ -32,9 +33,7 @@ export function ArtifactReview() {
         {description && <p className="phase-status">{description}</p>}
 
         <div className="artifact-review-content">
-          <pre style={{ margin: 0, whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>
-            {content}
-          </pre>
+          <Md>{content}</Md>
         </div>
 
         <textarea

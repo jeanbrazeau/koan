@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { useStore, ConversationEntry } from '../store/index'
 import { useAutoScroll } from '../hooks/useAutoScroll'
+import { Md } from './Md'
 
 // -- Thinking ------------------------------------------------------------------
 
@@ -15,7 +16,7 @@ function ThinkingCard({ content }: { content: string }) {
       </div>
       {content && (
         <div className={`activity-card-body ${expanded ? 'expanded' : ''}`}>
-          {content}
+          <Md>{content}</Md>
         </div>
       )}
       {isLong && !expanded && (
@@ -44,7 +45,7 @@ function StepHeader({ step, stepName, totalSteps }: {
 // -- Text block ----------------------------------------------------------------
 
 function TextBlock({ text }: { text: string }) {
-  return <div className="stream-output">{text}</div>
+  return <div className="stream-output"><Md>{text}</Md></div>
 }
 
 // -- Tool lines ----------------------------------------------------------------
@@ -129,7 +130,7 @@ export function ActivityFeed() {
               <span className="activity-card-tool">thinking</span>
             </div>
             <div className="activity-card-body expanded">
-              {conversation.pendingThinking}
+              <Md>{conversation.pendingThinking}</Md>
             </div>
           </div>
         )}
@@ -145,7 +146,7 @@ export function ActivityFeed() {
         {/* Active stream output — text being produced right now */}
         {conversation?.pendingText && (
           <div className="stream-output">
-            {conversation.pendingText}
+            <Md>{conversation.pendingText}</Md>
             <span className="streaming-cursor" />
           </div>
         )}

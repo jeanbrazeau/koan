@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useStore, AskQuestion } from '../../store/index'
 import * as api from '../../api/client'
+import { Md } from '../Md'
 
 // Normalize raw question options from LLM output. Options may arrive as strings
 // or dicts with varying key names. This is data cleaning for LLM output
@@ -74,9 +75,9 @@ function QuestionCard({
         Question {qIdx + 1}
       </div>
       {question.context && (
-        <div className="question-context">{question.context}</div>
+        <div className="question-context"><Md>{question.context}</Md></div>
       )}
-      <div className="question-text">{question.question}</div>
+      <div className="question-text"><Md>{question.question}</Md></div>
       {question.multi && (
         <div className="question-multi-hint">Select all that apply</div>
       )}
