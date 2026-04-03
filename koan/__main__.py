@@ -91,7 +91,8 @@ def main() -> None:
                         help="Show step guidance prompts in the UI")
     args = parser.parse_args()
 
-    setup_logging(args.log_level)
+    log_level = "DEBUG" if args.debug else args.log_level
+    setup_logging(log_level)
 
     if not args.skip_build and _frontend_needs_rebuild():
         _rebuild_frontend()
@@ -111,7 +112,7 @@ def main() -> None:
     host = "127.0.0.1"
     # timeout_graceful_shutdown=0: don't wait for HTTP clients to disconnect.
     # Agent cleanup happens in the lifespan shutdown handler instead.
-    uvicorn.run(app, host=host, port=port, log_level=args.log_level.lower(),
+    uvicorn.run(app, host=host, port=port, log_level=log_level.lower(),
                 timeout_graceful_shutdown=0)
 
 
