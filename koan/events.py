@@ -264,6 +264,14 @@ def build_default_profile_changed(name: str) -> dict:
     return {"name": name}
 
 
+def build_steering_queued(content: str) -> dict:
+    return {"content": content}
+
+
+def build_steering_delivered(count: int) -> dict:
+    return {"count": count}
+
+
 def build_default_scout_concurrency_changed(value: int) -> dict:
     return {"value": value}
 

@@ -33,6 +33,30 @@ def format_user_messages(messages: list[Any]) -> str:
     return "\n\n".join(parts)
 
 
+def format_steering_messages(messages: list[Any]) -> str:
+    """Format steering queue messages into a clearly demarcated XML block.
+
+    Appended to tool responses so the LLM sees user feedback that arrived
+    while it was working. The framing instructs the LLM to integrate the
+    feedback without derailing from the current workflow.
+    """
+    parts = []
+    for msg in messages:
+        ts = datetime.fromtimestamp(msg.timestamp_ms / 1000, tz=timezone.utc)
+        ts_str = ts.strftime("%H:%M:%S UTC")
+        parts.append(f"[{ts_str}] {msg.content}")
+    body = "\n\n".join(parts)
+    return (
+        "\n\n<steering>\n"
+        "The user sent the following message(s) while you were working.\n"
+        "Take these into account going forward, but do not abandon the\n"
+        "current workflow step. Integrate the feedback into your approach.\n"
+        "\n"
+        f"{body}\n"
+        "</steering>"
+    )
+
+
 def format_phase_boundary(phase: str, messages: list[Any], successors: list[str]) -> str:
     """Format a phase-boundary response that includes user messages and next-phase options."""
     title = f"Phase Complete: {phase}"

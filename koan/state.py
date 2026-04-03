@@ -87,10 +87,21 @@ class AppState:
     user_message_buffer: list[ChatMessage] = field(default_factory=list)
     # Non-None while koan_complete_step is blocking at a phase boundary.
     phase_complete_future: asyncio.Future | None = None
+    # Steering queue — user messages delivered on the next koan_* tool response.
+    # Separate from user_message_buffer so phase-boundary blocking and steering
+    # can be drained independently without double-delivery.
+    steering_queue: list[ChatMessage] = field(default_factory=list)
 
 
 def drain_user_messages(app_state: AppState) -> list[ChatMessage]:
     """Atomically drain the user message buffer. Returns all buffered messages."""
     messages = list(app_state.user_message_buffer)
     app_state.user_message_buffer.clear()
+    return messages
+
+
+def drain_steering_messages(app_state: AppState) -> list[ChatMessage]:
+    """Atomically drain the steering queue. Returns all buffered messages."""
+    messages = list(app_state.steering_queue)
+    app_state.steering_queue.clear()
     return messages

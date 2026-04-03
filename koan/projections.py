@@ -53,6 +53,9 @@ EventType = Literal[
     "debug_step_guidance",
     # User chat
     "user_message",
+    # Steering
+    "steering_queued",
+    "steering_delivered",
     # Focus (interactions)
     "questions_asked",
     "questions_answered",
@@ -312,6 +315,9 @@ class Notification(KoanBaseModel):
 # Run and top-level Projection
 # ---------------------------------------------------------------------------
 
+class SteeringMessage(KoanBaseModel):
+    content: str
+
 class Run(KoanBaseModel):
     config: RunConfig
     phase: str = ""
@@ -319,6 +325,7 @@ class Run(KoanBaseModel):
     focus: Focus | None = None             # None before first agent spawns
     artifacts: dict[str, ArtifactInfo] = {}
     completion: CompletionInfo | None = None
+    steering: list[SteeringMessage] = []   # pending steering messages shown above chat
 
 class Projection(KoanBaseModel):
     settings: Settings = Field(default_factory=Settings)
@@ -853,6 +860,23 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                 })
                 return projection.model_copy(update={
                     "run": _update_agent_conversation(projection.run, pid, new_conv),
+                })
+
+            case "steering_queued":
+                if projection.run is None:
+                    return projection
+                entry = SteeringMessage(content=payload.get("content", ""))
+                return projection.model_copy(update={
+                    "run": projection.run.model_copy(update={
+                        "steering": [*projection.run.steering, entry],
+                    }),
+                })
+
+            case "steering_delivered":
+                if projection.run is None:
+                    return projection
+                return projection.model_copy(update={
+                    "run": projection.run.model_copy(update={"steering": []}),
                 })
 
             case "agent_step_advanced":
