@@ -5,11 +5,11 @@ Full architecture documentation: **[docs/architecture.md](docs/architecture.md)*
 Spoke documents:
 
 - [docs/subagents.md](docs/subagents.md) -- spawn lifecycle, task manifest, step-first workflow, permissions
-- [docs/ipc.md](docs/ipc.md) -- HTTP MCP tool calls, blocking interactions, scout spawning
-- [docs/state.md](docs/state.md) -- driver/LLM boundary, epic and story state, routing rules
-- [docs/intake-loop.md](docs/intake-loop.md) -- confidence-gated loop, non-linear step progression, prompt engineering
+- [docs/ipc.md](docs/ipc.md) -- HTTP MCP tool calls, blocking interactions, scout spawning, phase-boundary blocking
+- [docs/state.md](docs/state.md) -- driver/LLM boundary, epic and story state, orchestrator state
+- [docs/intake-loop.md](docs/intake-loop.md) -- three-step intake design, review gate, prompt engineering
 - [docs/projections.md](docs/projections.md) -- versioned event log, fold function, projection shape, SSE protocol, version-negotiated catch-up
-- [docs/epic-brief.md](docs/epic-brief.md) -- brief artifact, brief-writer subagent, downstream references
+- [docs/epic-brief.md](docs/epic-brief.md) -- brief artifact, brief-generation phase, downstream references
 - [docs/artifact-review.md](docs/artifact-review.md) -- artifact review protocol, review loop, reusability
 - [docs/token-streaming.md](docs/token-streaming.md) -- runner stdout parsing, SSE delta path
 
@@ -27,53 +27,91 @@ both worlds.
 
 ## 2. Step-First Workflow Pattern (critical)
 
-Every subagent is a CLI process (`claude`, `codex`, or `gemini`) that connects
-to the driver's HTTP MCP endpoint at `http://localhost:{port}/mcp?agent_id={id}`.
-The subagent receives tools via MCP and calls them over HTTP. The driver handles
-all tool logic in-process.
+The orchestrator is a single long-lived CLI process (`claude`, `codex`, or
+`gemini`) that runs the entire workflow. It connects to the driver's HTTP MCP
+endpoint at `http://localhost:{port}/mcp?agent_id={id}` and receives tools via
+MCP. The driver handles all tool logic in-process.
 
-**The first thing any subagent does is call `koan_complete_step`.** The spawn
-prompt contains _only_ this directive. The tool returns step 1 instructions.
-This establishes the calling pattern before the LLM sees complex instructions.
+**The first thing the orchestrator does is call `koan_complete_step`.** The
+spawn prompt contains _only_ this directive. The tool returns step 1
+instructions. This establishes the calling pattern before the LLM sees complex
+instructions.
 
 ```
-Boot prompt:  "You are a koan {role} agent. Call koan_complete_step to receive your instructions."
+Boot prompt:  "You are a koan orchestrator agent. Call koan_complete_step to receive your instructions."
      | LLM calls koan_complete_step (step 0 -> 1 transition)
-Tool returns:  Step 1 instructions (rich context, task details, guidance)
+Tool returns:  Step 1 instructions (phase role context + task details)
      | LLM does work...
      | LLM calls koan_complete_step
-Tool returns:  Step 2 instructions (or "Phase complete.")
+Tool returns:  Step 2 instructions (or phase-boundary response)
 ```
 
-Step progression is normally linear, but phase modules may override
-`get_next_step()` to implement non-linear flows. The intake phase loops steps
-2-4 until a confidence gate is satisfied. See
+When a phase ends, `koan_complete_step` blocks for a user message and returns
+the transition context (user message + valid next phases). The orchestrator
+converses, then calls `koan_set_phase` to commit the transition. The step
+counter resets to 0 on each `koan_set_phase` call, then advances to 1 on the
+next `koan_complete_step`. Phase-specific role context (`SYSTEM_PROMPT`) is
+injected into that step-1 response.
+
+Step progression is normally linear within a phase, but phase modules may
+override `get_next_step()` to implement non-linear flows. See
 [docs/intake-loop.md](docs/intake-loop.md).
 
-## 3. Driver Determinism
+Planner, executor, and scout subagents are still separate processes spawned by
+the orchestrator via `koan_spawn_executor` and `koan_request_scouts`.
 
-The driver (`koan/driver.py`) reads JSON state files and exit codes, applies
-routing rules, and spawns the next subagent. It never makes judgment calls or
-parses free-text.
+## 3. Driver Determinism (partially relaxed)
+
+The driver (`koan/driver.py`) spawns the orchestrator and awaits its exit.
+Phase routing is driven by the orchestrator via `koan_set_phase` rather than
+the driver's routing loop.
+
+The driver still:
+- Validates every phase transition (`is_valid_transition()` in the tool handler)
+- Updates `epic-state.json` atomically
+- Emits projection events
+- Enforces the permission fence
+
+The driver does **not** decide which phase runs next. Invalid phase strings
+raise `ToolError`; valid transitions are committed. All routing decisions flow
+through typed tool parameters, not free text.
 
 ## 4. Default-Deny Permissions
 
 Every tool call passes through a role-based permission fence. Unknown roles
-and tools are blocked. Planning roles can only write inside the epic directory.
+and tools are blocked. The orchestrator role uses **phase-aware permissions**:
+available tools vary by `current_phase`. Planning-phase write access is
+path-scoped to the epic directory.
 
-The fence also supports step-level gating for individual roles: the intake
-phase blocks side-effecting tools during its read-only Extract step (step 1).
+The fence also supports step-level gating: `write` and `edit` are blocked
+during brief-generation step 1 (the read step).
+
+**Orchestrator tool availability by phase:**
+
+| Tool | Available phases |
+|------|-----------------|
+| `koan_complete_step` | All phases |
+| `koan_set_phase` | All phases (blocked mid-story during execution) |
+| `koan_ask_question` | All phases |
+| `koan_request_scouts` | `intake`, `core-flows`, `tech-plan`, `ticket-breakdown`, `cross-artifact-validation` |
+| `koan_review_artifact` | `intake`, `brief-generation`, `core-flows`, `tech-plan`, `ticket-breakdown`, `cross-artifact-validation`, `implementation-validation` |
+| `koan_spawn_executor` | `execution` only |
+| `koan_select_story`, `koan_complete_story`, `koan_retry_story`, `koan_skip_story` | `execution` only |
+| `write`, `edit` (epic_dir scoped) | All phases except `brief-generation` step 1 |
+| `bash` | `execution`, `implementation-validation` |
 
 ## 5. Need-to-Know Prompts
 
-Boot prompt is one sentence. System prompt has role identity, no task details.
-Task details arrive via step 1 guidance after the tool-calling pattern is
-established.
+Boot prompt is one sentence. System prompt is minimal (orchestrator identity
+only). Phase-specific role context arrives via step 1 guidance after
+`koan_set_phase` is called -- the orchestrator doesn't know its next role until
+`koan_complete_step` tells it.
 
 ## 6. Directory-as-Contract
 
-The subagent directory is the sole interface between parent and child.
-Two well-known JSON files plus the MCP endpoint URL:
+The orchestrator has one subagent directory for the entire run. Planner,
+executor, and scout subagents each get their own directory per the standard
+contract:
 
 | File           | Writer                    | Reader                         | Purpose            |
 | -------------- | ------------------------- | ------------------------------ | ------------------ |

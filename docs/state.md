@@ -27,7 +27,7 @@ markdown (for LLMs) in the same operation.
 ### Filesystem-driven story discovery
 
 Story IDs are discovered by scanning `stories/*/story.md`, not by reading a
-driver-maintained JSON list. The decomposer LLM creates `story.md` files using
+driver-maintained JSON list. The orchestrator (during the ticket-breakdown phase) creates `story.md` files using
 the `write` tool -- it has no reason to know the JSON state format. The driver
 discovers what the LLM created by scanning, then populates the JSON story list
 itself.
@@ -63,15 +63,10 @@ phase and the list of story IDs.
 | `implementation-validation` | Post-execution alignment review                                                             |
 | `completed`                 | All phases done                                                                             |
 
-Additional epic directory files:
 
-| File                     | Purpose                                            |
-| ------------------------ | -------------------------------------------------- |
-| `workflow-decision.json` | Records workflow orchestrator decisions            |
-| `workflow-status.md`     | Human-readable workflow status for LLM consumption |
 
 **`scouting` is intentionally absent.** Scouts run inside the
-`koan_request_scouts` tool handler during intake/decomposer/planner phases,
+`koan_request_scouts` tool handler during intake/planning phases,
 not as a top-level phase.
 
 ---
@@ -126,56 +121,32 @@ the driver sets the story to `skipped`.
 
 ---
 
-## Driver Routing
+## Driver and Orchestrator
 
-The driver's story loop is a deterministic state machine:
+The driver spawns the orchestrator once at run start and awaits its exit.
+The orchestrator drives the entire workflow, including phase transitions and
+story execution.
 
-```python
-# koan/driver.py
-while True:
-    stories = load_all_story_states(epic_dir)
-    routing = route_from_state(stories)
+### Story execution (orchestrator-driven)
 
-    if routing.action == "retry":    # re-execute story
-    elif routing.action == "execute": # plan + execute story
-    elif routing.action == "complete": # all stories terminal -> exit loop
-    elif routing.action == "error":   # no actionable state -> fail
-```
-
-**Priority:** `retry` is checked before `selected`. A story queued for retry
-takes precedence over a newly selected story.
-
-**Terminal states:** exactly `done` and `skipped`. The epic is complete when
-every story is in a terminal state.
-
-**Error state:** If no story is `retry` or `selected` and not all are terminal,
-the driver reports: "orchestrator may have exited without a routing decision."
-
-### Story execution pipeline
-
-For each story selected for execution:
+The orchestrator selects and manages stories during the execution phase via
+MCP tools:
 
 ```
-Driver sets status -> planning
-  -> spawn planner subagent
-  -> if planner fails: skip executor, go to post-execution orchestrator
-Driver sets status -> executing
-  -> spawn executor subagent
-Driver sets status -> verifying
-  -> spawn orchestrator (post-execution)
-  -> orchestrator decides: koan_complete_story / koan_retry_story / koan_skip_story
+orchestrator calls koan_select_story(story_id)
+  -> story status set to "selected"
+orchestrator calls koan_spawn_executor(story_id, role="planner")
+  -> driver spawns planner subagent, blocks until exit
+orchestrator calls koan_spawn_executor(story_id, role="executor")
+  -> driver spawns executor subagent, blocks until exit
+  -> (if retry needed: pass retry_context to koan_spawn_executor)
+orchestrator calls koan_complete_story / koan_retry_story / koan_skip_story
 ```
-
-### Planner failure fallthrough
-
-When the planner exits with non-zero exit code, the driver skips the executor
-and proceeds directly to the post-execution orchestrator. This gives the
-orchestrator a chance to make a routing decision.
 
 ### Model config gate
 
 When a web server is available, the pipeline blocks at startup until the user
-confirms model tier selection. This happens before any subagent spawns.
+confirms model tier selection. This happens before the orchestrator spawns.
 
 ---
 
@@ -206,36 +177,32 @@ This applies to:
 ```
 {epic_dir}/
   epic-state.json           # Epic phase + story list
-  workflow-decision.json    # Workflow orchestrator decisions
-  workflow-status.md        # Human-readable workflow status
-  landscape.md              # Written by intake
-  brief.md                  # Written by brief-writer
+  landscape.md              # Written by orchestrator (intake phase)
+  brief.md                  # Written by orchestrator (brief-generation phase)
   stories/
     {story_id}/
-      story.md              # Written by decomposer
+      story.md              # Written by orchestrator (ticket-breakdown phase)
       state.json            # Story lifecycle state
       status.md             # Templated status for LLM consumption
       plan/
         plan.md             # Written by planner
   subagents/
-    intake/
-      task.json             # Task manifest
+    orchestrator/
+      task.json             # Task manifest (written once at run start)
       state.json            # Audit projection
-      events.jsonl          # Audit log
-    decomposer/
-      ...
+      events.jsonl          # Audit log (covers entire run, all phases)
     scout-{id}-{timestamp}/
       task.json
       findings.md           # Scout output
       ...
     planner-{story_id}/
-      ...
+      task.json
+      state.json
+      events.jsonl
     executor-{story_id}/
-      ...
-    orchestrator-pre/
-      ...
-    orchestrator-post-{story_id}/
-      ...
+      task.json
+      state.json
+      events.jsonl
 ```
 
 ---
@@ -257,5 +224,12 @@ Key projection fields common to all roles:
 | `tokens_sent`     | number | Cumulative tokens in                                    |
 | `tokens_received` | number | Cumulative tokens out                                   |
 
-Intake confidence and iteration counters are tracked in the in-memory
-`PhaseContext` during execution and are not persisted to the audit projection.
+Orchestrator state tracked in `AppState` (in-memory, not persisted):
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `user_message_buffer` | `list[ChatMessage]` | Buffered user chat messages, drained at each `koan_complete_step` |
+| `phase_complete_future` | `asyncio.Future \| None` | Non-None while `koan_complete_step` is blocking at a phase boundary |
+
+`ChatMessage` carries `content: str` and `timestamp_ms: int`. Messages are
+appended by `POST /api/chat` and removed atomically by `drain_user_messages()`.

@@ -48,10 +48,10 @@ The brief sits between intake and core-flows:
 
 ---
 
-## Brief-Writer Subagent
+## Brief-Generation Phase
 
-Role: `"brief-writer"`. Model tier: `"strong"` (synthesis from intake context
-requires genuine reasoning).
+The orchestrator handles the brief-generation phase using step guidance from
+`koan/phases/brief_writer.py`. Model tier for the orchestrator: `"strong"`.
 
 ### Step Progression
 
@@ -75,21 +75,12 @@ Step 3 (Finalize):
 `koan/phases/brief_writer.py` requires at least one `koan_review_artifact` call
 before `koan_complete_step` is allowed.
 
-### Permissions
+### Permissions during brief-generation
 
-```python
-# koan/lib/permissions.py
-"brief-writer": {
-    "koan_complete_step",
-    "koan_review_artifact",
-    "edit",
-    "write",
-    # No koan_ask_question -- uses artifact review, not structured questions.
-    # No koan_request_scouts -- all codebase context arrives via landscape.md.
-}
-```
-
-Write/edit access is path-scoped to the epic directory.
+During `brief-generation`, the orchestrator has access to `koan_review_artifact`,
+`write`, and `edit` (path-scoped to epic directory). `koan_request_scouts` and
+`koan_ask_question` are not used — all codebase context arrives via
+`landscape.md`. Write/edit access is blocked in step 1 (the Read step).
 
 ---
 

@@ -149,7 +149,7 @@ artifacts.
 ### Don't re-add a step-1 read-only gate for intake
 
 Intake's Gather step needs all tools (especially `koan_request_scouts`) from
-the start. The brief-writer still has a step-1 read-only gate, but intake
+the start. The brief-generation phase still has a step-1 read-only gate, but intake
 does not.
 
 ### Don't add a confidence loop

@@ -18,26 +18,29 @@ that handles both the web dashboard and the MCP tool endpoint. When a tool call
 arrives, the server looks up the agent's state by `agent_id` in an in-process
 registry and handles the call directly.
 
-Three tool calls involve blocking interactions -- the HTTP request is held open
-while the driver awaits an external response:
+Four interactions involve blocking -- the HTTP request is held open while the
+driver awaits an external response:
 
-| Tool                   | What blocks             | Who responds                   |
-| ---------------------- | ----------------------- | ------------------------------ |
-| `koan_ask_question`    | User input needed       | User via web UI                |
-| `koan_request_scouts`  | Scout subagents running | Driver (after scouts complete) |
-| `koan_review_artifact` | User review needed      | User via web UI                |
-| `koan_propose_workflow`| User workflow decision  | User via web UI                |
+| Mechanism               | What blocks                  | Who responds                   |
+| ----------------------- | ---------------------------- | ------------------------------ |
+| `koan_ask_question`     | User input needed            | User via web UI                |
+| `koan_review_artifact`  | User review needed           | User via web UI                |
+| `koan_request_scouts`   | Scout subagents running      | Driver (after scouts complete) |
+| Phase-boundary blocking | Phase complete, next unknown | User via `POST /api/chat`      |
 
-User-facing tools (`koan_ask_question`, `koan_review_artifact`,
-`koan_propose_workflow`) go through the `PendingInteraction` queue on
-`AppState`. The MCP handler creates an `asyncio.Future`, stores it in
-`AgentState.pending_tool`, enqueues a `PendingInteraction` on `AppState`, and
-awaits the Future. The HTTP connection stays open until the Future resolves.
+User-facing tool calls (`koan_ask_question`, `koan_review_artifact`) go through
+the `PendingInteraction` queue on `AppState`. The MCP handler creates an
+`asyncio.Future`, stores it in `AgentState.pending_tool`, enqueues a
+`PendingInteraction` on `AppState`, and awaits the Future. The HTTP connection
+stays open until the Future resolves.
 
 `koan_request_scouts` is handled entirely inline: the handler spawns scouts via
 `asyncio.gather` of `spawn_subagent` calls (bounded by a semaphore), collects
 their results, and returns directly. No `PendingInteraction` is created; the
 HTTP connection is held open only by the `await asyncio.gather(...)` call.
+
+Phase-boundary blocking uses `AppState.phase_complete_future` directly (not
+`PendingInteraction`). See [Phase-Boundary Blocking](#phase-boundary-blocking).
 
 There is no polling and no intermediate files for any of these flows.
 
@@ -54,12 +57,11 @@ When a user-facing blocking tool is called:
    and enqueues a `PendingInteraction` on `AppState.interaction_queue`
 3. If no interaction is currently active, the interaction is promoted to
    `AppState.active_interaction` and an SSE event is pushed to browsers
-   (question form, review form, or workflow-decision form)
+   (question form, or review form)
 4. Handler `await`s the Future -- HTTP connection stays open
 5. User fills the form in the web UI and submits:
    - `POST /api/answer` resolves the Future for `koan_ask_question`
    - `POST /api/artifact-review` resolves it for `koan_review_artifact`
-   - `POST /api/workflow-decision` resolves it for `koan_propose_workflow`
 6. Handler returns the resolved value as the MCP tool result; the next queued
    interaction (if any) is promoted to active
 
@@ -85,7 +87,7 @@ subagent <---tool result (answer)----------- +
 The `PendingInteraction` object stored in `AppState.active_interaction` (or
 queued in `AppState.interaction_queue`):
 
-- `type` -- one of `"ask"`, `"artifact-review"`, `"workflow-decision"`
+- `type` -- one of `"ask"`, `"artifact-review"`
 - `agent_id` -- the agent that issued the blocking call
 - `token` -- UUID for SSE correlation
 - `payload` -- type-specific request data
@@ -220,30 +222,66 @@ See [artifact-review.md](./artifact-review.md) for the full protocol.
 
 ---
 
-## Workflow Decision Flow
+## Phase-Boundary Blocking
+
+When the orchestrator finishes a phase (`get_next_step` returns `None`),
+`koan_complete_step` blocks for user input before returning the phase-boundary
+response. This uses `AppState.phase_complete_future` directly, not the
+`PendingInteraction` queue.
 
 ```
-subagent calls koan_propose_workflow({ status: "...", phases: [...] })
-  -> MCP endpoint checks permissions
-  -> normalises phases list to list[dict]
-  -> creates asyncio.Future, stores in AgentState.pending_tool
-  -> enqueues PendingInteraction { type: "workflow-decision" } on AppState
-  -> if no active interaction: promotes to active, pushes SSE
-     `workflow_decision_requested` event to browsers (with phase proposals)
-  -> awaits Future
-
-user sees workflow proposal in web UI
-  -> selects a phase (or types custom input), clicks Confirm
-  -> POST /api/workflow-decision -> resolves Future with { phase, context }
-
-MCP handler receives resolved value
-  -> clears AgentState.pending_tool
-  -> activates next queued interaction (if any)
-  -> sets AgentState.phase_ctx.proposal_made = True
-  -> returns "Selected: {phase}\n{context}" as MCP tool result to subagent
-
-subagent then calls koan_set_next_phase({ phase: "..." }) to commit the choice
+orchestrator calls koan_complete_step (last step of a phase)
+  -> get_next_step() returns None
+  -> drain_user_messages(app_state)
+  -> if buffer empty:
+       future = asyncio.get_running_loop().create_future()
+       app_state.phase_complete_future = future
+       await future              # HTTP connection held open
+     app_state.phase_complete_future = None
+  -> messages = drain_user_messages(app_state)
+  -> successors = get_successor_phases(app_state.phase)
+  -> returns format_phase_boundary(phase, messages, successors)
 ```
+
+The Future is resolved when the user sends a message via `POST /api/chat`.
+
+**Key asyncio invariant:** `api_chat` and `koan_complete_step` run in the same
+asyncio event loop. `api_chat` appends to `user_message_buffer` before calling
+`set_result()`. When `koan_complete_step` resumes, `drain_user_messages()` finds
+the message in the buffer. No threads or locks are needed.
+
+**If messages are already buffered:** `koan_complete_step` drains them and
+returns immediately — no Future is created.
+
+After receiving the phase-boundary response, the orchestrator converses with the
+user and calls `koan_set_phase` to commit the transition.
+
+---
+
+## Chat Message Delivery
+
+User messages are buffered in `AppState.user_message_buffer` and delivered
+to the orchestrator at `koan_complete_step` call boundaries.
+
+```
+user types in chat input
+  -> POST /api/chat { message: "..." }
+  -> ChatMessage appended to app_state.user_message_buffer
+  -> user_message projection event pushed (appears in activity feed)
+  -> if app_state.phase_complete_future is set: future.set_result(True)
+  -> returns { ok: true }
+
+orchestrator calls koan_complete_step (any step)
+  -> step guidance computed
+  -> messages = drain_user_messages(app_state)
+  -> if messages: appended to tool result as formatted block
+  -> returns combined guidance + user messages
+```
+
+Messages sent while the orchestrator is mid-step accumulate in the buffer and
+are delivered at the next `koan_complete_step` call. Messages sent during
+`koan_ask_question` or `koan_review_artifact` also buffer and deliver after
+the structured interaction resolves.
 
 ---
 
@@ -271,7 +309,7 @@ Driver                         Scout CLI              Web UI
 ### User interaction flow (blocking via PendingInteraction queue)
 
 ```
-Subagent                      Driver                    Web UI
+Orchestrator                  Driver                    Web UI
   |                              |                        |
   |--koan_ask_question---------->|                        |
   |                              |  create Future         |

@@ -29,14 +29,12 @@ are nested naturally rather than flattened into a shared namespace.
 
 Role-specific fields:
 
-| Role           | Additional fields                      |
-| -------------- | -------------------------------------- |
-| `intake`       | --                                     |
-| `scout`        | `question`, `investigator_role`        |
-| `decomposer`   | --                                     |
-| `orchestrator` | `step_sequence`, `story_id` (optional) |
-| `planner`      | `story_id`                             |
-| `executor`     | `story_id`, `retry_context` (optional) |
+| Role           | Additional fields                                 |
+| -------------- | ------------------------------------------------- |
+| `orchestrator` | `project_dir`, `task_description`                 |
+| `scout`        | `question`, `investigator_role`                   |
+| `planner`      | `story_id`                                        |
+| `executor`     | `story_id`, `retry_context` (optional)            |
 
 ### Lifecycle
 
@@ -85,7 +83,7 @@ driver: spawn_subagent(task, subagent_dir, runner)
           -> parse stdout line-by-line for streaming events
           -> wait for process exit
 driver: deregister agent_id
-driver: check exit code, route to next phase
+driver: check exit code, emit workflow_completed
 ```
 
 ### Child side
@@ -137,19 +135,17 @@ Phase modules:
 
 ```
 koan/phases/
-  intake.py
-  brief_writer.py
-  scout.py
-  orchestrator.py
-  planner.py
-  executor.py
-  core_flows.py
-  tech_plan.py
-  ticket_breakdown.py
-  cross_artifact_validation.py
-  workflow_orchestrator.py
-  format_step.py
-  review_protocol.py
+  intake.py              # guidance provider: intake phase
+  brief_writer.py        # guidance provider: brief-generation phase
+  core_flows.py          # guidance provider: core-flows phase
+  tech_plan.py           # guidance provider: tech-plan phase
+  ticket_breakdown.py    # guidance provider: ticket-breakdown phase
+  cross_artifact_validation.py  # guidance provider: cross-artifact-validation and implementation-validation
+  executor.py            # guidance provider: execution phase; also spawned as separate subagent
+  orchestrator.py        # guidance provider: pre/post execution steps
+  scout.py               # spawned as separate subagent; no step guidance role
+  format_step.py         # shared formatting utilities
+  review_protocol.py     # shared review loop logic
 ```
 
 Each phase module exposes:
@@ -166,12 +162,13 @@ Each phase module exposes:
 
 ```
 koan_complete_step arrives via MCP:
-  step == 0       -> step=1, return format_step(step_guidance(1))          [boot transition]
+  step == 0       -> step=1, prepend SYSTEM_PROMPT, return format_step(step_guidance(1))  [boot/phase transition]
   otherwise       -> validate_step_completion(step)                       [pre-condition check]
                   -> next_step = get_next_step(step)                      [pure: decides where to go]
-  next_step is None -> return "Phase complete."                           [done]
+  next_step is None -> block for user message (asyncio.Future), then
+                       return format_phase_boundary(phase, messages, successors)  [phase boundary]
   next_step < prev  -> on_loop_back(prev, next_step)                     [side effects of loop]
-  next_step != None -> step=next_step, return format_step(step_guidance(next_step))  [advance]
+  next_step != None -> step=next_step, return format_step(step_guidance(next_step)) + any buffered user messages  [advance]
 ```
 
 ### System prompt vs task content
@@ -227,22 +224,34 @@ from write-bash is intractable at the permission layer.
 
 ### Role permission matrix
 
-| Role                        | koan tools                                                                                                                             | write/edit             | notes                                                                                                          |
-| --------------------------- | -------------------------------------------------------------------------------------------------------------------------------------- | ---------------------- | -------------------------------------------------------------------------------------------------------------- |
-| **intake**                  | `koan_complete_step`, `koan_ask_question`, `koan_request_scouts`, `koan_set_confidence`, `koan_review_artifact`                        | path-scoped to epicDir | `koan_request_scouts, koan_ask_question, write, edit` blocked in step 1 (Extract)                              |
-| **scout**                   | `koan_complete_step`                                                                                                                   | none                   | No `koan_ask_question` (no user interaction). No `koan_request_scouts` (no nested scouts). No file writing.    |
-| **brief-writer**            | `koan_complete_step`, `koan_review_artifact`, `edit`, `write`                                                                          | path-scoped to epicDir | `koan_request_scouts, koan_ask_question, write, edit` blocked in step 1 (Read)                                 |
-| **workflow-orchestrator**   | `koan_complete_step`, `koan_propose_workflow`, `koan_set_next_phase`                                                                   | --                     | No file writing capability                                                                                     |
-| **decomposer**              | `koan_complete_step`, `koan_ask_question`, `koan_request_scouts`                                                                       | path-scoped to epicDir | --                                                                                                             |
-| **orchestrator**            | `koan_complete_step`, `koan_ask_question`, `koan_select_story`, `koan_complete_story`, `koan_retry_story`, `koan_skip_story`           | path-scoped to epicDir | No `koan_request_scouts` -- orchestrator uses bash for verification                                            |
-| **planner**                 | `koan_complete_step`, `koan_ask_question`, `koan_request_scouts`                                                                       | path-scoped to epicDir | --                                                                                                             |
-| **ticket-breakdown**        | `koan_complete_step`, `koan_ask_question`, `koan_request_scouts`, `edit`, `write`                                                      | path-scoped to epicDir | --                                                                                                             |
-| **cross-artifact-validator**| `koan_complete_step`, `koan_ask_question`, `koan_request_scouts`, `edit`, `write`                                                      | path-scoped to epicDir | --                                                                                                             |
-| **executor**                | `koan_complete_step`, `koan_ask_question`                                                                                              | **unrestricted**       | Must modify the actual codebase                                                                                |
+The orchestrator role uses **phase-aware permissions** — available tools
+vary by the current phase. Planner, executor, and scout use static permission sets.
+
+**Orchestrator phase-aware permissions:**
+
+| Tool | Available phases |
+|------|-----------------|
+| `koan_complete_step` | All phases |
+| `koan_set_phase` | All phases (blocked mid-story during execution) |
+| `koan_ask_question` | All phases |
+| `koan_request_scouts` | `intake`, `core-flows`, `tech-plan`, `ticket-breakdown`, `cross-artifact-validation` |
+| `koan_review_artifact` | `intake`, `brief-generation`, `core-flows`, `tech-plan`, `ticket-breakdown`, `cross-artifact-validation`, `implementation-validation` |
+| `koan_spawn_executor` | `execution` only |
+| `koan_select_story`, `koan_complete_story`, `koan_retry_story`, `koan_skip_story` | `execution` only |
+| `write`, `edit` (epic_dir scoped) | All phases except `brief-generation` step 1 |
+| `bash` | `execution`, `implementation-validation` |
+
+**Other role static permissions:**
+
+| Role           | koan tools                                   | write/edit             | notes                                       |
+| -------------- | -------------------------------------------- | ---------------------- | ------------------------------------------- |
+| **scout**      | `koan_complete_step`                         | none                   | No user interaction. No nested scouts. No file writing. |
+| **planner**    | `koan_complete_step`, `koan_ask_question`, `koan_request_scouts` | path-scoped to epicDir | -- |
+| **executor**   | `koan_complete_step`, `koan_ask_question`    | **unrestricted**       | Must modify the actual codebase             |
 
 ### Path scoping
 
-Planning roles (intake, scout, decomposer, orchestrator, planner) can only
+Planning roles (orchestrator, scout, planner) can only
 `write`/`edit` files inside the epic directory. The permission check resolves
 both the tool's `path` argument and the epic directory, then verifies the tool
 path starts with the epic path.
@@ -255,11 +264,11 @@ path starts with the epic path.
 
 Koan has 6+ roles, but they cluster into 3 capability bands:
 
-| Tier         | Roles                                     | Why this tier                                                    |
-| ------------ | ----------------------------------------- | ---------------------------------------------------------------- |
-| **strong**   | intake, decomposer, orchestrator, planner | Complex multi-step reasoning                                     |
-| **standard** | executor                                  | Code implementation: reliable tool use without deepest reasoning |
-| **cheap**    | scout                                     | Narrow codebase investigation: reading files, writing findings   |
+| Tier         | Roles                          | Why this tier                                                    |
+| ------------ | ------------------------------ | ---------------------------------------------------------------- |
+| **strong**   | orchestrator, planner          | Complex multi-step reasoning                                     |
+| **standard** | executor                       | Code implementation: reliable tool use without deepest reasoning |
+| **cheap**    | scout                          | Narrow codebase investigation: reading files, writing findings   |
 
 The role-to-tier mapping is defined in `koan/config.py`. Adding a new role
 requires updating that map.
@@ -365,11 +374,8 @@ Agent registration and deregistration are tracked in the in-process
 
 Intake sub-phase derivation happens server-side based on step number:
 
-| Step | Pending ask? | Sub-phase   |
-| ---- | ------------ | ----------- |
-| 1    | --           | `"extract"` |
-| 2    | --           | `"scout"`   |
-| 3    | yes          | `"ask"`     |
-| 3    | no           | `"ask"`     |
-| 4    | --           | `"reflect"` |
-| 5    | --           | `"write"`   |
+| Step | Sub-phase     |
+| ---- | ------------- |
+| 1    | `"gather"`    |
+| 2    | `"evaluate"`  |
+| 3    | `"write"`     |

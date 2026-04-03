@@ -1,7 +1,7 @@
 # Koan Architecture
 
-Koan is a deterministic workflow that spawns isolated LLM subagents to plan and
-execute complex coding tasks. This document captures the design invariants,
+Koan coordinates coding task planning and execution through a single long-lived
+orchestrator LLM process that runs the entire workflow in one continuous session. This document captures the design invariants,
 principles, and pitfalls that govern the codebase.
 
 **Spoke documents** cover subsystems in depth:
@@ -9,15 +9,15 @@ principles, and pitfalls that govern the codebase.
 - [Subagents](./subagents.md) -- spawn lifecycle, boot protocol, step-first
   workflow, phase dispatch, permissions, model tiers
 - [IPC](./ipc.md) -- HTTP MCP inter-process communication, blocking tool calls,
-  scout spawning
+  scout spawning, phase-boundary blocking, chat message delivery
 - [Token Streaming](./token-streaming.md) -- runner stdout parsing, SSE delta path
 - [State & Driver](./state.md) -- the driver/LLM boundary, JSON vs markdown
-  ownership, epic and story state, routing rules
+  ownership, epic and story state, orchestrator state
 - [Projections](./projections.md) -- versioned event log, pure fold, JSON Patch
   protocol, projection model, camelCase wire format
-- [Intake Loop](./intake-loop.md) -- confidence-gated investigation loop,
-  non-linear step progression, prompt engineering principles
-- [Epic Brief](./epic-brief.md) -- brief artifact, brief-writer subagent, downstream references
+- [Intake Loop](./intake-loop.md) -- three-step intake design, review gate,
+  prompt engineering principles
+- [Epic Brief](./epic-brief.md) -- brief artifact, brief-generation phase, downstream references
 - [Artifact Review](./artifact-review.md) -- artifact review protocol, review loop, reusability
 
 ---
@@ -76,19 +76,15 @@ Three reinforcement mechanisms make this robust across model capability levels:
 | **Recency**       | `format_step()` appends "WHEN DONE: Call koan_complete_step..." last | LLMs weight end-of-context instructions heavily              |
 | **Muscle memory** | By step 2+ the LLM has called the tool N times                       | Pattern is locked in through repetition                      |
 
-### 3. Driver determinism
+### 3. Driver determinism (partially relaxed)
 
-The driver (`koan/driver.py`) is a deterministic state machine. It reads JSON
-state files and exit codes, applies routing rules, and spawns the next subagent.
-It never makes judgment calls, parses free-text output, or adapts to LLM
-behavior.
-
-**Routing priority** in the story loop:
-
-1. `retry` status -> re-execute (retry takes precedence over new work)
-2. `selected` status -> plan + execute
-3. All stories `done` or `skipped` -> epic complete
-4. None of the above -> error ("orchestrator may have exited without a routing decision")
+The driver (`koan/driver.py`) spawns the orchestrator and awaits its exit.
+Phase routing is driven by the orchestrator via `koan_set_phase` rather than
+the driver's routing loop. The driver still validates every transition
+(`is_valid_transition()` in the tool handler), updates `epic-state.json`
+atomically, emits projection events, and enforces the permission fence. It
+never parses free text or makes judgment calls. All routing decisions flow
+through typed tool parameters.
 
 ### 4. Default-deny permissions
 

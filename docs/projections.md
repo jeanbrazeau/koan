@@ -37,7 +37,7 @@ from a specific agent; `None` otherwise.
 ```python
 class VersionedEvent(BaseModel):
     version: int                    # 1-based, monotonic
-    event_type: str                 # one of the 37 event types (stored as str for forward compat)
+    event_type: str                 # one of the event types (stored as str for forward compat)
     timestamp: str                  # ISO8601 UTC
     agent_id: str | None = None     # originating agent, when known
     payload: dict                   # typed per event_type (see below)
@@ -98,7 +98,7 @@ on the conversation entry is `True` until `tool_completed` arrives.
 `agent.conversation.pending_thinking`; the completed `ThinkingEntry` is created
 on the next transition (tool call, step advance, or stream delta).
 
-### Focus (6)
+### Focus (4)
 
 | Event | Payload | `agent_id` |
 |-------|---------|-----------|
@@ -106,12 +106,20 @@ on the next transition (tool call, step advance, or stream delta).
 | `questions_answered` | `{token, cancelled, answers?}` | set |
 | `artifact_review_requested` | `{token, path, description, content}` | set |
 | `artifact_reviewed` | `{token, cancelled, accepted?, response?}` | set |
-| `workflow_decision_requested` | `{token, chat_turns}` | set |
-| `workflow_decided` | `{token, cancelled, decision?}` | set |
 
 These events transition `run.focus` between variants of the `Focus` union.
 Cancellation (`cancelled: true`) occurs when the agent exits while the
 interaction is pending — there is no separate cancellation event type.
+
+### User messages (1)
+
+| Event | Payload | `agent_id` |
+|-------|---------|-----------|
+| `user_message` | `{content, timestamp_ms}` | set (primary agent) |
+
+Emitted by `POST /api/chat` when the user sends a message during a run. The
+fold appends a `UserMessageEntry` to the primary agent's conversation entries,
+making user messages appear inline in the activity feed alongside agent output.
 
 ### Resources (3)
 
@@ -354,8 +362,14 @@ class ToolGenericEntry(BaseToolEntry):
     tool_name: str      # original tool name from the LLM
     summary: str = ""
 
+class UserMessageEntry(KoanBaseModel):
+    type: Literal["user_message"] = "user_message"
+    content: str
+    timestamp_ms: int
+
+
 ConversationEntry = Annotated[
-    ThinkingEntry | TextEntry | StepEntry |
+    ThinkingEntry | TextEntry | StepEntry | UserMessageEntry |
     ToolReadEntry | ToolWriteEntry | ToolEditEntry |
     ToolBashEntry | ToolGrepEntry | ToolLsEntry | ToolGenericEntry,
     Field(discriminator="type"),
@@ -386,14 +400,8 @@ class ReviewFocus(KoanBaseModel):
     description: str
     content: str
 
-class DecisionFocus(KoanBaseModel):
-    type: Literal["decision"] = "decision"
-    agent_id: str
-    token: str
-    chat_turns: list[dict]          # raw LLM output, not validated by fold
-
 Focus = Annotated[
-    ConversationFocus | QuestionFocus | ReviewFocus | DecisionFocus,
+    ConversationFocus | QuestionFocus | ReviewFocus,
     Field(discriminator="type"),
 ]
 ```
@@ -510,8 +518,7 @@ completed agents.
 | `questions_answered` | `run.focus = ConversationFocus(agent_id=primary_id)` |
 | `artifact_review_requested` | `run.focus = ReviewFocus(...)` |
 | `artifact_reviewed` | `run.focus = ConversationFocus(agent_id=primary_id)` |
-| `workflow_decision_requested` | `run.focus = DecisionFocus(...)` |
-| `workflow_decided` | `run.focus = ConversationFocus(agent_id=primary_id)` |
+| `user_message` | `primary_agent.conversation.entries += UserMessageEntry(...)` |
 
 ### Run lifecycle
 
