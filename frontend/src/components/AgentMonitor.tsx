@@ -1,9 +1,13 @@
 import { useMemo } from 'react'
 import { useStore, Agent } from '../store/index'
-import { useElapsed } from '../hooks/useElapsed'
+import { useElapsed, formatElapsed } from '../hooks/useElapsed'
 
 function AgentRow({ agent }: { agent: Agent }) {
-  const elapsed = useElapsed(agent.startedAtMs)
+  const liveElapsed = useElapsed(agent.startedAtMs)
+  // Freeze the timer for completed agents: show static duration instead of live tick
+  const elapsed = agent.completedAtMs
+    ? formatElapsed(agent.completedAtMs - agent.startedAtMs)
+    : liveElapsed
   const status = agent.status
 
   const statusIcon = status === 'running' ? '›'

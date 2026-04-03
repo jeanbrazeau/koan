@@ -248,6 +248,7 @@ class Agent(KoanBaseModel):
     status: Literal["queued", "running", "done", "failed"] = "queued"
     error: str | None = None
     started_at_ms: int = 0
+    completed_at_ms: int | None = None
 
     # Progress — updated during execution, shown in agent monitor
     step: int = 0
@@ -569,6 +570,7 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                     "status": status,
                     "error": error,
                     "conversation": new_conv,
+                    "completed_at_ms": int(datetime.now(timezone.utc).timestamp() * 1000),
                 })
                 new_agents = dict(projection.run.agents)
                 new_agents[agent_id] = new_agent

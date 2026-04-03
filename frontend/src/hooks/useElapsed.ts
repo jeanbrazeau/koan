@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 
-function formatElapsed(ms: number): string {
+export function formatElapsed(ms: number): string {
   const s = Math.floor(ms / 1000)
   const m = Math.floor(s / 60)
   return `${m}m ${String(s % 60).padStart(2, '0')}s`

@@ -73,6 +73,7 @@ export interface Agent {
   status: AgentStatus
   error: string | null
   startedAtMs: number
+  completedAtMs: number | null
   step: number
   stepName: string
   lastTool: string
