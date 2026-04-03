@@ -33,6 +33,8 @@ class FakeAppState:
     epic_dir: str | None = None
     projection_store: object = field(default_factory=lambda: __import__('koan.projections', fromlist=['ProjectionStore']).ProjectionStore())
     phase_complete_future: asyncio.Future | None = None
+    steering_queue: list = field(default_factory=list)
+    phase: str = "intake"
 
 
 def _make_interaction(

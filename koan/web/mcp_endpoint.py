@@ -35,7 +35,7 @@ from ..lib.permissions import check_permission
 from ..lib.phase_dag import get_successor_phases, is_valid_transition
 from ..logger import get_logger
 from ..phases import PHASE_GUIDANCE_MAP, PhaseContext, StepGuidance
-from ..phases.format_step import format_phase_boundary, format_step, format_user_messages
+from ..phases.format_step import format_phase_boundary, format_steering_messages, format_step
 from .interactions import activate_next_interaction, enqueue_interaction
 
 if TYPE_CHECKING:
@@ -84,14 +84,24 @@ def _get_agent() -> AgentState:
     return agent
 
 
+def _log_tool_call(agent: AgentState, tool: str, summary: str) -> None:
+    """Log an info-level message for every koan tool invocation."""
+    phase = _app_state.phase if _app_state else "?"
+    log.info(
+        "tool %s | agent=%s role=%s phase=%s | %s",
+        tool, agent.agent_id[:8], agent.role, phase, summary,
+    )
+
+
 def begin_tool_call(
     agent: AgentState,
     tool: str,
     args: dict | str,
     summary: str = "",
 ) -> str:
-    """Emit tool_called event and return call_id. No-op if app_state is not set."""
+    """Log and emit tool_called event. Returns call_id."""
     call_id = str(uuid.uuid4())
+    _log_tool_call(agent, tool, summary)
     if _app_state is None:
         return call_id
     from ..events import build_tool_called
@@ -133,6 +143,34 @@ def _resolve_epic_dir(agent: AgentState) -> str | None:
     if _app_state is not None and _app_state.epic_dir:
         return _app_state.epic_dir
     return None
+
+
+# -- Steering queue helper -----------------------------------------------------
+
+def _drain_and_append_steering(result: str, agent: AgentState | None = None) -> str:
+    """Drain any queued steering messages and append to a tool result string.
+
+    Only the primary agent (orchestrator) receives steering. Subagents
+    (scouts, planners, executors) never see user steering messages.
+    """
+    if _app_state is None:
+        return result
+    if agent is not None and not agent.is_primary:
+        return result
+    from ..state import drain_steering_messages
+    messages = drain_steering_messages(_app_state)
+    if messages:
+        previews = [m.content[:80] for m in messages]
+        log.info(
+            "steering delivered | %d message(s): %s",
+            len(messages), previews,
+        )
+        result += format_steering_messages(messages)
+        from ..events import build_steering_delivered
+        _app_state.projection_store.push_event(
+            "steering_delivered", build_steering_delivered(len(messages)),
+        )
+    return result
 
 
 # -- koan_complete_step private helpers ----------------------------------------
@@ -189,9 +227,12 @@ async def _step_within_phase(
     ctx: PhaseContext,
     next_step: int,
 ) -> str:
-    """Handle normal within-phase step advancement, appending any buffered user messages."""
+    """Handle normal within-phase step advancement.
+
+    User messages are not drained here -- they are delivered via the steering
+    queue which is drained by _drain_and_append_steering after every tool call.
+    """
     assert _app_state is not None
-    from ..state import drain_user_messages
 
     current_step = agent.step
 
@@ -219,11 +260,6 @@ async def _step_within_phase(
     guidance = phase_module.step_guidance(next_step, ctx)
     result = format_step(guidance)
 
-    # Drain buffered user messages and append to result
-    messages = drain_user_messages(_app_state)
-    if messages:
-        result += "\n\n" + format_user_messages(messages)
-
     if _app_state.debug:
         _app_state.projection_store.push_event(
             "debug_step_guidance",
@@ -241,7 +277,7 @@ async def _step_phase_boundary(
 ) -> str:
     """Handle phase boundary: flush conversation, block for user message, return boundary response."""
     assert _app_state is not None
-    from ..state import drain_user_messages
+    from ..state import drain_steering_messages, drain_user_messages
 
     # Flush pending text/thinking in the projection without adding a duplicate
     # step header (the step-N header was already emitted when we advanced TO
@@ -254,8 +290,9 @@ async def _step_phase_boundary(
         agent_id=agent.agent_id,
     )
 
-    # Check for already-buffered messages first
-    messages = drain_user_messages(_app_state)
+    # Check for already-buffered messages.  Messages that arrived before the
+    # boundary was set up go to the steering queue; drain both to catch them.
+    messages = drain_user_messages(_app_state) + drain_steering_messages(_app_state)
 
     if not messages:
         # No messages yet — create Future and block until POST /api/chat resolves it
@@ -288,6 +325,7 @@ async def koan_complete_step(thoughts: str = "") -> str:
         # Step 0: phase handshake (initial call or post-koan_set_phase)
         if agent.step == 0:
             result_str = await _step_phase_handshake(agent)
+            result_str = _drain_and_append_steering(result_str, agent)
             return result_str
 
         phase_module = agent.phase_module
@@ -311,10 +349,12 @@ async def koan_complete_step(thoughts: str = "") -> str:
                 return result_str
             # Phase boundary — block for user input
             result_str = await _step_phase_boundary(agent, phase_module, ctx)
+            result_str = _drain_and_append_steering(result_str, agent)
             return result_str
 
         # Normal within-phase advancement
         result_str = await _step_within_phase(agent, phase_module, ctx, next_step)
+        result_str = _drain_and_append_steering(result_str, agent)
         return result_str
 
     finally:
@@ -400,6 +440,7 @@ async def koan_set_phase(phase: str) -> str:
         )
 
         result_str = f"Phase set to '{phase}'. Call koan_complete_step to begin."
+        result_str = _drain_and_append_steering(result_str, agent)
         return result_str
     finally:
         end_tool_call(agent, call_id, "koan_set_phase", result_str)
@@ -420,6 +461,7 @@ async def koan_request_scouts(questions: list[dict] | None = None) -> str:
     try:
         if not questions:
             result_str = "No scouts requested."
+            result_str = _drain_and_append_steering(result_str, agent)
             return result_str
 
         assert _app_state is not None
@@ -469,9 +511,11 @@ async def koan_request_scouts(questions: list[dict] | None = None) -> str:
 
         if not findings:
             result_str = "No findings returned."
+            result_str = _drain_and_append_steering(result_str, agent)
             return result_str
 
         result_str = "\n\n---\n\n".join(findings)
+        result_str = _drain_and_append_steering(result_str, agent)
         return result_str
     finally:
         end_tool_call(agent, call_id, "koan_request_scouts", result_str)
@@ -530,6 +574,7 @@ async def koan_ask_question(questions: list[dict] | None = None) -> str:
             a_text = a.get("answer", "") if isinstance(a, dict) else str(a)
             lines.append(f"Q: {q_text}\nA: {a_text}")
         result_str = "\n\n".join(lines) if lines else "No answers provided."
+        result_str = _drain_and_append_steering(result_str, agent)
         return result_str
     finally:
         end_tool_call(agent, call_id, "koan_ask_question", result_str)
@@ -572,6 +617,7 @@ async def koan_review_artifact(path: str = "", description: str = "") -> str:
         agent.phase_ctx.last_review_accepted = accepted
 
         result_str = "ACCEPTED" if accepted else f"REVISION REQUESTED: {response}"
+        result_str = _drain_and_append_steering(result_str, agent)
         return result_str
     finally:
         end_tool_call(agent, call_id, "koan_review_artifact", result_str)
@@ -646,6 +692,7 @@ async def koan_spawn_executor(
         exit_code = result.exit_code
         status = "succeeded" if exit_code == 0 else f"failed (exit code {exit_code})"
         result_str = f"{role} for story '{story_id}' {status}."
+        result_str = _drain_and_append_steering(result_str, agent)
         return result_str
     finally:
         end_tool_call(agent, call_id, "koan_spawn_executor", result_str)
@@ -673,6 +720,7 @@ async def koan_select_story(story_id: str) -> str:
             "updatedAt": _now_iso(),
         })
         result_str = f"Story '{story_id}' selected for execution."
+        result_str = _drain_and_append_steering(result_str, agent)
         return result_str
     finally:
         end_tool_call(agent, call_id, "koan_select_story", result_str)
@@ -698,6 +746,7 @@ async def koan_complete_story(story_id: str) -> str:
             "updatedAt": _now_iso(),
         })
         result_str = f"Story '{story_id}' marked as done."
+        result_str = _drain_and_append_steering(result_str, agent)
         return result_str
     finally:
         end_tool_call(agent, call_id, "koan_complete_story", result_str)
@@ -728,6 +777,7 @@ async def koan_retry_story(story_id: str, failure_summary: str) -> str:
             "updatedAt": _now_iso(),
         })
         result_str = f"Story '{story_id}' queued for retry (attempt {retry_count})."
+        result_str = _drain_and_append_steering(result_str, agent)
         return result_str
     finally:
         end_tool_call(agent, call_id, "koan_retry_story", result_str)
@@ -757,6 +807,7 @@ async def koan_skip_story(story_id: str, reason: str = "") -> str:
 
         await save_story_state(epic_dir, story_id, state)
         result_str = f"Story '{story_id}' skipped."
+        result_str = _drain_and_append_steering(result_str, agent)
         return result_str
     finally:
         end_tool_call(agent, call_id, "koan_skip_story", result_str)

@@ -35,6 +35,7 @@ from ..events import (
     build_questions_answered,
     build_probe_completed,
     build_run_started,
+    build_steering_queued,
     build_installation_created,
     build_installation_modified,
     build_installation_removed,
@@ -317,6 +318,7 @@ async def api_start_run(r: Request) -> Response:
 
     # Reset run-scoped state
     st.user_message_buffer.clear()
+    st.steering_queue.clear()
     if st.phase_complete_future is not None and not st.phase_complete_future.done():
         st.phase_complete_future.set_result(False)
     st.phase_complete_future = None
@@ -351,20 +353,27 @@ async def api_chat(r: Request) -> Response:
 
     ts = int(time.time() * 1000)
     msg = ChatMessage(content=message.strip(), timestamp_ms=ts)
-    st.user_message_buffer.append(msg)
-
-    # Emit projection event so the message appears in the activity feed
+    # Route to one buffer based on context to prevent double-delivery.
+    # During phase-boundary blocking: message is the transition directive.
+    # Otherwise: message is steering feedback delivered on next tool response.
     run = st.projection_store.projection.run
     primary_id = _primary_agent_id(run) if run else None
-    st.projection_store.push_event(
-        "user_message",
-        {"content": msg.content, "timestamp_ms": msg.timestamp_ms},
-        agent_id=primary_id,
-    )
 
-    # Unblock koan_complete_step if it is blocking at a phase boundary
     if st.phase_complete_future is not None and not st.phase_complete_future.done():
+        st.user_message_buffer.append(msg)
+        # Show inline in the activity feed — this is a direct conversation message
+        st.projection_store.push_event(
+            "user_message",
+            {"content": msg.content, "timestamp_ms": msg.timestamp_ms},
+            agent_id=primary_id,
+        )
         st.phase_complete_future.set_result(True)
+    else:
+        st.steering_queue.append(msg)
+        # Show in the steering indicator above chat — not inline
+        st.projection_store.push_event(
+            "steering_queued", build_steering_queued(msg.content),
+        )
 
     return JSONResponse({"ok": True})
 

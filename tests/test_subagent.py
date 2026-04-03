@@ -39,6 +39,8 @@ class FakeAppState:
     run_installations: dict = field(default_factory=dict)
     _active_processes: dict = field(default_factory=dict)
     phase_complete_future: Any = None
+    steering_queue: list = field(default_factory=list)
+    phase: str = "intake"
     project_dir: str = ""
     task_description: str = ""
 
