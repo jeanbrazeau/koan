@@ -26,7 +26,7 @@ user questions, then write `landscape.md`.
 | Step | Name     | Runs | Purpose                                                                           |
 | ---- | -------- | ---- | --------------------------------------------------------------------------------- |
 | 1    | Gather   | 1x   | Read conversation, open obvious files (≤5), dispatch 3-5 scouts.                  |
-| 2    | Evaluate | 1x   | Process scout results, verify by reading files, enumerate knowns/unknowns, ask Qs. |
+| 2    | Deepen   | 1x   | Process scout results, verify by reading files, deepen understanding through iterative dialogue. |
 | 3    | Write    | 1x   | Write `landscape.md`. Review gate: calls `koan_review_artifact` before completing.  |
 
 Step 3 is review-gated: it blocks until `koan_review_artifact` is accepted.
@@ -51,19 +51,21 @@ actual function names and file paths rather than conversation labels.
 No read-only permission gate -- the Gather step has full access to all intake
 tools including `koan_request_scouts`.
 
-### Step 2: Evaluate
+### Step 2: Deepen
 
-The Evaluate step processes scout results, verifies findings by reading source
-files directly, enumerates knowns and unknowns with a downstream impact
-assessment, and asks the user targeted questions.
+The Deepen step builds genuine understanding through iterative dialogue with
+the user. It processes scout results, verifies findings by reading source files
+directly, identifies gaps, and asks the user targeted questions -- then deepens
+further as each answer reveals new dimensions.
 
 Key properties:
 - **Scout verification**: Scouts are good at exploration but their output should
-  be confirmed. The Evaluate step reads actual files to verify key scout findings
+  be confirmed. The Deepen step reads actual files to verify key scout findings
   that affect scope or story boundaries.
-- **Thread-of-Thought enumeration**: The step walks through each area relevant
-  to the task, explicitly stating what is known and unknown before formulating
-  questions. This surfaces gaps that would otherwise go unnoticed.
+- **Iterative deepening**: Understanding deepens through multiple rounds of
+  dialogue. Each answer may shift the picture of adjacent areas, revealing
+  assumptions the agent was making without realizing it. Multiple rounds of
+  questions are expected for any non-trivial task.
 - **Impact classification**: Each unknown is classified as ASK (user input
   needed) or SAFE (implementation detail). Only ASK items become questions.
 - **Default-ask framing**: Question-asking is the default; skipping requires
@@ -118,15 +120,19 @@ per `koan_complete_step` call while minimizing planning or meta-reasoning
 steps. Each step does real work across multiple activities rather than
 artificially separating them into sequential tool calls.
 
-### Thread-of-Thought in Evaluate (explicit enumeration before questions)
+### Iterative deepening through dialogue
 
-The Evaluate step instructs the LLM to walk through each area and explicitly
-state what is known, unknown, and its source -- before formulating questions.
-This surfaces gaps that are not top-of-mind.
+The Deepen step positions dialogue as the core mechanism, not an afterthought.
+The agent maps knowns and unknowns, then enters an iterative loop: ask
+questions, process answers, verify against code, surface new gaps, and ask
+again. Each answer is treated as a thread to pull -- it may shift understanding
+of adjacent areas and reveal assumptions the agent was making without realizing
+it. This ripple effect is what produces genuine understanding rather than
+surface-level coverage.
 
 ### Default-ask question framing (preventing question avoidance)
 
-The Evaluate step frames question-asking as the default, with skipping
+The Deepen step frames question-asking as the default, with skipping
 requiring triple justification. This inverts the typical LLM bias toward
 advancing the workflow.
 
@@ -165,3 +171,11 @@ Evaluate step is thorough.
 Scout result evaluation and question formulation are tightly coupled -- a scout
 finding directly informs what questions to ask. Separating them forces the LLM
 to defer questions it could ask immediately.
+
+### Don't cap question rounds
+
+Previous iterations suggested "aim for 3-5 questions" in a single batch. This
+created an implicit ceiling that discouraged iterative deepening. The current
+design has no per-round limit and explicitly expects multiple rounds for
+non-trivial tasks. Completion is defined by depth of understanding, not
+question count.
