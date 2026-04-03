@@ -30,9 +30,9 @@ class FakeAppState:
     active_interaction: PendingInteraction | None = None
     interaction_queue: deque[PendingInteraction] = field(default_factory=deque)
     interaction_queue_max: int = 8
-    frozen_logs: list = field(default_factory=list)
     epic_dir: str | None = None
     projection_store: object = field(default_factory=lambda: __import__('koan.projections', fromlist=['ProjectionStore']).ProjectionStore())
+    phase_complete_future: asyncio.Future | None = None
 
 
 def _make_interaction(
@@ -150,86 +150,6 @@ class TestStaleSubmit:
         resp = client.post("/api/artifact-review", json={"response": "Accept"})
         assert resp.status_code == 409
 
-    @pytest.mark.anyio
-    async def test_workflow_decision_stale_returns_409(self):
-        from starlette.testclient import TestClient
-
-        from koan.state import AppState
-        from koan.web.app import create_app
-
-        app_state = AppState()
-        app = create_app(app_state)
-        client = TestClient(app, raise_server_exceptions=False)
-        resp = client.post("/api/workflow-decision", json={"phase": "plan"})
-        assert resp.status_code == 409
-
-
-# -- TestWorkflowDecisionValidation -------------------------------------------
-
-class TestWorkflowDecisionValidation:
-    def _setup_workflow(self):
-        """Create app with an active workflow-decision interaction."""
-        from starlette.testclient import TestClient
-
-        from koan.state import AppState
-        from koan.web.app import create_app
-
-        app_state = AppState()
-        interaction = _make_interaction(
-            interaction_type="workflow-decision",
-            payload={
-                "chat_turns": [{
-                    "role": "orchestrator",
-                    "status_report": "test",
-                    "recommended_phases": [
-                        {"phase": "tech-plan", "context": "", "recommended": True},
-                        {"phase": "core-flows", "context": "", "recommended": False},
-                    ],
-                }],
-            },
-        )
-        app_state.active_interaction = interaction
-
-        app = create_app(app_state)
-        client = TestClient(app, raise_server_exceptions=False)
-        return client, interaction
-
-    @pytest.mark.anyio
-    async def test_valid_phase_resolves_future(self):
-        client, interaction = self._setup_workflow()
-        resp = client.post(
-            "/api/workflow-decision",
-            json={"phase": "tech-plan", "context": "go", "token": interaction.token},
-        )
-        assert resp.status_code == 200
-        assert resp.json()["ok"] is True
-        assert interaction.future.done()
-        assert interaction.future.result()["phase"] == "tech-plan"
-
-    @pytest.mark.anyio
-    async def test_empty_phase_rejected(self):
-        client, interaction = self._setup_workflow()
-        resp = client.post(
-            "/api/workflow-decision",
-            json={"phase": "", "context": "", "token": interaction.token},
-        )
-        assert resp.status_code == 422
-        assert resp.json()["error"] == "empty_phase"
-        # Interaction stays active (future not resolved)
-        assert not interaction.future.done()
-
-    @pytest.mark.anyio
-    async def test_stale_phase_rejected(self):
-        client, interaction = self._setup_workflow()
-        resp = client.post(
-            "/api/workflow-decision",
-            json={"phase": "execution", "context": "", "token": interaction.token},
-        )
-        assert resp.status_code == 422
-        assert resp.json()["error"] == "invalid_phase"
-        # Interaction stays active (future not resolved)
-        assert not interaction.future.done()
-
 
 # -- TestFIFOActivation -------------------------------------------------------
 
@@ -317,6 +237,21 @@ class TestCancellationOnExit:
 
         assert active_a.future.done()
         assert app_state.active_interaction is queued_b
+
+    @pytest.mark.anyio
+    async def test_phase_complete_future_cleared_on_exit(self):
+        """_cancel_pending_interactions clears phase_complete_future (QR4)."""
+        from koan.subagent import _cancel_pending_interactions
+
+        app_state = FakeAppState()
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        app_state.phase_complete_future = future
+
+        _cancel_pending_interactions("agent-1", app_state)
+
+        assert future.done()
+        assert app_state.phase_complete_future is None
 
 
 # -- TestArtifactReviewResolution ---------------------------------------------

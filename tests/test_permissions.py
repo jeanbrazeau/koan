@@ -27,8 +27,18 @@ class TestReadToolsAlwaysAllowed:
     def test_known_roles(self):
         for role in ALL_ROLES:
             for tool in READ_TOOLS:
+                # bash is phase-gated for orchestrator (requires execution/impl-validation phase)
+                if role == "orchestrator" and tool == "bash":
+                    continue
                 r = check_permission(role, tool)
                 assert r["allowed"], f"{tool} should be allowed for {role}"
+    
+    def test_orchestrator_bash_needs_phase(self):
+        """bash is phase-gated for the orchestrator role."""
+        r = check_permission("orchestrator", "bash", current_phase="intake")
+        assert not r["allowed"]
+        r = check_permission("orchestrator", "bash", current_phase="execution")
+        assert r["allowed"]
 
     def test_unknown_role(self):
         for tool in READ_TOOLS:
@@ -61,19 +71,95 @@ class TestStep1Blocking:
             r = check_permission("intake", tool, current_step=1)
             assert r["allowed"], f"intake step 1 should allow {tool}"
 
-    def test_brief_writer_step_1_blocks(self):
+    def test_orchestrator_brief_generation_step_1_blocks(self):
+        """Orchestrator at brief-generation step 1 blocks write/edit/scouts/ask."""
         for tool in self.blocked:
-            r = check_permission("brief-writer", tool, current_step=1)
-            assert not r["allowed"], f"brief-writer step 1 should block {tool}"
+            r = check_permission(
+                "orchestrator", tool,
+                current_step=1,
+                current_phase="brief-generation",
+            )
+            assert not r["allowed"], (
+                f"orchestrator brief-generation step 1 should block {tool}"
+            )
 
-    def test_brief_writer_step_2_allows(self):
-        # Only check tools that brief-writer actually has in its role set.
-        bw_allowed = ROLE_PERMISSIONS["brief-writer"]
+    def test_orchestrator_brief_generation_step_2_allows_write(self):
+        """Orchestrator at brief-generation step 2 allows write/edit."""
+        for tool in ("write", "edit"):
+            r = check_permission(
+                "orchestrator", tool,
+                current_step=2,
+                current_phase="brief-generation",
+            )
+            assert r["allowed"], (
+                f"orchestrator brief-generation step 2 should allow {tool}"
+            )
+
+    def test_orchestrator_intake_step_1_allows_all(self):
+        """Orchestrator at intake phase step 1 allows all base tools."""
         for tool in self.blocked:
-            if tool not in bw_allowed:
-                continue
-            r = check_permission("brief-writer", tool, current_step=2)
-            assert r["allowed"], f"brief-writer step 2 should allow {tool}"
+            r = check_permission(
+                "orchestrator", tool,
+                current_step=1,
+                current_phase="intake",
+            )
+            assert r["allowed"], f"orchestrator intake step 1 should allow {tool}"
+
+
+# -- Orchestrator phase-aware permissions -------------------------------------
+
+class TestOrchestratorPhasePermissions:
+    def test_koan_request_scouts_intake_allowed(self):
+        r = check_permission("orchestrator", "koan_request_scouts", current_phase="intake")
+        assert r["allowed"]
+
+    def test_koan_request_scouts_brief_generation_denied(self):
+        r = check_permission("orchestrator", "koan_request_scouts", current_phase="brief-generation")
+        assert not r["allowed"]
+
+    def test_koan_review_artifact_brief_generation_allowed(self):
+        r = check_permission("orchestrator", "koan_review_artifact", current_phase="brief-generation")
+        assert r["allowed"]
+
+    def test_koan_review_artifact_execution_denied(self):
+        r = check_permission("orchestrator", "koan_review_artifact", current_phase="execution")
+        assert not r["allowed"]
+
+    def test_koan_spawn_executor_execution_allowed(self):
+        r = check_permission("orchestrator", "koan_spawn_executor", current_phase="execution")
+        assert r["allowed"]
+
+    def test_koan_spawn_executor_intake_denied(self):
+        r = check_permission("orchestrator", "koan_spawn_executor", current_phase="intake")
+        assert not r["allowed"]
+
+    def test_story_tools_execution_allowed(self):
+        for tool in ("koan_select_story", "koan_complete_story", "koan_retry_story", "koan_skip_story"):
+            r = check_permission("orchestrator", tool, current_phase="execution")
+            assert r["allowed"], f"{tool} should be allowed during execution"
+
+    def test_story_tools_intake_denied(self):
+        for tool in ("koan_select_story", "koan_complete_story", "koan_retry_story", "koan_skip_story"):
+            r = check_permission("orchestrator", tool, current_phase="intake")
+            assert not r["allowed"], f"{tool} should not be allowed during intake"
+
+    def test_bash_execution_allowed(self):
+        r = check_permission("orchestrator", "bash", current_phase="execution")
+        assert r["allowed"]
+
+    def test_bash_intake_denied(self):
+        r = check_permission("orchestrator", "bash", current_phase="intake")
+        assert not r["allowed"]
+
+    def test_koan_set_phase_always_allowed(self):
+        for phase in ("intake", "brief-generation", "execution", "implementation-validation"):
+            r = check_permission("orchestrator", "koan_set_phase", current_phase=phase)
+            assert r["allowed"], f"koan_set_phase should be allowed in phase '{phase}'"
+
+    def test_koan_complete_step_always_allowed(self):
+        for phase in ("intake", "brief-generation", "execution"):
+            r = check_permission("orchestrator", "koan_complete_step", current_phase=phase)
+            assert r["allowed"]
 
 
 # -- Exhaustive role x tool matrix ---------------------------------------------
@@ -83,9 +169,12 @@ def _build_matrix():
 
     Expected result: allowed iff the tool is in READ_TOOLS or in that role's
     ROLE_PERMISSIONS entry.  Step is set to 2 to avoid step-1 blocking.
+    Only applies to non-orchestrator roles (orchestrator is phase-aware).
     """
     cases = []
     for role in ALL_ROLES:
+        if role == "orchestrator":
+            continue  # orchestrator uses phase-aware checks, tested separately
         allowed_set = ROLE_PERMISSIONS[role] | READ_TOOLS
         for tool in sorted(ALL_KOAN_TOOLS):
             expected = tool in allowed_set
@@ -98,49 +187,13 @@ _MATRIX_IDS = [f"{role}-{tool}-{'allow' if exp else 'deny'}" for role, tool, exp
 
 
 class TestExhaustiveRoleToolMatrix:
-    """Mechanically verify every role x tool combination against ROLE_PERMISSIONS."""
+    """Mechanically verify every non-orchestrator role x tool combination."""
 
     @pytest.mark.parametrize("role,tool,expected", _MATRIX, ids=_MATRIX_IDS)
     def test_role_tool(self, role, tool, expected):
         r = check_permission(role, tool, current_step=2)
         assert r["allowed"] == expected, (
             f"role={role} tool={tool}: expected allowed={expected}, got {r}"
-        )
-
-
-# -- Exhaustive step-1 matrix -------------------------------------------------
-
-def _build_step1_matrix():
-    """For brief-writer at step 1, verify blocked tools are denied
-    and all other allowed tools still pass.  Intake no longer has a
-    step-1 gate so its step-1 expectations match normal permissions."""
-    cases = []
-    for role in ("intake", "brief-writer"):
-        allowed_set = ROLE_PERMISSIONS[role] | READ_TOOLS
-        for tool in sorted(ALL_KOAN_TOOLS):
-            # Only brief-writer blocks tools at step 1; intake does not.
-            if role == "brief-writer" and tool in STEP_1_BLOCKED_TOOLS:
-                expected = False
-            elif tool in allowed_set:
-                expected = True
-            else:
-                expected = False
-            cases.append((role, tool, expected))
-    return cases
-
-
-_STEP1_MATRIX = _build_step1_matrix()
-_STEP1_IDS = [f"{role}-step1-{tool}-{'allow' if exp else 'deny'}" for role, tool, exp in _STEP1_MATRIX]
-
-
-class TestExhaustiveStep1Matrix:
-    """Verify step-1 blocking interacts correctly with every tool for affected roles."""
-
-    @pytest.mark.parametrize("role,tool,expected", _STEP1_MATRIX, ids=_STEP1_IDS)
-    def test_step1(self, role, tool, expected):
-        r = check_permission(role, tool, current_step=1)
-        assert r["allowed"] == expected, (
-            f"role={role} step=1 tool={tool}: expected allowed={expected}, got {r}"
         )
 
 
@@ -186,6 +239,27 @@ class TestPathScoping:
             current_step=2,
         )
         assert r["allowed"]
+
+    def test_orchestrator_write_inside_epic_allowed(self):
+        r = check_permission(
+            "orchestrator", "write",
+            epic_dir=self.epic,
+            tool_args={"path": "/tmp/epic/brief.md"},
+            current_phase="brief-generation",
+            current_step=2,
+        )
+        assert r["allowed"]
+
+    def test_orchestrator_write_outside_epic_denied(self):
+        r = check_permission(
+            "orchestrator", "write",
+            epic_dir=self.epic,
+            tool_args={"path": "/home/user/evil.sh"},
+            current_phase="intake",
+            current_step=2,
+        )
+        assert not r["allowed"]
+        assert "outside epic directory" in r["reason"]
 
 
 # -- Executor unrestricted write -----------------------------------------------

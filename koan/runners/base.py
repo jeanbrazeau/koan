@@ -63,9 +63,13 @@ class Runner(Protocol):
 # When adding a new koan MCP tool to mcp_endpoint.py, update this set too.
 KOAN_MCP_TOOLS: frozenset[str] = frozenset({
     "koan_complete_step",
+    "koan_set_phase",
     "koan_request_scouts",
     "koan_ask_question",
     "koan_review_artifact",
-    "koan_propose_workflow",
-    "koan_set_next_phase",
+    "koan_spawn_executor",
+    "koan_select_story",
+    "koan_complete_story",
+    "koan_retry_story",
+    "koan_skip_story",
 })

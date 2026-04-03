@@ -21,8 +21,14 @@ from .types import EpicPhase, Profile, SubagentRole
 
 
 @dataclass
+class ChatMessage:
+    content: str
+    timestamp_ms: int
+
+
+@dataclass
 class PendingInteraction:
-    type: Literal["ask", "artifact-review", "workflow-decision"]
+    type: Literal["ask", "artifact-review"]
     agent_id: str
     future: asyncio.Future
     payload: dict
@@ -61,7 +67,6 @@ class AppState:
     active_interaction: PendingInteraction | None = None
     interaction_queue: deque[PendingInteraction] = field(default_factory=deque)
     interaction_queue_max: int = 8
-    frozen_logs: list = field(default_factory=list)
     config: KoanConfig = field(default_factory=KoanConfig)
     balanced_profile: Profile | None = None
     probe_results: list[ProbeResult] = field(default_factory=list)
@@ -78,3 +83,14 @@ class AppState:
     _active_processes: dict[str, asyncio.subprocess.Process] = field(
         default_factory=dict, repr=False,
     )
+    # Buffered user chat messages — drained at each koan_complete_step call.
+    user_message_buffer: list[ChatMessage] = field(default_factory=list)
+    # Non-None while koan_complete_step is blocking at a phase boundary.
+    phase_complete_future: asyncio.Future | None = None
+
+
+def drain_user_messages(app_state: AppState) -> list[ChatMessage]:
+    """Atomically drain the user message buffer. Returns all buffered messages."""
+    messages = list(app_state.user_message_buffer)
+    app_state.user_message_buffer.clear()
+    return messages

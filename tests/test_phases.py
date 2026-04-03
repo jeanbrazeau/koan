@@ -13,7 +13,6 @@ from koan.phases import ticket_breakdown
 from koan.phases import cross_artifact_validation
 from koan.phases import executor
 from koan.phases import orchestrator
-from koan.phases import workflow_orchestrator
 from koan.phases import scout
 
 
@@ -86,35 +85,6 @@ class TestBriefWriter:
         assert brief_writer.get_next_step(3, _ctx()) is None
 
 
-# -- Workflow Orchestrator -----------------------------------------------------
-
-class TestWorkflowOrchestrator:
-    def test_step_2_both_gates_met(self):
-        ctx = _ctx(proposal_made=True, next_phase_set=True)
-        assert workflow_orchestrator.get_next_step(2, ctx) is None
-
-    def test_step_2_proposal_only_loops(self):
-        ctx = _ctx(proposal_made=True, next_phase_set=False)
-        assert workflow_orchestrator.get_next_step(2, ctx) == 2
-
-    def test_validate_step_2_no_proposal(self):
-        result = workflow_orchestrator.validate_step_completion(2, _ctx())
-        assert result is not None
-        assert "koan_propose_workflow" in result
-
-    def test_validate_step_2_proposal_no_phase(self):
-        result = workflow_orchestrator.validate_step_completion(2, _ctx(proposal_made=True))
-        assert result is not None
-        assert "koan_set_next_phase" in result
-
-    def test_validate_step_2_both_gates_met(self):
-        ctx = _ctx(proposal_made=True, next_phase_set=True)
-        assert workflow_orchestrator.validate_step_completion(2, ctx) is None
-
-    def test_step_1_to_2(self):
-        assert workflow_orchestrator.get_next_step(1, _ctx()) == 2
-
-
 # -- Orchestrator --------------------------------------------------------------
 
 class TestOrchestrator:
@@ -179,13 +149,5 @@ class TestPurity:
         ctx_copy = copy.deepcopy(ctx)
         r1 = brief_writer.get_next_step(2, ctx)
         r2 = brief_writer.get_next_step(2, ctx)
-        assert r1 == r2
-        assert ctx == ctx_copy
-
-    def test_workflow_orchestrator_purity(self):
-        ctx = _ctx(proposal_made=True, next_phase_set=False)
-        ctx_copy = copy.deepcopy(ctx)
-        r1 = workflow_orchestrator.get_next_step(2, ctx)
-        r2 = workflow_orchestrator.get_next_step(2, ctx)
         assert r1 == r2
         assert ctx == ctx_copy

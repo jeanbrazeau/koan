@@ -33,11 +33,11 @@ function ThinkingCard({ content }: { content: string }) {
 function StepHeader({ step, stepName, totalSteps }: {
   step: number; stepName: string; totalSteps: number | null
 }) {
-  const label = totalSteps ? `step ${step}/${totalSteps}` : `step ${step}`
+  const label = step === 0 ? stepName : (totalSteps ? `step ${step}/${totalSteps}` : `step ${step}`)
   return (
     <div className="step-header">
       <span className="step-header-label">{label}</span>
-      {stepName && <span className="step-header-name">{stepName}</span>}
+      {step > 0 && stepName && <span className="step-header-name">{stepName}</span>}
     </div>
   )
 }
@@ -64,6 +64,22 @@ function DebugGuidanceCard({ content }: { content: string }) {
           <Md>{content}</Md>
         </div>
       )}
+    </div>
+  )
+}
+
+// -- User message bubble -------------------------------------------------------
+
+function UserMessageBubble({ content, timestampMs }: { content: string; timestampMs: number }) {
+  const ts = new Date(timestampMs)
+  const timeStr = ts.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+
+  return (
+    <div className="user-message-bubble">
+      <div className="user-message-content">
+        <Md>{content}</Md>
+      </div>
+      <div className="user-message-time">{timeStr}</div>
     </div>
   )
 }
@@ -107,6 +123,8 @@ function renderEntry(entry: ConversationEntry, i: number) {
       return <StepHeader key={i} step={entry.step} stepName={entry.stepName} totalSteps={entry.totalSteps} />
     case 'text':
       return <TextBlock key={i} text={entry.text} />
+    case 'user_message':
+      return <UserMessageBubble key={i} content={entry.content} timestampMs={entry.timestampMs} />
     case 'tool_read': {
       const detail = entry.lines ? `${entry.file}:${entry.lines}` : entry.file
       return <DetailLine key={i} tool="read" detail={detail} inFlight={entry.inFlight} />

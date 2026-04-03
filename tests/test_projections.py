@@ -14,7 +14,6 @@ from koan.projections import (
     BaseToolEntry,
     Conversation,
     ConversationFocus,
-    DecisionFocus,
     Projection,
     ProjectionStore,
     QuestionFocus,
@@ -468,18 +467,6 @@ class TestFoldFocus:
         p = _proj_with_primary("a1")
         p = fold(p, _e("artifact_review_requested", {"token": "t2", "path": "/f.md", "description": "", "content": ""}, agent_id="a1"))
         r = fold(p, _e("artifact_reviewed", {"token": "t2", "cancelled": False}, agent_id="a1"))
-        assert isinstance(r.run.focus, ConversationFocus)
-
-    def test_workflow_decision_requested_sets_decision_focus(self):
-        p = _proj_with_primary("a1")
-        r = fold(p, _e("workflow_decision_requested", {"token": "t3", "chat_turns": []}, agent_id="a1"))
-        assert isinstance(r.run.focus, DecisionFocus)
-        assert r.run.focus.token == "t3"
-
-    def test_workflow_decided_resets_to_conversation_focus(self):
-        p = _proj_with_primary("a1")
-        p = fold(p, _e("workflow_decision_requested", {"token": "t3", "chat_turns": []}, agent_id="a1"))
-        r = fold(p, _e("workflow_decided", {"token": "t3", "cancelled": False}, agent_id="a1"))
         assert isinstance(r.run.focus, ConversationFocus)
 
 

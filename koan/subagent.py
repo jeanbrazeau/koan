@@ -29,10 +29,9 @@ from .events import (
     build_tool_ls,
     build_tool_read,
     build_tool_write,
-    build_workflow_decided,
 )
 from .logger import get_logger
-from .phases import PHASE_MODULE_MAP, PhaseContext
+from .phases import ORCHESTRATOR_SYSTEM_PROMPT, PHASE_GUIDANCE_MAP, PHASE_MODULE_MAP, PhaseContext
 from .runners import RunnerDiagnostic, RunnerError
 from .runners.registry import RunnerRegistry
 
@@ -147,8 +146,16 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
     # Build PhaseContext
     phase_ctx = _build_phase_ctx(task, subagent_dir)
 
-    # Look up phase module
-    phase_module = PHASE_MODULE_MAP.get(role)
+    # Look up phase module and system prompt.
+    # Persistent orchestrator: uses intake as initial step-guidance module;
+    # ORCHESTRATOR_SYSTEM_PROMPT as the spawn-time --system-prompt.
+    if role == "orchestrator":
+        phase_module = PHASE_GUIDANCE_MAP.get("intake")
+        system_prompt = ORCHESTRATOR_SYSTEM_PROMPT
+    else:
+        phase_module = PHASE_MODULE_MAP.get(role)
+        system_prompt = getattr(phase_module, "SYSTEM_PROMPT", "") or "" if phase_module else ""
+
     if phase_module is None:
         log.error("no phase module for role %s", role)
         return SubagentResult(exit_code=1)
@@ -179,7 +186,6 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
 
     # Build command before emitting agent_spawned -- if build_command fails, no
     # agent_spawned event is emitted (per plan: "the agent was never launched").
-    system_prompt = getattr(phase_module, "SYSTEM_PROMPT", "") or ""
     try:
         if installation is not None and thinking_mode is not None:
             cmd = runner.build_command(
@@ -368,6 +374,8 @@ def _cancel_pending_interactions(agent_id: str, app_state: AppState) -> None:
     Queued interactions are cancelled silently (no projection event).
     The active interaction (if it belongs to this agent) emits a typed
     cancellation resolution event.
+
+    Also clears phase_complete_future if the agent was blocked at a phase boundary.
     """
     from .web.interactions import activate_next_interaction
 
@@ -403,13 +411,12 @@ def _cancel_pending_interactions(agent_id: str, app_state: AppState) -> None:
                 build_artifact_reviewed(token, accepted=None, response=None, cancelled=True),
                 agent_id=agent_id,
             )
-        elif active.type == "workflow-decision":
-            store.push_event(
-                "workflow_decided",
-                build_workflow_decided(token, decision=None, cancelled=True),
-                agent_id=agent_id,
-            )
 
         if not active.future.done():
             active.future.set_result(error_result)
         activate_next_interaction(app_state)
+
+    # Clear phase_complete_future if it was set (orchestrator crashed at phase boundary)
+    if app_state.phase_complete_future is not None and not app_state.phase_complete_future.done():
+        app_state.phase_complete_future.set_result(False)
+    app_state.phase_complete_future = None

@@ -34,6 +34,7 @@ export interface RunConfig {
 export interface ThinkingEntry { type: 'thinking'; content: string }
 export interface TextEntry { type: 'text'; text: string }
 export interface StepEntry { type: 'step'; step: number; stepName: string; totalSteps: number | null }
+export interface UserMessageEntry { type: 'user_message'; content: string; timestampMs: number }
 
 interface BaseToolEntry { callId: string; inFlight: boolean }
 export interface ToolReadEntry    extends BaseToolEntry { type: 'tool_read';    file: string; lines: string }
@@ -46,7 +47,7 @@ export interface ToolGenericEntry extends BaseToolEntry { type: 'tool_generic'; 
 export interface DebugStepGuidanceEntry { type: 'debug_step_guidance'; content: string }
 
 export type ConversationEntry =
-  | ThinkingEntry | TextEntry | StepEntry
+  | ThinkingEntry | TextEntry | StepEntry | UserMessageEntry
   | ToolReadEntry | ToolWriteEntry | ToolEditEntry
   | ToolBashEntry | ToolGrepEntry | ToolLsEntry | ToolGenericEntry
   | DebugStepGuidanceEntry
@@ -91,19 +92,11 @@ export interface AskQuestion {
   free_text?: boolean     // when true (or when options is empty), render a textarea instead of options
 }
 
-export interface ChatTurn {
-  role: 'orchestrator' | 'user'
-  status_report?: string              // snake_case from backend list[dict]
-  recommended_phases?: { phase: string; context?: string; recommended?: boolean }[]
-  message?: string
-}
-
 export interface ConversationFocus { type: 'conversation'; agentId: string }
 export interface QuestionFocus     { type: 'question';     agentId: string; token: string; questions: AskQuestion[] }
 export interface ReviewFocus       { type: 'review';       agentId: string; token: string; path: string; description: string; content: string }
-export interface DecisionFocus     { type: 'decision';     agentId: string; token: string; chatTurns: ChatTurn[] }
 
-export type Focus = ConversationFocus | QuestionFocus | ReviewFocus | DecisionFocus
+export type Focus = ConversationFocus | QuestionFocus | ReviewFocus
 
 // -- Supporting types ---------------------------------------------------------
 

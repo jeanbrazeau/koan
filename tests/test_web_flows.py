@@ -449,43 +449,6 @@ def test_live_page_when_running(client, app_state):
     assert "root" in resp.text
 
 
-# -- Workflow interaction SSE payload -----------------------------------------
-
-def test_workflow_interaction_sse_payload_shape(app_state):
-    from koan.events import build_workflow_decision_requested
-
-    token = "tok"
-    chat_turns = [{
-        "role": "orchestrator",
-        "status_report": "Done",
-        "recommended_phases": [{
-            "phase": "tech-plan",
-            "context": "next",
-            "recommended": True,
-        }],
-    }]
-
-    # Setup: need a run with a running primary agent before focus can be set
-    app_state.projection_store.push_event("run_started", {"profile": "balanced", "installations": {}, "scout_concurrency": 8})
-    app_state.projection_store.push_event("agent_spawned", {
-        "agent_id": "agent-1", "role": "intake", "is_primary": True, "started_at_ms": 0,
-    }, agent_id="agent-1")
-    app_state.projection_store.push_event(
-        "workflow_decision_requested",
-        build_workflow_decision_requested(token, chat_turns),
-        agent_id="agent-1",
-    )
-
-    # Verify projection holds focus as DecisionFocus (new model)
-    from koan.projections import DecisionFocus
-    proj = app_state.projection_store.projection
-    assert proj.run is not None
-    focus = proj.run.focus
-    assert isinstance(focus, DecisionFocus)
-    assert focus.token == "tok"
-    turns = focus.chat_turns
-    assert turns[0]["recommended_phases"][0]["phase"] == "tech-plan"
-
 
 # -- Old model-config route removed ------------------------------------------
 

@@ -71,16 +71,6 @@ async def load_all_story_states(epic_dir: str | Path) -> list[dict]:
     return results
 
 
-async def read_workflow_decision(subagent_dir: str | Path) -> dict | None:
-    p = Path(subagent_dir) / "workflow-decision.json"
-    try:
-        async with aiofiles.open(p, "r") as f:
-            return json.loads(await f.read())
-    except (FileNotFoundError, json.JSONDecodeError) as exc:
-        log.warning("read_workflow_decision failed for %s: %s", p, exc)
-        return None
-
-
 async def ensure_subagent_directory(
     epic_dir: str | Path, label: str
 ) -> str:

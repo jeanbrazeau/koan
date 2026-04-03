@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from datetime import datetime, timezone
+from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from . import StepGuidance
@@ -20,3 +21,42 @@ def format_step(g: StepGuidance) -> str:
     body = "\n".join(g.instructions)
     invoke = g.invoke_after if g.invoke_after is not None else DEFAULT_INVOKE
     return f"{header}{body}\n\n{invoke}"
+
+
+def format_user_messages(messages: list[Any]) -> str:
+    """Format a list of ChatMessage objects into a readable string block."""
+    parts = []
+    for msg in messages:
+        ts = datetime.fromtimestamp(msg.timestamp_ms / 1000, tz=timezone.utc)
+        ts_str = ts.strftime("%H:%M:%S UTC")
+        parts.append(f"---\nUSER MESSAGE (at {ts_str}):\n{msg.content}\n---")
+    return "\n\n".join(parts)
+
+
+def format_phase_boundary(phase: str, messages: list[Any], successors: list[str]) -> str:
+    """Format a phase-boundary response that includes user messages and next-phase options."""
+    title = f"Phase Complete: {phase}"
+    lines = [title, "=" * len(title), ""]
+
+    if messages:
+        lines.append("## User Message(s)")
+        lines.append("")
+        for msg in messages:
+            ts = datetime.fromtimestamp(msg.timestamp_ms / 1000, tz=timezone.utc)
+            ts_str = ts.strftime("%H:%M:%S UTC")
+            lines.append(f"**[{ts_str}]** {msg.content}")
+        lines.append("")
+
+    lines.append("## Available Next Phases")
+    lines.append("")
+    for s in successors:
+        lines.append(f"- **{s}**")
+    lines.append("")
+
+    lines.append("## Instructions")
+    lines.append("")
+    lines.append("Discuss the completed phase and the user's message(s) with the user.")
+    lines.append("Once the user has confirmed what to do next, call `koan_set_phase` with")
+    lines.append("the chosen phase name. Then call `koan_complete_step` to begin.")
+
+    return "\n".join(lines)

@@ -51,13 +51,13 @@ EventType = Literal[
     "stream_delta",
     "stream_cleared",
     "debug_step_guidance",
+    # User chat
+    "user_message",
     # Focus (interactions)
     "questions_asked",
     "questions_answered",
     "artifact_review_requested",
     "artifact_reviewed",
-    "workflow_decision_requested",
-    "workflow_decided",
     # Resources
     "artifact_created",
     "artifact_modified",
@@ -131,6 +131,11 @@ class StepEntry(KoanBaseModel):
     step_name: str
     total_steps: int | None = None
 
+class UserMessageEntry(KoanBaseModel):
+    type: Literal["user_message"] = "user_message"
+    content: str
+    timestamp_ms: int
+
 class BaseToolEntry(KoanBaseModel):
     """Shared fields for all tool entries."""
     call_id: str                           # unique per tool invocation
@@ -173,7 +178,7 @@ class DebugStepGuidanceEntry(KoanBaseModel):
     content: str                           # full formatted step guidance text
 
 ConversationEntry = Annotated[
-    ThinkingEntry | TextEntry | StepEntry |
+    ThinkingEntry | TextEntry | StepEntry | UserMessageEntry |
     ToolReadEntry | ToolWriteEntry | ToolEditEntry |
     ToolBashEntry | ToolGrepEntry | ToolLsEntry | ToolGenericEntry |
     DebugStepGuidanceEntry,
@@ -219,15 +224,8 @@ class ReviewFocus(KoanBaseModel):
     description: str = ""
     content: str = ""
 
-class DecisionFocus(KoanBaseModel):
-    """Workflow decision needed from user."""
-    type: Literal["decision"] = "decision"
-    agent_id: str
-    token: str
-    chat_turns: list[dict] = []
-
 Focus = Annotated[
-    ConversationFocus | QuestionFocus | ReviewFocus | DecisionFocus,
+    ConversationFocus | QuestionFocus | ReviewFocus,
     Field(discriminator="type"),
 ]
 
@@ -836,6 +834,27 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                     "run": _update_agent_conversation(projection.run, agent_id, new_conv),
                 })
 
+            case "user_message":
+                if projection.run is None:
+                    return projection
+                pid = _primary_agent_id(projection.run)
+                if pid is None:
+                    return projection
+                agent = projection.run.agents.get(pid)
+                if agent is None:
+                    return projection
+                entry = UserMessageEntry(
+                    content=payload.get("content", ""),
+                    timestamp_ms=payload.get("timestamp_ms", 0),
+                )
+                new_conv = _flush_conversation(agent.conversation)
+                new_conv = new_conv.model_copy(update={
+                    "entries": [*new_conv.entries, entry],
+                })
+                return projection.model_copy(update={
+                    "run": _update_agent_conversation(projection.run, pid, new_conv),
+                })
+
             case "agent_step_advanced":
                 if projection.run is None or not agent_id:
                     return projection
@@ -849,9 +868,10 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                 total_steps = payload.get("total_steps")
                 usage = payload.get("usage")
 
-                # Flush both pending fields, optionally append StepEntry
+                # Flush both pending fields, optionally append StepEntry.
+                # step >= 0 so phase-transition markers (step=0 from koan_set_phase) also appear.
                 new_conv = _flush_conversation(agent.conversation)
-                if step >= 1:
+                if step >= 0 and step_name:
                     new_conv = new_conv.model_copy(update={
                         "entries": [*new_conv.entries, StepEntry(
                             step=step,
@@ -910,28 +930,6 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                 return projection.model_copy(update={"run": new_run})
 
             case "artifact_reviewed":
-                if projection.run is None:
-                    return projection
-                pid = _primary_agent_id(projection.run)
-                if pid is None:
-                    return projection
-                new_run = projection.run.model_copy(update={
-                    "focus": ConversationFocus(agent_id=pid),
-                })
-                return projection.model_copy(update={"run": new_run})
-
-            case "workflow_decision_requested":
-                if projection.run is None or not agent_id:
-                    return projection
-                new_focus = DecisionFocus(
-                    agent_id=agent_id,
-                    token=payload.get("token", ""),
-                    chat_turns=payload.get("chat_turns", []),
-                )
-                new_run = projection.run.model_copy(update={"focus": new_focus})
-                return projection.model_copy(update={"run": new_run})
-
-            case "workflow_decided":
                 if projection.run is None:
                     return projection
                 pid = _primary_agent_id(projection.run)

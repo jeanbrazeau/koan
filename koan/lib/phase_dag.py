@@ -1,9 +1,8 @@
 # Phase transition DAG -- the single source of truth for valid epic phase transitions.
 #
 # Consulted by:
-#   - the driver (to decide whether to spawn the orchestrator or auto-advance)
-#   - koan_set_next_phase (to validate the committed transition)
-#   - workflow_orchestrator step 2 guidance (lists available phases)
+#   - the driver (to decide when to spawn the orchestrator)
+#   - koan_set_phase (to validate the committed transition)
 #
 # Pure functions -- no I/O, no mutable state.
 
@@ -63,5 +62,7 @@ def is_stub_phase(phase: EpicPhase) -> bool:
     return phase != "completed" and phase != "implementation-validation" and phase not in IMPLEMENTED_PHASES
 
 
-def is_valid_transition(from_phase: EpicPhase, to_phase: EpicPhase) -> bool:
+def is_valid_transition(from_phase: EpicPhase | None, to_phase: EpicPhase) -> bool:
+    if from_phase is None:
+        return False
     return to_phase in get_successor_phases(from_phase)

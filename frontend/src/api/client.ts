@@ -71,16 +71,10 @@ export async function submitArtifactReview(
   })
 }
 
-export async function submitWorkflowDecision(
-  phase: string,
-  context: string,
-  token: string,
-) {
-  return post<{ ok: boolean; message?: string }>('/api/workflow-decision', {
-    phase,
-    context,
-    token,
-  })
+// -- Chat --------------------------------------------------------------------
+
+export async function sendChatMessage(message: string) {
+  return post<{ ok: boolean; error?: string }>('/api/chat', { message })
 }
 
 // -- Probe -------------------------------------------------------------------

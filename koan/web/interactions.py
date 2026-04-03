@@ -24,7 +24,6 @@ def _emit_interaction_request(app_state: AppState, interaction: PendingInteracti
     from ..events import (
         build_artifact_review_requested,
         build_questions_asked,
-        build_workflow_decision_requested,
     )
 
     store = app_state.projection_store
@@ -49,12 +48,6 @@ def _emit_interaction_request(app_state: AppState, interaction: PendingInteracti
             ),
             agent_id=agent_id,
         )
-    elif interaction.type == "workflow-decision":
-        store.push_event(
-            "workflow_decision_requested",
-            build_workflow_decision_requested(token, payload.get("chat_turns", [])),
-            agent_id=agent_id,
-        )
 
 
 # -- Queue helpers ------------------------------------------------------------
@@ -62,7 +55,7 @@ def _emit_interaction_request(app_state: AppState, interaction: PendingInteracti
 async def enqueue_interaction(
     agent: AgentState,
     app_state: AppState,
-    interaction_type: Literal["ask", "artifact-review", "workflow-decision"],
+    interaction_type: Literal["ask", "artifact-review"],
     payload: dict,
 ) -> asyncio.Future:
     total = len(app_state.interaction_queue) + (1 if app_state.active_interaction else 0)

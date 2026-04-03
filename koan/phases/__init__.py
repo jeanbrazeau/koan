@@ -24,8 +24,6 @@ class PhaseContext:
     project_dir: str = ""
     task_description: str = ""
     phase_instructions: str | None = None
-    intake_confidence: str | None = None
-    intake_iteration: int = 0
     last_review_accepted: bool | None = None
     proposal_made: bool = False
     next_phase_set: bool = False
@@ -50,8 +48,33 @@ class PhaseModule(Protocol):
     async def on_loop_back(self, from_step: int, to_step: int, ctx: PhaseContext) -> None: ...
 
 
+# -- Orchestrator base system prompt ------------------------------------------
+# Delivered via --system-prompt at spawn time. Phase-specific role context
+# is injected via koan_complete_step's step-1 guidance (SYSTEM_PROMPT prepend).
+
+ORCHESTRATOR_SYSTEM_PROMPT = (
+    "You are the koan workflow orchestrator. You run a coding task planning and"
+    " execution pipeline from start to finish in a single continuous session.\n"
+    "\n"
+    "You work through phases in sequence: each phase has numbered steps. Call"
+    " koan_complete_step to advance through steps. When a phase ends,"
+    " koan_complete_step will return the user's message and available next phases."
+    " Converse with the user about what to do next, then call koan_set_phase to"
+    " commit the transition.\n"
+    "\n"
+    "At the start of each phase, koan_complete_step returns your role context for"
+    " that phase alongside the first step's instructions.\n"
+    "\n"
+    "Rules:\n"
+    "- Only call koan_set_phase after the user has confirmed the direction.\n"
+    "- When the user indicates they are done, or all phases are complete, exit gracefully.\n"
+    "- Available tools change depending on the current phase. The step 1 guidance"
+    " for each phase lists the tools relevant to that phase."
+)
+
+
 # -- Phase module registry ----------------------------------------------------
-# Maps each SubagentRole string to its phase module.
+# Maps each SubagentRole string to its phase module (for subagent spawn lookup).
 
 from . import (
     brief_writer,
@@ -63,19 +86,28 @@ from . import (
     scout,
     tech_plan as planner,
     ticket_breakdown,
-    workflow_orchestrator,
 )
 from typing import Any
 
 PHASE_MODULE_MAP: dict[str, Any] = {
     "intake": intake,
     "scout": scout,
-    "brief-writer": brief_writer,
-    "decomposer": core_flows,
     "orchestrator": orchestrator,
     "planner": planner,
     "executor": executor,
-    "workflow-orchestrator": workflow_orchestrator,
-    "ticket-breakdown": ticket_breakdown,
-    "cross-artifact-validator": cross_artifact_validation,
+}
+
+# -- Phase guidance map -------------------------------------------------------
+# Maps EpicPhase strings to the phase module that provides step guidance.
+# Used by koan_set_phase to load the module for the new phase.
+
+PHASE_GUIDANCE_MAP: dict[str, Any] = {
+    "intake":                    intake,
+    "brief-generation":          brief_writer,
+    "core-flows":                core_flows,
+    "tech-plan":                 planner,
+    "ticket-breakdown":          ticket_breakdown,
+    "cross-artifact-validation": cross_artifact_validation,
+    "execution":                 executor,
+    "implementation-validation": cross_artifact_validation,
 }

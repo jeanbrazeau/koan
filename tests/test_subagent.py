@@ -34,17 +34,19 @@ class FakeAppState:
     active_interaction: Any = None
     interaction_queue: Any = field(default_factory=lambda: __import__("collections").deque())
     interaction_queue_max: int = 8
-    frozen_logs: list = field(default_factory=list)
     epic_dir: str | None = None
     projection_store: object = field(default_factory=lambda: __import__('koan.projections', fromlist=['ProjectionStore']).ProjectionStore())
     run_installations: dict = field(default_factory=dict)
     _active_processes: dict = field(default_factory=dict)
+    phase_complete_future: Any = None
+    project_dir: str = ""
+    task_description: str = ""
 
 
 class FakeRunner:
     name = "fake"
 
-    def build_command(self, boot_prompt, mcp_url, model):
+    def build_command(self, boot_prompt, mcp_url, model, system_prompt="", **kwargs):
         # Return a command that exits immediately with code 1
         return ["python3", "-c", "import sys; sys.exit(1)"]
 
@@ -56,7 +58,7 @@ class FakeRunnerSuccess:
     """Runner that exits 0. Handshake is set via MCP path, not stream."""
     name = "fake"
 
-    def build_command(self, boot_prompt, mcp_url, model):
+    def build_command(self, boot_prompt, mcp_url, model, system_prompt="", **kwargs):
         return ["python3", "-c", "pass"]
 
     def parse_stream_event(self, line):

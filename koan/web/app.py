@@ -26,12 +26,13 @@ from starlette.responses import StreamingResponse
 from ..artifacts import list_artifacts
 from ..epic_state import atomic_write_json
 from ..probe import ProbeResult
+from ..projections import _primary_agent_id
+from ..state import ChatMessage
 from ..types import AgentInstallation, Profile, ProfileTier
 from .interactions import activate_next_interaction
 from ..events import (
     build_artifact_reviewed,
     build_questions_answered,
-    build_workflow_decided,
     build_probe_completed,
     build_run_started,
     build_installation_created,
@@ -314,6 +315,12 @@ async def api_start_run(r: Request) -> Response:
         build_run_started(profile, _installations_map, _scout_concurrency),
     )
 
+    # Reset run-scoped state
+    st.user_message_buffer.clear()
+    if st.phase_complete_future is not None and not st.phase_complete_future.done():
+        st.phase_complete_future.set_result(False)
+    st.phase_complete_future = None
+
     # Create epic directory
     epic_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
     epic_dir = Path.home() / ".koan" / "epics" / epic_id
@@ -329,6 +336,37 @@ async def api_start_run(r: Request) -> Response:
     st.start_event.set()
 
     return JSONResponse({"ok": True, "epic_dir": str(epic_dir)})
+
+
+async def api_chat(r: Request) -> Response:
+    """Accept a user chat message, buffer it, and unblock any waiting phase boundary."""
+    body = await r.json()
+    message = body.get("message", "")
+    if not isinstance(message, str) or not message.strip():
+        return JSONResponse({"error": "empty_message"}, status_code=422)
+
+    st = _app_state(r)
+    if st.epic_dir is None:
+        return JSONResponse({"error": "no_run"}, status_code=409)
+
+    ts = int(time.time() * 1000)
+    msg = ChatMessage(content=message.strip(), timestamp_ms=ts)
+    st.user_message_buffer.append(msg)
+
+    # Emit projection event so the message appears in the activity feed
+    run = st.projection_store.projection.run
+    primary_id = _primary_agent_id(run) if run else None
+    st.projection_store.push_event(
+        "user_message",
+        {"content": msg.content, "timestamp_ms": msg.timestamp_ms},
+        agent_id=primary_id,
+    )
+
+    # Unblock koan_complete_step if it is blocking at a phase boundary
+    if st.phase_complete_future is not None and not st.phase_complete_future.done():
+        st.phase_complete_future.set_result(True)
+
+    return JSONResponse({"ok": True})
 
 
 async def api_answer(r: Request) -> Response:
@@ -371,49 +409,6 @@ async def api_artifact_review(r: Request) -> Response:
     )
     activate_next_interaction(st)
     interaction.future.set_result({"response": response, "accepted": accepted})
-    return JSONResponse({"ok": True})
-
-
-async def api_workflow_decision(r: Request) -> Response:
-    body = await r.json()
-    phase = body.get("phase", "")
-    context = body.get("context", "")
-    token = body.get("token", "")
-
-    st = _app_state(r)
-    active = st.active_interaction
-    if active is None or active.type != "workflow-decision" or active.token != token:
-        return _stale_response()
-
-    # Extract valid phases from the active interaction payload
-    valid_phases: set[str] = set()
-    for turn in active.payload.get("chat_turns", []):
-        for rp in turn.get("recommended_phases", []):
-            p = rp.get("phase", "")
-            if p:
-                valid_phases.add(p)
-
-    if not phase:
-        return JSONResponse(
-            {"ok": False, "error": "empty_phase", "message": "A phase must be selected"},
-            status_code=422,
-        )
-
-    if valid_phases and phase not in valid_phases:
-        return JSONResponse(
-            {"ok": False, "error": "invalid_phase",
-             "message": f"Phase '{phase}' is not among the proposed options"},
-            status_code=422,
-        )
-
-    interaction = active
-    st.projection_store.push_event(
-        "workflow_decided",
-        build_workflow_decided(interaction.token, decision={"phase": phase, "context": context}, cancelled=False),
-        agent_id=interaction.agent_id,
-    )
-    activate_next_interaction(st)
-    interaction.future.set_result({"phase": phase, "context": context})
     return JSONResponse({"ok": True})
 
 
@@ -1061,7 +1056,7 @@ def create_app(app_state: AppState) -> Starlette:
         Route("/api/start-run/preflight", api_start_run_preflight, methods=["GET"]),
         Route("/api/answer", api_answer, methods=["POST"]),
         Route("/api/artifact-review", api_artifact_review, methods=["POST"]),
-        Route("/api/workflow-decision", api_workflow_decision, methods=["POST"]),
+        Route("/api/chat", api_chat, methods=["POST"]),
         Route("/api/artifacts", api_artifacts_list),
         Route("/api/artifacts/{path:path}", api_artifact_content),
         Route("/api/probe", api_probe),

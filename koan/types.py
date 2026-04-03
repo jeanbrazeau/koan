@@ -19,14 +19,9 @@ EpicPhase = Literal[
 SubagentRole = Literal[
     "intake",
     "scout",
-    "decomposer",
     "orchestrator",
     "planner",
     "executor",
-    "brief-writer",
-    "workflow-orchestrator",
-    "ticket-breakdown",
-    "cross-artifact-validator",
 ]
 
 ModelTier = Literal["strong", "standard", "cheap"]
@@ -81,12 +76,7 @@ class AgentInstallation:
 ROLE_MODEL_TIER: dict[SubagentRole, ModelTier] = {
     "intake": "strong",
     "scout": "cheap",
-    "decomposer": "strong",
-    "brief-writer": "strong",
     "orchestrator": "strong",
     "planner": "strong",
     "executor": "standard",
-    "workflow-orchestrator": "strong",
-    "ticket-breakdown": "strong",
-    "cross-artifact-validator": "strong",
 }

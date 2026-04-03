@@ -211,21 +211,6 @@ def build_artifact_reviewed(
     return result
 
 
-def build_workflow_decision_requested(token: str, chat_turns: list) -> dict:
-    return {"token": token, "chat_turns": chat_turns}
-
-
-def build_workflow_decided(
-    token: str,
-    decision: dict | None = None,
-    cancelled: bool = False,
-) -> dict:
-    result: dict = {"token": token, "cancelled": cancelled}
-    if decision is not None:
-        result["decision"] = decision
-    return result
-
-
 # -- Configuration event builders ---------------------------------------------
 
 def build_probe_completed(results: dict[str, bool]) -> dict:
