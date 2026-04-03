@@ -84,16 +84,9 @@ function QuestionCard({
     }
   }
 
-  // Normalize options at render time to handle LLM output variability.
-  // Filter out any LLM-provided "Other" / meta-options — we always render our own.
-  const isMetaOption = (s: string): boolean =>
-    /^\(?[a-z]\)?\s*[.:\-)]?\s*/i.test(s) // strip letter prefixes like "(a) ", "A: "
-      ? isMetaOption(s.replace(/^\(?[a-z]\)?\s*[.:\-)]?\s*/i, ''))
-      : /^(other|none of the above|something else|other approach|other option|custom|n\/a)$/i.test(s.trim())
-  const stripPrefix = (s: string) => s.replace(/^\(?[a-z]\)?\s*[.:\-)]?\s*/i, '').trim()
+  // Options are used as-is. Prompt engineering ensures correct format;
+  // code never parses or rewrites LLM text.
   const opts = normalizeOptions(question.options as (string | Record<string, unknown>)[])
-    .filter(o => !isMetaOption(o.label))
-    .map(o => ({ ...o, label: stripPrefix(o.label), value: stripPrefix(o.value) || o.value }))
 
   return (
     <div className="question-card">
