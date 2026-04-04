@@ -252,6 +252,10 @@ async def _step_within_phase(
         agent_id=agent.agent_id,
     )
 
+    # Scan for artifacts between steps (e.g. after a write step)
+    from ..driver import _push_artifact_diff
+    _push_artifact_diff(_app_state)
+
     guidance = phase_module.step_guidance(next_step, ctx)
     result = format_step(guidance)
 
@@ -281,6 +285,10 @@ async def _step_phase_boundary(
         build_step_advanced(agent.step, "", total_steps=phase_module.TOTAL_STEPS),
         agent_id=agent.agent_id,
     )
+
+    # Scan for new artifacts so they appear before the user is asked to respond
+    from ..driver import _push_artifact_diff
+    _push_artifact_diff(_app_state)
 
     # Check for already-buffered messages
     messages = drain_user_messages(_app_state) + drain_steering_messages(_app_state)
