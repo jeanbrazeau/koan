@@ -60,11 +60,12 @@ class TestIntake:
         text = "\n".join(g.instructions)
         assert "plan" in text
 
-    def test_step_3_guidance_references_run_dir(self):
+    def test_step_3_guidance_is_summarize(self):
         ctx = _ctx(run_dir="/tmp/myrun")
         g = intake.step_guidance(3, ctx)
+        assert g.title == "Summarize"
         text = "\n".join(g.instructions)
-        assert "/tmp/myrun/landscape.md" in text
+        assert "summary" in text.lower()
 
 
 # -- Brief Writer --------------------------------------------------------------
@@ -106,11 +107,11 @@ class TestPlanSpec:
     def test_scope_is_plan(self):
         assert plan_spec.SCOPE == "plan"
 
-    def test_step_1_guidance_references_run_dir(self):
+    def test_step_1_guidance_references_intake_context(self):
         ctx = _ctx(run_dir="/tmp/myrun")
         g = plan_spec.step_guidance(1, ctx)
         text = "\n".join(g.instructions)
-        assert "landscape.md" in text
+        assert "intake" in text.lower()
 
     def test_step_2_guidance_references_plan_md(self):
         ctx = _ctx(run_dir="/tmp/myrun")
@@ -139,11 +140,11 @@ class TestPlanReview:
     def test_scope_is_plan(self):
         assert plan_review.SCOPE == "plan"
 
-    def test_step_1_guidance_references_landscape_and_plan(self):
+    def test_step_1_guidance_references_intake_and_plan(self):
         ctx = _ctx(run_dir="/tmp/myrun")
         g = plan_review.step_guidance(1, ctx)
         text = "\n".join(g.instructions)
-        assert "landscape.md" in text
+        assert "intake" in text.lower()
         assert "plan.md" in text
 
 
@@ -218,11 +219,10 @@ class TestExecutor:
         assert executor.SCOPE == "general"
 
     def test_step_1_guidance_with_artifacts(self):
-        ctx = _ctx(run_dir="/tmp/myrun", executor_artifacts=["plan.md", "landscape.md"])
+        ctx = _ctx(run_dir="/tmp/myrun", executor_artifacts=["plan.md"])
         g = executor.step_guidance(1, ctx)
         text = "\n".join(g.instructions)
         assert "/tmp/myrun/plan.md" in text
-        assert "/tmp/myrun/landscape.md" in text
 
     def test_step_1_guidance_with_phase_instructions(self):
         ctx = _ctx(phase_instructions="Key constraint: don't touch auth module.")
