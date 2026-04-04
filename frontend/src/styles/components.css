@@ -247,7 +247,7 @@
   width: 44%;
   flex-shrink: 0;
   padding: var(--space-6);
-  background: var(--bg);
+  background: var(--bg-surface);
   border-right: 1px solid var(--border);
   overflow-y: auto;
 }
