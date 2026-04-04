@@ -10,6 +10,7 @@ export function LandingPage() {
   const [error, setError] = useState<string | null>(null)
   const [selectedInstallations, setSelectedInstallations] = useState<Record<string, string>>({})
   const [workflow, setWorkflow] = useState<'plan' | 'milestones'>('plan')
+  const [projectDir, setProjectDir] = useState('')
 
   // Read from store (fed by SSE — always current, no API fetch needed)
   const profilesDict = useStore(s => s.settings.profiles)
@@ -27,6 +28,7 @@ export function LandingPage() {
   useEffect(() => {
     api.getInitialPrompt().then(data => {
       if (data.prompt) setTask(data.prompt)
+      if (data.project_dir) setProjectDir(data.project_dir)
     })
   }, [])
 
@@ -132,26 +134,40 @@ export function LandingPage() {
         <div className="phase-inner">
           <h2 className="phase-heading">New Run</h2>
 
+          <div className="launch-project-dir">
+            <span className="launch-project-dir-label">PROJECT</span>
+            <span className="launch-project-dir-path">{projectDir || '—'}</span>
+          </div>
+
+          {/* Workflow card */}
           <div className="question-card">
             <div className="question-header">Workflow</div>
-            <div className="workflow-options">
+            <div className="launch-workflow-grid">
               <button
-                className={`workflow-card${workflow === 'plan' ? ' selected' : ''}`}
+                className={`launch-workflow-card${workflow === 'plan' ? ' selected' : ''}`}
                 onClick={() => setWorkflow('plan')}
               >
-                <strong>Plan</strong>
-                <span>Plan an implementation approach, review it, then execute</span>
+                <div className="launch-workflow-card-header">
+                  <div className={`launch-radio-dot${workflow === 'plan' ? ' selected' : ''}`} />
+                  <span className="launch-workflow-card-name">Plan</span>
+                </div>
+                <div className="launch-workflow-card-desc">Plan an approach, review it, then execute</div>
               </button>
-              <button className="workflow-card disabled" disabled>
-                <strong>Milestones</strong>
-                <span>Break work into milestones with phased delivery</span>
-                <span className="badge">coming soon</span>
+              <button className="launch-workflow-card disabled" disabled>
+                <div className="launch-workflow-card-header">
+                  <div className="launch-radio-dot" />
+                  <span className="launch-workflow-card-name">Milestones</span>
+                  <span className="launch-badge-soon">coming soon</span>
+                </div>
+                <div className="launch-workflow-card-desc">Break work into milestones with phased delivery</div>
               </button>
             </div>
           </div>
 
+          {/* Description card */}
           <div className="question-card">
-            <div className="question-header">Task</div>
+            <div className="question-header">Description</div>
+            <div className="launch-description-hint">What should this run accomplish?</div>
             <textarea
               id="task-input"
               className="workflow-feedback"
@@ -162,67 +178,76 @@ export function LandingPage() {
             />
           </div>
 
-          <div className="model-config-section">
-            <h3 className="model-config-section-heading">Profile</h3>
-            <select
-              id="profile-select"
-              className="model-tier-select"
-              value={profile}
-              onChange={e => setProfile(e.target.value)}
-            >
-              {profiles.map(p => (
-                <option key={p.name} value={p.name}>
-                  {p.name}
-                  {p.readOnly ? ' (built-in)' : ''}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/* Configuration card */}
+          <div className="question-card">
+            <div className="question-header">Configuration</div>
 
-          {preflight && preflight.required_runner_types.length > 0 && (
-            <div className="model-config-section">
-              <h3 className="model-config-section-heading">Agent Installations</h3>
-              {preflight.required_runner_types.map(rt => {
-                const insts = preflight.installations[rt] || []
-                const selected = selectedInstallations[rt] || ''
-                return (
-                  <div key={rt} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-                    <span style={{ minWidth: 70, fontWeight: 500 }}>{rt}</span>
-                    <select
-                      className="model-tier-select"
-                      value={selected}
-                      onChange={e => setSelectedInstallations(prev => ({...prev, [rt]: e.target.value}))}
-                      style={{ flex: 1 }}
-                    >
-                      <option value="">-- select installation --</option>
-                      {insts.map(inst => (
-                        <option key={inst.alias} value={inst.alias}>
-                          {inst.alias} ({inst.binary})
-                        </option>
-                      ))}
-                    </select>
-                    {insts.length === 0 && (
-                      <span className="no-runners-msg" style={{ fontSize: 13 }}>
-                        No installations. Add one in Settings.
-                      </span>
-                    )}
-                  </div>
-                )
-              })}
+            {/* Profile */}
+            <div className="launch-config-group">
+              <div className="launch-config-label">Profile</div>
+              <select
+                id="profile-select"
+                className="model-tier-select"
+                value={profile}
+                onChange={e => setProfile(e.target.value)}
+              >
+                {profiles.map(p => (
+                  <option key={p.name} value={p.name}>
+                    {p.name}
+                    {p.readOnly ? ' (built-in)' : ''}
+                  </option>
+                ))}
+              </select>
             </div>
-          )}
 
-          <div className="model-config-section">
-            <h3 className="model-config-section-heading">Scout Concurrency</h3>
-            <input
-              id="scout-concurrency"
-              className="scout-concurrency-input"
-              type="number"
-              min={1}
-              max={32}
-              value={scoutConcurrency}
-              onChange={e => setScoutConcurrency(parseInt(e.target.value, 10) || 8)}
-            />
+            {/* Agent installations */}
+            {preflight && preflight.required_runner_types.length > 0 && (
+              <div className="launch-config-group">
+                <div className="launch-config-label">Agent Installations</div>
+                {preflight.required_runner_types.map(rt => {
+                  const insts = preflight.installations[rt] || []
+                  const selected = selectedInstallations[rt] || ''
+                  return (
+                    <div key={rt} className="launch-agent-row">
+                      <span className="launch-agent-type">{rt}</span>
+                      <div className={`launch-agent-status ${insts.length > 0 && selected ? 'available' : 'unavailable'}`} />
+                      <select
+                        className="launch-agent-select"
+                        value={selected}
+                        onChange={e => setSelectedInstallations(prev => ({ ...prev, [rt]: e.target.value }))}
+                      >
+                        <option value="">-- select --</option>
+                        {insts.map(inst => (
+                          <option key={inst.alias} value={inst.alias}>
+                            {inst.alias} ({inst.binary})
+                          </option>
+                        ))}
+                      </select>
+                      {insts.length === 0 && (
+                        <span className="launch-agent-missing">Not detected — configure in Settings</span>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            )}
+
+            {/* Scout concurrency */}
+            <div className="launch-config-group">
+              <div className="launch-config-label">Scout Concurrency</div>
+              <div className="launch-scouts-row">
+                <input
+                  id="scout-concurrency"
+                  className="scout-concurrency-input"
+                  type="number"
+                  min={1}
+                  max={32}
+                  value={scoutConcurrency}
+                  onChange={e => setScoutConcurrency(parseInt(e.target.value, 10) || 8)}
+                />
+                <span className="launch-scouts-hint">max parallel scout agents</span>
+              </div>
+            </div>
           </div>
 
           {error && <div className="no-runners-msg">{error}</div>}

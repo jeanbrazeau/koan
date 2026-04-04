@@ -982,7 +982,7 @@ async def api_settings_scout_concurrency(r: Request) -> Response:
 
 async def api_initial_prompt(r: Request) -> Response:
     st = _app_state(r)
-    return JSONResponse({"prompt": st.initial_prompt})
+    return JSONResponse({"prompt": st.initial_prompt, "project_dir": st.project_dir})
 
 
 # -- App factory --------------------------------------------------------------

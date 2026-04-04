@@ -146,7 +146,7 @@ export async function saveScoutConcurrency(value: number) {
 
 // -- Initial prompt ----------------------------------------------------------
 
-export async function getInitialPrompt(): Promise<{ prompt: string }> {
+export async function getInitialPrompt(): Promise<{ prompt: string; project_dir?: string }> {
   return get('/api/initial-prompt')
 }
 
