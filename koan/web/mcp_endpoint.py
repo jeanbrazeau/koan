@@ -290,6 +290,13 @@ async def _step_phase_boundary(
     from ..driver import _push_artifact_diff
     _push_artifact_diff(_app_state)
 
+    # Let the frontend know we're waiting for user input at phase boundary
+    _app_state.projection_store.push_event(
+        "phase_boundary_reached",
+        {"phase": _app_state.phase, "message": f"{_app_state.phase.replace('-', ' ').title()} is complete. Send a message to continue."},
+        agent_id=agent.agent_id,
+    )
+
     # Check for already-buffered messages
     messages = drain_user_messages(_app_state) + drain_steering_messages(_app_state)
 

@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { useStore, ConversationEntry } from '../store/index'
+import { useStore, ConversationEntry, PhaseBoundaryEntry } from '../store/index'
 import { useAutoScroll } from '../hooks/useAutoScroll'
 import { Md } from './Md'
 import { ChatInput } from './ChatInput'
@@ -164,6 +164,12 @@ function renderEntry(entry: ConversationEntry, i: number) {
       return <ToolLine key={i} tool={entry.toolName} summary={entry.summary} inFlight={entry.inFlight} />
     case 'debug_step_guidance':
       return <DebugGuidanceCard key={i} content={entry.content} />
+    case 'phase_boundary':
+      return (
+        <div key={i} className="activity-card activity-phase-boundary">
+          <div className="activity-boundary-message">{entry.message}</div>
+        </div>
+      )
     default:
       return null
   }

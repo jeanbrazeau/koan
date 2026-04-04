@@ -54,6 +54,7 @@ EventType = Literal[
     "debug_step_guidance",
     # User chat
     "user_message",
+    "phase_boundary_reached",
     # Steering
     "steering_queued",
     "steering_delivered",
@@ -179,11 +180,16 @@ class DebugStepGuidanceEntry(KoanBaseModel):
     type: Literal["debug_step_guidance"] = "debug_step_guidance"
     content: str                           # full formatted step guidance text
 
+class PhaseBoundaryEntry(KoanBaseModel):
+    type: Literal["phase_boundary"] = "phase_boundary"
+    phase: str
+    message: str
+
 ConversationEntry = Annotated[
     ThinkingEntry | TextEntry | StepEntry | UserMessageEntry |
     ToolReadEntry | ToolWriteEntry | ToolEditEntry |
     ToolBashEntry | ToolGrepEntry | ToolLsEntry | ToolGenericEntry |
-    DebugStepGuidanceEntry,
+    DebugStepGuidanceEntry | PhaseBoundaryEntry,
     Field(discriminator="type"),
 ]
 
@@ -859,6 +865,24 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                 })
                 return projection.model_copy(update={
                     "run": _update_agent_conversation(projection.run, pid, new_conv),
+                })
+
+            case "phase_boundary_reached":
+                if projection.run is None or not agent_id:
+                    return projection
+                agent = projection.run.agents.get(agent_id)
+                if agent is None:
+                    return projection
+                entry = PhaseBoundaryEntry(
+                    phase=payload.get("phase", ""),
+                    message=payload.get("message", ""),
+                )
+                new_conv = _flush_conversation(agent.conversation)
+                new_conv = new_conv.model_copy(update={
+                    "entries": [*new_conv.entries, entry],
+                })
+                return projection.model_copy(update={
+                    "run": _update_agent_conversation(projection.run, agent_id, new_conv),
                 })
 
             case "steering_queued":

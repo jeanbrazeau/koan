@@ -1527,3 +1527,19 @@
   font-size: var(--font-size-sm);
   color: var(--text-ghost);
 }
+
+/* ---- Phase boundary ---- */
+.activity-phase-boundary {
+  text-align: center;
+  padding: var(--space-4);
+  color: var(--text-muted);
+  font-size: var(--font-size-sm);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-md);
+  margin: var(--space-3) 0;
+  background: var(--bg-elevated);
+}
+
+.activity-boundary-message {
+  font-style: italic;
+}
