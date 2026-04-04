@@ -24,14 +24,13 @@ from starlette.staticfiles import StaticFiles
 from starlette.responses import StreamingResponse
 
 from ..artifacts import list_artifacts
-from ..epic_state import atomic_write_json
+from ..run_state import atomic_write_json
 from ..probe import ProbeResult
 from ..projections import _primary_agent_id
 from ..state import ChatMessage
 from ..types import AgentInstallation, Profile, ProfileTier
 from .interactions import activate_next_interaction
 from ..events import (
-    build_artifact_reviewed,
     build_questions_answered,
     build_probe_completed,
     build_run_started,
@@ -324,20 +323,32 @@ async def api_start_run(r: Request) -> Response:
     st.phase_complete_future = None
 
     # Create epic directory
-    epic_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
-    epic_dir = Path.home() / ".koan" / "epics" / epic_id
-    epic_dir.mkdir(parents=True, exist_ok=True)
+    run_id = f"{int(time.time())}-{uuid.uuid4().hex[:8]}"
+    run_dir = Path.home() / ".koan" / "runs" / run_id
+    run_dir.mkdir(parents=True, exist_ok=True)
+
+    workflow_name = body.get("workflow", "plan")  # default to "plan"
+    try:
+        from ..lib.workflows import get_workflow
+        workflow_obj = get_workflow(workflow_name)
+    except ValueError as e:
+        return JSONResponse(
+            {"error": "validation_error", "message": str(e)},
+            status_code=422,
+        )
 
     await atomic_write_json(
-        epic_dir / "task.json",
-        {"task": task, "created_at": time.time()},
+        run_dir / "task.json",
+        {"task": task, "workflow": workflow_name, "created_at": time.time()},
     )
 
     st.task_description = task
-    st.epic_dir = str(epic_dir)
+    st.run_dir = str(run_dir)
+    st.workflow = workflow_obj
+    st.projection_store.push_event("workflow_selected", {"workflow": workflow_name})
     st.start_event.set()
 
-    return JSONResponse({"ok": True, "epic_dir": str(epic_dir)})
+    return JSONResponse({"ok": True, "run_dir": str(run_dir)})
 
 
 async def api_chat(r: Request) -> Response:
@@ -348,7 +359,7 @@ async def api_chat(r: Request) -> Response:
         return JSONResponse({"error": "empty_message"}, status_code=422)
 
     st = _app_state(r)
-    if st.epic_dir is None:
+    if st.run_dir is None:
         return JSONResponse({"error": "no_run"}, status_code=409)
 
     ts = int(time.time() * 1000)
@@ -399,34 +410,12 @@ async def api_answer(r: Request) -> Response:
     return JSONResponse({"ok": True})
 
 
-async def api_artifact_review(r: Request) -> Response:
-    body = await r.json()
-    response = body.get("response", "")
-    accepted = body.get("accepted", False)
-    token = body.get("token", "")
-
-    st = _app_state(r)
-    active = st.active_interaction
-    if active is None or active.type != "artifact-review" or active.token != token:
-        return _stale_response()
-
-    interaction = active
-    st.projection_store.push_event(
-        "artifact_reviewed",
-        build_artifact_reviewed(interaction.token, accepted=accepted, response=response, cancelled=False),
-        agent_id=interaction.agent_id,
-    )
-    activate_next_interaction(st)
-    interaction.future.set_result({"response": response, "accepted": accepted})
-    return JSONResponse({"ok": True})
-
-
 async def api_artifacts_list(r: Request) -> Response:
     st = _app_state(r)
-    if not st.epic_dir:
+    if not st.run_dir:
         return JSONResponse({"error": "no_run", "message": "No run started"}, status_code=404)
 
-    artifacts = list_artifacts(st.epic_dir)
+    artifacts = list_artifacts(st.run_dir)
     files = []
     for a in artifacts:
         files.append({
@@ -442,15 +431,15 @@ async def api_artifacts_list(r: Request) -> Response:
 
 async def api_artifact_content(r: Request) -> Response:
     st = _app_state(r)
-    if not st.epic_dir:
+    if not st.run_dir:
         return JSONResponse({"error": "no_run"}, status_code=404)
 
     req_path = r.path_params.get("path", "")
 
     # Path traversal guard
-    epic = Path(st.epic_dir).resolve()
-    target = (epic / req_path).resolve()
-    if not str(target).startswith(str(epic)):
+    run = Path(st.run_dir).resolve()
+    target = (run / req_path).resolve()
+    if not str(target).startswith(str(run)):
         return JSONResponse(
             {"error": "invalid_path", "message": "Path traversal not allowed"},
             status_code=400,
@@ -460,13 +449,13 @@ async def api_artifact_content(r: Request) -> Response:
         return JSONResponse({"error": "not_found"}, status_code=404)
 
     try:
-        content = target.read_text("utf-8")
+        run_content = target.read_text("utf-8")
     except Exception:
-        content = "(binary or unreadable file)"
+        run_content = "(binary or unreadable file)"
 
     return JSONResponse({
-        "content": content,
-        "displayPath": str(target.relative_to(epic)),
+        "content": run_content,
+        "displayPath": str(target.relative_to(run)),
     })
 
 
@@ -1064,7 +1053,6 @@ def create_app(app_state: AppState) -> Starlette:
         Route("/api/start-run", api_start_run, methods=["POST"]),
         Route("/api/start-run/preflight", api_start_run_preflight, methods=["GET"]),
         Route("/api/answer", api_answer, methods=["POST"]),
-        Route("/api/artifact-review", api_artifact_review, methods=["POST"]),
         Route("/api/chat", api_chat, methods=["POST"]),
         Route("/api/artifacts", api_artifacts_list),
         Route("/api/artifacts/{path:path}", api_artifact_content),

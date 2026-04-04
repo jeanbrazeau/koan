@@ -9,6 +9,7 @@ export function LandingPage() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedInstallations, setSelectedInstallations] = useState<Record<string, string>>({})
+  const [workflow, setWorkflow] = useState<'plan' | 'milestones'>('plan')
 
   // Read from store (fed by SSE — always current, no API fetch needed)
   const profilesDict = useStore(s => s.settings.profiles)
@@ -48,18 +49,13 @@ export function LandingPage() {
     if (!selectedProfile) return null
 
     // Profile tiers map role → value. The fold normalizes tier configs to strings.
-    // The string may be an installation alias ("claude-default") or a runner type
-    // ("claude") depending on whether the profile was created from the new or
-    // legacy format. Try alias lookup first, fall back to runner type.
     const requiredTypes = new Set<string>()
     for (const tierVal of Object.values(selectedProfile.tiers)) {
       if (typeof tierVal === 'string') {
         const inst = installationsDict[tierVal]
         if (inst) {
-          // Value is an installation alias — derive runner type from it
           requiredTypes.add(inst.runnerType)
         } else {
-          // Value is a runner type string (legacy fold normalization)
           requiredTypes.add(tierVal)
         }
       }
@@ -118,7 +114,7 @@ export function LandingPage() {
     setLoading(true)
     try {
       const result = await api.startRun(
-        trimmedTask, profile, scoutConcurrency, selectedInstallations,
+        trimmedTask, profile, scoutConcurrency, selectedInstallations, workflow,
       )
       if (!result.ok) {
         setError(result.message ?? 'Failed to start run')
@@ -135,6 +131,24 @@ export function LandingPage() {
       <div className="phase-content">
         <div className="phase-inner">
           <h2 className="phase-heading">New Run</h2>
+
+          <div className="question-card">
+            <div className="question-header">Workflow</div>
+            <div className="workflow-options">
+              <button
+                className={`workflow-card${workflow === 'plan' ? ' selected' : ''}`}
+                onClick={() => setWorkflow('plan')}
+              >
+                <strong>Plan</strong>
+                <span>Plan an implementation approach, review it, then execute</span>
+              </button>
+              <button className="workflow-card disabled" disabled>
+                <strong>Milestones</strong>
+                <span>Break work into milestones with phased delivery</span>
+                <span className="badge">coming soon</span>
+              </button>
+            </div>
+          </div>
 
           <div className="question-card">
             <div className="question-header">Task</div>

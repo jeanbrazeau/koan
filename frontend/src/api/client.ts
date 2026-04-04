@@ -32,7 +32,7 @@ async function get<T>(url: string): Promise<T> {
 
 export interface StartRunResult {
   ok: boolean
-  epic_dir?: string
+  run_dir?: string
   error?: string
   message?: string
 }
@@ -42,6 +42,7 @@ export async function startRun(
   profile: string,
   scoutConcurrency?: number,
   installations?: Record<string, string>,
+  workflow?: string,
 ): Promise<StartRunResult> {
   const body: Record<string, unknown> = { task, profile }
   if (scoutConcurrency !== undefined) {
@@ -50,6 +51,9 @@ export async function startRun(
   if (installations && Object.keys(installations).length > 0) {
     body['installations'] = installations
   }
+  if (workflow) {
+    body['workflow'] = workflow
+  }
   return post('/api/start-run', body)
 }
 
@@ -57,18 +61,6 @@ export async function startRun(
 
 export async function submitAnswer(answers: unknown[], token: string) {
   return post<{ ok: boolean; message?: string }>('/api/answer', { answers, token })
-}
-
-export async function submitArtifactReview(
-  response: string,
-  accepted: boolean,
-  token: string,
-) {
-  return post<{ ok: boolean; message?: string }>('/api/artifact-review', {
-    response,
-    accepted,
-    token,
-  })
 }
 
 // -- Chat --------------------------------------------------------------------

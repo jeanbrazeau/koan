@@ -10,6 +10,7 @@ from __future__ import annotations
 from . import PhaseContext, StepGuidance
 
 ROLE = "decomposer"
+SCOPE = "legacy"
 TOTAL_STEPS = 2
 
 STEP_NAMES: dict[int, str] = {
@@ -71,8 +72,8 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "",
                 "## Files to read",
                 "",
-                f"- `{ctx.epic_dir}/landscape.md` -- task summary, prior art, codebase findings, project conventions, decisions, and constraints",
-                f"- `{ctx.epic_dir}/brief.md` -- epic brief: problem statement, goals, and constraints",
+                f"- `{ctx.run_dir}/landscape.md` -- task summary, prior art, codebase findings, project conventions, decisions, and constraints",
+                f"- `{ctx.run_dir}/brief.md` -- epic brief: problem statement, goals, and constraints",
                 "",
                 "## What to understand",
                 "",
@@ -92,7 +93,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             instructions=[
                 "Produce the core-flows document with user journeys and sequence diagrams.",
                 "",
-                f"Write `{ctx.epic_dir}/core-flows.md` with one section per user journey.",
+                f"Write `{ctx.run_dir}/core-flows.md` with one section per user journey.",
                 "",
                 "For each journey include:",
                 "- Journey name, actor, and trigger",

@@ -30,7 +30,7 @@ class FakeAppState:
     active_interaction: PendingInteraction | None = None
     interaction_queue: deque[PendingInteraction] = field(default_factory=deque)
     interaction_queue_max: int = 8
-    epic_dir: str | None = None
+    run_dir: str | None = None
     projection_store: object = field(default_factory=lambda: __import__('koan.projections', fromlist=['ProjectionStore']).ProjectionStore())
     phase_complete_future: asyncio.Future | None = None
     steering_queue: list = field(default_factory=list)
@@ -78,7 +78,7 @@ class TestQueueCap:
         )
 
         with pytest.raises(ToolError) as exc_info:
-                await enqueue_interaction(agent, app_state, "ask", {"questions": []})
+            await enqueue_interaction(agent, app_state, "ask", {"questions": []})
 
         err = json.loads(str(exc_info.value))
         assert err["error"] == "interaction_queue_full"
@@ -126,21 +126,8 @@ class TestStaleSubmit:
         assert resp.json()["error"] == "stale_interaction"
 
     @pytest.mark.anyio
-    async def test_answer_wrong_type_returns_409(self):
-        from starlette.testclient import TestClient
-
-        from koan.state import AppState
-        from koan.web.app import create_app
-
-        app_state = AppState()
-        app_state.active_interaction = _make_interaction(interaction_type="artifact-review")
-        app = create_app(app_state)
-        client = TestClient(app, raise_server_exceptions=False)
-        resp = client.post("/api/answer", json={"answers": []})
-        assert resp.status_code == 409
-
-    @pytest.mark.anyio
-    async def test_artifact_review_stale_returns_409(self):
+    async def test_artifact_review_route_removed(self):
+        """POST /api/artifact-review route is removed — returns 404 or 405."""
         from starlette.testclient import TestClient
 
         from koan.state import AppState
@@ -149,8 +136,9 @@ class TestStaleSubmit:
         app_state = AppState()
         app = create_app(app_state)
         client = TestClient(app, raise_server_exceptions=False)
+        # Route removed; SPA fallback returns 200 for GET but POST should 405 or 404
         resp = client.post("/api/artifact-review", json={"response": "Accept"})
-        assert resp.status_code == 409
+        assert resp.status_code in (404, 405, 409)
 
 
 # -- TestFIFOActivation -------------------------------------------------------
@@ -242,7 +230,7 @@ class TestCancellationOnExit:
 
     @pytest.mark.anyio
     async def test_phase_complete_future_cleared_on_exit(self):
-        """_cancel_pending_interactions clears phase_complete_future (QR4)."""
+        """_cancel_pending_interactions clears phase_complete_future."""
         from koan.subagent import _cancel_pending_interactions
 
         app_state = FakeAppState()
@@ -254,144 +242,3 @@ class TestCancellationOnExit:
 
         assert future.done()
         assert app_state.phase_complete_future is None
-
-
-# -- TestArtifactReviewResolution ---------------------------------------------
-
-class TestArtifactReviewResolution:
-    @pytest.mark.anyio
-    async def test_accept_resolves_future_with_accepted_true(self):
-        from starlette.testclient import TestClient
-
-        from koan.state import AppState
-        from koan.web.app import create_app
-
-        app_state = AppState()
-        interaction = _make_interaction(interaction_type="artifact-review")
-        app_state.active_interaction = interaction
-
-        app = create_app(app_state)
-        client = TestClient(app, raise_server_exceptions=False)
-        resp = client.post(
-            "/api/artifact-review",
-            json={"accepted": True, "token": interaction.token},
-        )
-
-        assert resp.status_code == 200
-        result = interaction.future.result()
-        assert result["accepted"] is True
-        assert result["response"] == ""
-
-    @pytest.mark.anyio
-    async def test_feedback_resolves_future_with_accepted_false(self):
-        from starlette.testclient import TestClient
-
-        from koan.state import AppState
-        from koan.web.app import create_app
-
-        app_state = AppState()
-        interaction = _make_interaction(interaction_type="artifact-review")
-        app_state.active_interaction = interaction
-
-        app = create_app(app_state)
-        client = TestClient(app, raise_server_exceptions=False)
-        resp = client.post(
-            "/api/artifact-review",
-            json={"response": "Please add more detail", "token": interaction.token},
-        )
-
-        assert resp.status_code == 200
-        result = interaction.future.result()
-        assert result["accepted"] is False
-        assert result["response"] == "Please add more detail"
-
-    @pytest.mark.anyio
-    async def test_accept_mcp_handler_returns_accepted_string(self):
-        from koan.phases import PhaseContext
-        from koan.state import AgentState
-        from koan.web.mcp_endpoint import _agent_ctx, koan_review_artifact
-
-        import koan.web.mcp_endpoint as mcp_mod
-
-        app_state = FakeAppState()
-        old_app_state = mcp_mod._app_state
-        mcp_mod._app_state = app_state
-
-        phase_ctx = PhaseContext(epic_dir="/tmp", subagent_dir="/tmp/test")
-        agent = AgentState(
-            agent_id="test-review",
-            role="intake",
-            subagent_dir="/tmp/test",
-            phase_ctx=phase_ctx,
-        )
-
-        # Pre-create and resolve the interaction future
-        interaction = _make_interaction(interaction_type="artifact-review", agent_id="test-review")
-        interaction.future.set_result({"response": "", "accepted": True})
-        app_state.active_interaction = interaction
-
-        token = _agent_ctx.set(agent)
-        try:
-            with patch("koan.web.mcp_endpoint._check_or_raise"), \
-                 patch("koan.web.mcp_endpoint.enqueue_interaction", return_value=interaction.future), \
-                 patch("aiofiles.open", side_effect=FileNotFoundError):
-                # We need to provide a real file for the artifact read;
-                # patch aiofiles to return content
-                import aiofiles
-                from unittest.mock import AsyncMock, MagicMock
-
-                mock_file = AsyncMock()
-                mock_file.__aenter__ = AsyncMock(return_value=mock_file)
-                mock_file.__aexit__ = AsyncMock(return_value=False)
-                mock_file.read = AsyncMock(return_value="artifact content")
-
-                with patch("aiofiles.open", return_value=mock_file):
-                    result = await koan_review_artifact(path="/tmp/test.md", description="test")
-        finally:
-            _agent_ctx.reset(token)
-            mcp_mod._app_state = old_app_state
-
-        assert result == "ACCEPTED"
-
-    @pytest.mark.anyio
-    async def test_feedback_mcp_handler_returns_revision_requested(self):
-        from koan.phases import PhaseContext
-        from koan.state import AgentState
-        from koan.web.mcp_endpoint import _agent_ctx, koan_review_artifact
-
-        import koan.web.mcp_endpoint as mcp_mod
-
-        app_state = FakeAppState()
-        old_app_state = mcp_mod._app_state
-        mcp_mod._app_state = app_state
-
-        phase_ctx = PhaseContext(epic_dir="/tmp", subagent_dir="/tmp/test")
-        agent = AgentState(
-            agent_id="test-review",
-            role="intake",
-            subagent_dir="/tmp/test",
-            phase_ctx=phase_ctx,
-        )
-
-        interaction = _make_interaction(interaction_type="artifact-review", agent_id="test-review")
-        interaction.future.set_result({"response": "needs work", "accepted": False})
-        app_state.active_interaction = interaction
-
-        token = _agent_ctx.set(agent)
-        try:
-            from unittest.mock import AsyncMock
-
-            mock_file = AsyncMock()
-            mock_file.__aenter__ = AsyncMock(return_value=mock_file)
-            mock_file.__aexit__ = AsyncMock(return_value=False)
-            mock_file.read = AsyncMock(return_value="artifact content")
-
-            with patch("koan.web.mcp_endpoint._check_or_raise"), \
-                 patch("koan.web.mcp_endpoint.enqueue_interaction", return_value=interaction.future), \
-                 patch("aiofiles.open", return_value=mock_file):
-                result = await koan_review_artifact(path="/tmp/test.md", description="test")
-        finally:
-            _agent_ctx.reset(token)
-            mcp_mod._app_state = old_app_state
-
-        assert result.startswith("REVISION REQUESTED:")

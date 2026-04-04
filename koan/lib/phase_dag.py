@@ -1,18 +1,18 @@
-# Phase transition DAG -- the single source of truth for valid epic phase transitions.
+# DEPRECATED: This file is superseded by koan/lib/workflows.py.
+# PHASE_TRANSITIONS, IMPLEMENTED_PHASES, PHASE_DESCRIPTIONS, get_successor_phases,
+# is_valid_transition, is_auto_advance, and is_stub_phase are no longer used
+# by the active code path. Kept for reference only.
 #
-# Consulted by:
-#   - the driver (to decide when to spawn the orchestrator)
-#   - koan_set_phase (to validate the committed transition)
-#
-# Pure functions -- no I/O, no mutable state.
+# The active code path uses koan/lib/workflows.py for phase transition logic.
+# Phase DAG validation has been replaced by workflow membership checks.
 
 from __future__ import annotations
 
-from ..types import EpicPhase
+from ..types import WorkflowPhase
 
 # Valid successor phases for each phase. Order = recommendation priority.
 # The first entry is the most-recommended default path.
-PHASE_TRANSITIONS: dict[EpicPhase, list[EpicPhase]] = {
+PHASE_TRANSITIONS: dict[WorkflowPhase, list[WorkflowPhase]] = {
     "intake":                    ["brief-generation", "core-flows"],
     "brief-generation":          ["core-flows"],
     "core-flows":                ["tech-plan"],
@@ -26,7 +26,7 @@ PHASE_TRANSITIONS: dict[EpicPhase, list[EpicPhase]] = {
 
 # Phases that have a real implementation (subagent-backed).
 # All other non-terminal phases are stubs that auto-advance when reached.
-IMPLEMENTED_PHASES: frozenset[EpicPhase] = frozenset({
+IMPLEMENTED_PHASES: frozenset[WorkflowPhase] = frozenset({
     "intake",
     "brief-generation",
     "core-flows",
@@ -37,7 +37,7 @@ IMPLEMENTED_PHASES: frozenset[EpicPhase] = frozenset({
 })
 
 # Human-readable one-line description of each phase.
-PHASE_DESCRIPTIONS: dict[EpicPhase, str] = {
+PHASE_DESCRIPTIONS: dict[WorkflowPhase, str] = {
     "intake":                    "Multi-round codebase exploration and structured Q&A to align on requirements",
     "brief-generation":          "Distill intake context into a compact product-level epic brief",
     "core-flows":                "Define user journeys with sequence diagrams",
@@ -50,19 +50,19 @@ PHASE_DESCRIPTIONS: dict[EpicPhase, str] = {
 }
 
 
-def get_successor_phases(phase: EpicPhase) -> list[EpicPhase]:
+def get_successor_phases(phase: WorkflowPhase) -> list[WorkflowPhase]:
     return PHASE_TRANSITIONS.get(phase, [])
 
 
-def is_auto_advance(phase: EpicPhase) -> bool:
+def is_auto_advance(phase: WorkflowPhase) -> bool:
     return len(get_successor_phases(phase)) == 1
 
 
-def is_stub_phase(phase: EpicPhase) -> bool:
+def is_stub_phase(phase: WorkflowPhase) -> bool:
     return phase != "completed" and phase != "implementation-validation" and phase not in IMPLEMENTED_PHASES
 
 
-def is_valid_transition(from_phase: EpicPhase | None, to_phase: EpicPhase) -> bool:
+def is_valid_transition(from_phase: WorkflowPhase | None, to_phase: WorkflowPhase) -> bool:
     if from_phase is None:
         return False
     return to_phase in get_successor_phases(from_phase)

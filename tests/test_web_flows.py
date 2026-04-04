@@ -79,7 +79,7 @@ def test_start_run_sets_event(client, app_state):
     data = resp.json()
     assert data["ok"] is True
     assert app_state.start_event.is_set()
-    assert app_state.epic_dir is not None
+    assert app_state.run_dir is not None
 
 
 def test_start_run_requires_task(client, app_state):
@@ -217,7 +217,7 @@ def test_artifact_listing(client, app_state):
     with tempfile.TemporaryDirectory() as tmp:
         epic = Path(tmp)
         (epic / "landscape.md").write_text("# Landscape\n", "utf-8")
-        app_state.epic_dir = str(epic)
+        app_state.run_dir = str(epic)
         app_state.start_event.set()
 
         resp = client.get("/api/artifacts")
@@ -231,7 +231,7 @@ def test_artifact_content(client, app_state):
     with tempfile.TemporaryDirectory() as tmp:
         epic = Path(tmp)
         (epic / "landscape.md").write_text("# Hello\n", "utf-8")
-        app_state.epic_dir = str(epic)
+        app_state.run_dir = str(epic)
         app_state.start_event.set()
 
         resp = client.get("/api/artifacts/landscape.md")
@@ -245,7 +245,7 @@ def test_path_traversal_blocked(client, app_state):
     with tempfile.TemporaryDirectory() as tmp:
         epic = Path(tmp)
         epic.mkdir(exist_ok=True)
-        app_state.epic_dir = str(epic)
+        app_state.run_dir = str(epic)
         app_state.start_event.set()
 
         # URL-normalized traversal (../) is resolved before routing and hits the SPA fallback.
@@ -441,7 +441,7 @@ def test_live_page_when_running(client, app_state):
     # After SPA migration, GET / always returns the SPA entry point.
     # The React app reads store state client-side to render the live view.
     app_state.start_event.set()
-    app_state.epic_dir = "/tmp/fake-epic"
+    app_state.run_dir = "/tmp/fake-epic"
     app_state.phase = "intake"
 
     resp = client.get("/")

@@ -1,6 +1,6 @@
 # Unit tests for _check_or_raise in koan.web.mcp_endpoint.
 #
-# Validates epic_dir resolution from phase_ctx vs agent.epic_dir,
+# Validates run_dir resolution from phase_ctx vs agent.run_dir,
 # and confirms the permission-denied JSON envelope shape.
 
 import json
@@ -15,28 +15,28 @@ from koan.web.mcp_endpoint import _check_or_raise
 
 def _make_agent(
     role="intake",
-    epic_dir="",
+    run_dir="",
     step=2,
     phase_ctx=None,
 ):
     a = AgentState(agent_id="test", role=role, subagent_dir="/tmp/sub")
-    a.epic_dir = epic_dir
+    a.run_dir = run_dir
     a.step = step
     a.phase_ctx = phase_ctx
     return a
 
 
-# -- phase_ctx.epic_dir enforcement -------------------------------------------
+# -- phase_ctx.run_dir enforcement -------------------------------------------
 
-class TestPhaseCtxEpicDir:
-    def test_phase_ctx_epic_dir_enforced(self):
-        ctx = PhaseContext(epic_dir="/tmp/epic", subagent_dir="/tmp/sub")
+class TestPhaseCtxRunDir:
+    def test_phase_ctx_run_dir_enforced(self):
+        ctx = PhaseContext(run_dir="/tmp/epic", subagent_dir="/tmp/sub")
         agent = _make_agent(phase_ctx=ctx)
         with pytest.raises(ToolError, match="permission_denied"):
             _check_or_raise(agent, "write", {"path": "/home/evil.sh"})
 
-    def test_phase_ctx_epic_dir_allows_inside(self):
-        ctx = PhaseContext(epic_dir="/tmp/epic", subagent_dir="/tmp/sub")
+    def test_phase_ctx_run_dir_allows_inside(self):
+        ctx = PhaseContext(run_dir="/tmp/epic", subagent_dir="/tmp/sub")
         agent = _make_agent(phase_ctx=ctx)
         _check_or_raise(agent, "write", {"path": "/tmp/epic/foo.md"})
 
@@ -48,17 +48,17 @@ class TestNoPhaseCtx:
         agent = _make_agent()
         _check_or_raise(agent, "write")
 
-    def test_agent_epic_dir_fallback(self):
-        agent = _make_agent(epic_dir="/tmp/epic")
+    def test_agent_run_dir_fallback(self):
+        agent = _make_agent(run_dir="/tmp/epic")
         with pytest.raises(ToolError, match="permission_denied"):
             _check_or_raise(agent, "write", {"path": "/home/evil.sh"})
 
 
-# -- Empty epic_dir everywhere ------------------------------------------------
+# -- Empty run_dir everywhere ------------------------------------------------
 
-class TestEmptyEpicDir:
-    def test_phase_ctx_empty_epic_dir_no_crash(self):
-        ctx = PhaseContext(epic_dir="", subagent_dir="/tmp/sub")
+class TestEmptyRunDir:
+    def test_phase_ctx_empty_run_dir_no_crash(self):
+        ctx = PhaseContext(run_dir="", subagent_dir="/tmp/sub")
         agent = _make_agent(phase_ctx=ctx)
         _check_or_raise(agent, "write")
 

@@ -4,8 +4,8 @@
 #   1. Validates agent_id from query params before reaching fastmcp.
 #   2. Runs check_permission() on every tool call.
 #   3. Implements koan_complete_step, koan_request_scouts,
-#      koan_ask_question, koan_review_artifact, koan_set_phase,
-#      koan_spawn_executor, and story management tools.
+#      koan_ask_question, koan_set_phase, koan_request_executor,
+#      and story management tools.
 
 from __future__ import annotations
 
@@ -19,20 +19,19 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from urllib.parse import parse_qs
 
-import aiofiles
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
 
-from ..epic_state import (
+from ..run_state import (
     atomic_write_json,
     ensure_subagent_directory,
     load_story_state,
-    save_epic_state,
+    save_run_state,
     save_story_state,
-    load_epic_state,
+    load_run_state,
 )
 from ..lib.permissions import check_permission
-from ..lib.phase_dag import get_successor_phases, is_valid_transition
+from ..lib.workflows import get_suggested_phases, is_valid_transition as wf_is_valid
 from ..logger import get_logger
 from ..phases import PHASE_GUIDANCE_MAP, PhaseContext, StepGuidance
 from ..phases.format_step import format_phase_boundary, format_steering_messages, format_step
@@ -56,15 +55,15 @@ mcp = FastMCP(name="koan")
 
 def _check_or_raise(agent: AgentState, tool_name: str, tool_args: dict | None = None) -> None:
     phase_ctx = agent.phase_ctx
-    resolved_epic_dir = (
-        phase_ctx.epic_dir if phase_ctx is not None and phase_ctx.epic_dir
-        else agent.epic_dir or None
+    resolved_run_dir = (
+        phase_ctx.run_dir if phase_ctx is not None and phase_ctx.run_dir
+        else agent.run_dir or None
     )
     current_phase = _app_state.phase if _app_state is not None else None
     result = check_permission(
         role=agent.role,
         tool_name=tool_name,
-        epic_dir=resolved_epic_dir,
+        run_dir=resolved_run_dir,
         tool_args=tool_args,
         current_step=agent.step,
         current_phase=current_phase,
@@ -134,14 +133,14 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _resolve_epic_dir(agent: AgentState) -> str | None:
+def _resolve_run_dir(agent: AgentState) -> str | None:
     phase_ctx = agent.phase_ctx
-    if phase_ctx is not None and phase_ctx.epic_dir:
-        return phase_ctx.epic_dir
-    if agent.epic_dir:
-        return agent.epic_dir
-    if _app_state is not None and _app_state.epic_dir:
-        return _app_state.epic_dir
+    if phase_ctx is not None and phase_ctx.run_dir:
+        return phase_ctx.run_dir
+    if agent.run_dir:
+        return agent.run_dir
+    if _app_state is not None and _app_state.run_dir:
+        return _app_state.run_dir
     return None
 
 
@@ -227,11 +226,7 @@ async def _step_within_phase(
     ctx: PhaseContext,
     next_step: int,
 ) -> str:
-    """Handle normal within-phase step advancement.
-
-    User messages are not drained here -- they are delivered via the steering
-    queue which is drained by _drain_and_append_steering after every tool call.
-    """
+    """Handle normal within-phase step advancement."""
     assert _app_state is not None
 
     current_step = agent.step
@@ -279,10 +274,7 @@ async def _step_phase_boundary(
     assert _app_state is not None
     from ..state import drain_steering_messages, drain_user_messages
 
-    # Flush pending text/thinking in the projection without adding a duplicate
-    # step header (the step-N header was already emitted when we advanced TO
-    # this step in _step_within_phase).  Emitting with an empty step_name
-    # causes the fold to flush pending content without creating a new StepEntry.
+    # Flush pending text/thinking in the projection
     from ..events import build_step_advanced
     _app_state.projection_store.push_event(
         "agent_step_advanced",
@@ -290,8 +282,7 @@ async def _step_phase_boundary(
         agent_id=agent.agent_id,
     )
 
-    # Check for already-buffered messages.  Messages that arrived before the
-    # boundary was set up go to the steering queue; drain both to catch them.
+    # Check for already-buffered messages
     messages = drain_user_messages(_app_state) + drain_steering_messages(_app_state)
 
     if not messages:
@@ -305,8 +296,11 @@ async def _step_phase_boundary(
         _app_state.phase_complete_future = None
         messages = drain_user_messages(_app_state)
 
-    successors = get_successor_phases(_app_state.phase)
-    return format_phase_boundary(_app_state.phase, messages, list(successors))
+    # Use workflow's suggested transitions and phase descriptions
+    workflow = _app_state.workflow
+    suggested = get_suggested_phases(workflow, _app_state.phase) if workflow else []
+    descs = workflow.phase_descriptions if workflow else {}
+    return format_phase_boundary(_app_state.phase, messages, suggested, descs)
 
 
 # -- koan_complete_step -------------------------------------------------------
@@ -367,14 +361,18 @@ async def koan_complete_step(thoughts: str = "") -> str:
 async def koan_set_phase(phase: str) -> str:
     """Commit transition to the next workflow phase.
 
-    Call this after the user has indicated what to do next.
-    The next koan_complete_step call will return step 1 guidance
-    for the new phase, including the role context for that phase.
+    Call this after the user has confirmed what to do next. The next
+    koan_complete_step call will return step 1 guidance for the new
+    phase, including the role context for that phase.
+
+    The available phases and their descriptions are listed in the
+    koan_complete_step response when a phase completes. Any phase in
+    the current workflow is a valid target (not just the suggested ones).
 
     Args:
-        phase: Target phase name. Must be a valid successor of the current phase.
-               Valid successors are listed in the koan_complete_step response
-               when a phase completes.
+        phase: Target phase name from the current workflow's available
+               phases. The phase boundary response from koan_complete_step
+               lists suggested phases with descriptions.
     """
     agent = _get_agent()
     _check_or_raise(agent, "koan_set_phase", {"phase": phase})
@@ -385,13 +383,16 @@ async def koan_set_phase(phase: str) -> str:
         assert _app_state is not None
 
         current = _app_state.phase
-        if not is_valid_transition(current, phase):
-            successors = get_successor_phases(current)
+        workflow = _app_state.workflow
+
+        # Validate transition using workflow membership check
+        if workflow is None or not wf_is_valid(workflow, current, phase):
+            phases = list(workflow.available_phases) if workflow else []
             raise ToolError(json.dumps({
                 "error": "invalid_transition",
                 "message": (
-                    f"'{phase}' is not a valid successor of '{current}'. "
-                    f"Valid successors: {list(successors)}"
+                    f"'{phase}' is not available from '{current}' in the current workflow. "
+                    f"Available phases: {phases}"
                 ),
             }))
 
@@ -405,10 +406,10 @@ async def koan_set_phase(phase: str) -> str:
 
         # Update driver state
         _app_state.phase = phase
-        epic_dir = _resolve_epic_dir(agent)
-        if epic_dir:
-            epic_state = await load_epic_state(epic_dir)
-            await save_epic_state(epic_dir, {**epic_state, "phase": phase})
+        run_dir = _resolve_run_dir(agent)
+        if run_dir:
+            run_state = await load_run_state(run_dir)
+            await save_run_state(run_dir, {**run_state, "phase": phase})
 
         # Push artifact diff and phase_started event
         from ..driver import _push_artifact_diff
@@ -428,14 +429,19 @@ async def koan_set_phase(phase: str) -> str:
             agent_id=agent.agent_id,
         )
 
+        # Inject per-workflow phase guidance for the new phase
+        phase_guidance = workflow.phase_guidance.get(phase, "") if workflow else ""
+
         # Switch phase module and reset step counter
         agent.phase_module = new_module
         agent.step = 0
         agent.phase_ctx = PhaseContext(
-            epic_dir=epic_dir or "",
+            run_dir=run_dir or "",
             subagent_dir=agent.subagent_dir,
             project_dir=_app_state.project_dir,
             task_description=_app_state.task_description,
+            workflow_name=workflow.name if workflow else "",
+            phase_instructions=phase_guidance,   # scope framing from workflow
             completed_phase=current,
         )
 
@@ -467,18 +473,18 @@ async def koan_request_scouts(questions: list[dict] | None = None) -> str:
         assert _app_state is not None
 
         semaphore = asyncio.Semaphore(_app_state.config.scout_concurrency)
-        epic_dir = agent.phase_ctx.epic_dir
+        run_dir = agent.phase_ctx.run_dir
 
         scout_tasks = []
         for q in questions:
             scout_id = q.get("id", str(uuid.uuid4())[:8])
             subagent_dir = await ensure_subagent_directory(
-                epic_dir, f"scout-{scout_id}-{uuid.uuid4().hex[:8]}"
+                run_dir, f"scout-{scout_id}-{uuid.uuid4().hex[:8]}"
             )
             scout_tasks.append({
                 "role": "scout",
                 "label": scout_id,
-                "epic_dir": epic_dir,
+                "run_dir": run_dir,
                 "subagent_dir": subagent_dir,
                 "project_dir": _app_state.project_dir,
                 "question": q.get("prompt", ""),
@@ -580,125 +586,69 @@ async def koan_ask_question(questions: list[dict] | None = None) -> str:
         end_tool_call(agent, call_id, "koan_ask_question", result_str)
 
 
-# -- koan_review_artifact ------------------------------------------------------
+# -- koan_request_executor -----------------------------------------------------
 
-@mcp.tool(name="koan_review_artifact")
-async def koan_review_artifact(path: str = "", description: str = "") -> str:
-    agent = _get_agent()
-    _check_or_raise(agent, "koan_review_artifact", {"path": path, "description": description})
-
-    call_id = begin_tool_call(
-        agent, "koan_review_artifact", {"path": path, "description": description},
-        description or path,
-    )
-    result_str: str | None = None
-    try:
-        assert _app_state is not None
-
-        try:
-            async with aiofiles.open(path, "r") as f:
-                content = await f.read()
-        except FileNotFoundError:
-            raise ToolError(
-                json.dumps({"error": "file_not_found", "message": f"Artifact not found: {path}"})
-            )
-
-        future = await enqueue_interaction(
-            agent, _app_state, "artifact-review",
-            {"path": path, "description": description, "content": content},
-        )
-        result = await future
-
-        if isinstance(result, dict) and "error" in result:
-            raise ToolError(json.dumps(result))
-
-        response = result.get("response", "")
-        accepted = result.get("accepted", response == "" or response.strip().lower() in ("", "ok", "approved", "lgtm", "accept"))
-        agent.phase_ctx.last_review_accepted = accepted
-
-        result_str = "ACCEPTED" if accepted else f"REVISION REQUESTED: {response}"
-        result_str = _drain_and_append_steering(result_str, agent)
-        return result_str
-    finally:
-        end_tool_call(agent, call_id, "koan_review_artifact", result_str)
-
-
-# -- koan_spawn_executor -------------------------------------------------------
-
-@mcp.tool(name="koan_spawn_executor")
-async def koan_spawn_executor(
-    story_id: str,
-    role: str,
-    retry_context: str | None = None,
+@mcp.tool(name="koan_request_executor")
+async def koan_request_executor(
+    artifacts: list[str] | None = None,
+    instructions: str = "",
 ) -> str:
-    """Spawn a planner or executor subagent for a story.
+    """Spawn a coding agent to implement changes.
 
-    Blocks until the spawned subagent exits. Returns a result summary.
-    The subagent's output artifacts (plan.md, verification output) will
-    be available in the story directory after this call returns.
+    The executor reads the listed artifacts from the run directory,
+    plans its approach internally, then implements. Blocks until
+    the executor exits and returns a result summary.
 
     Args:
-        story_id: Story identifier (directory name in stories/)
-        role: "planner" generates plan.md; "executor" implements the plan
-        retry_context: Optional failure context from a prior executor attempt
+        artifacts: File paths relative to run directory that the
+                   executor must read before coding.
+                   Example: ["plan.md", "landscape.md"]
+        instructions: Free-form context for the executor — key
+                      decisions, constraints, or user direction
+                      not captured in the artifact files.
     """
     agent = _get_agent()
-    _check_or_raise(agent, "koan_spawn_executor", {"story_id": story_id, "role": role})
+    _check_or_raise(agent, "koan_request_executor", {"artifacts": artifacts, "instructions": instructions})
 
     call_id = begin_tool_call(
-        agent, "koan_spawn_executor",
-        {"story_id": story_id, "role": role},
-        f"{role} for {story_id}",
+        agent, "koan_request_executor",
+        {"artifacts": artifacts or [], "instructions": instructions},
+        f"{len(artifacts or [])} artifact(s)",
     )
     result_str: str | None = None
     try:
         assert _app_state is not None
 
-        if role not in ("planner", "executor"):
-            raise ToolError(json.dumps({
-                "error": "invalid_role",
-                "message": f"role must be 'planner' or 'executor', got '{role}'",
-            }))
-
-        epic_dir = _resolve_epic_dir(agent)
-        if not epic_dir:
-            raise ToolError(json.dumps({"error": "no_epic_dir", "message": "No epic directory available"}))
-
-        story_dir = Path(epic_dir) / "stories" / story_id
-        if not story_dir.is_dir():
-            raise ToolError(json.dumps({
-                "error": "story_not_found",
-                "message": f"Story directory not found: {story_dir}",
-            }))
+        run_dir = _resolve_run_dir(agent)
+        if not run_dir:
+            raise ToolError(json.dumps({"error": "no_run_dir", "message": "No run directory available"}))
 
         ts_suffix = int(time.time() * 1000)
         subagent_dir = await ensure_subagent_directory(
-            epic_dir, f"{role}-{story_id}-{ts_suffix}"
+            run_dir, f"executor-{ts_suffix}"
         )
 
-        task: dict = {
-            "role": role,
-            "epic_dir": epic_dir,
+        task = {
+            "role": "executor",
+            "run_dir": run_dir,
             "subagent_dir": subagent_dir,
             "project_dir": _app_state.project_dir,
-            "story_id": story_id,
+            "artifacts": artifacts or [],
+            "instructions": instructions,
         }
-        if retry_context:
-            task["retryContext"] = retry_context
 
         from ..subagent import spawn_subagent
         result = await spawn_subagent(task, _app_state)
 
-        exit_code = result.exit_code
-        status = "succeeded" if exit_code == 0 else f"failed (exit code {exit_code})"
-        result_str = f"{role} for story '{story_id}' {status}."
+        status = "succeeded" if result.exit_code == 0 else f"failed (exit {result.exit_code})"
+        result_str = f"Executor {status}."
         result_str = _drain_and_append_steering(result_str, agent)
         return result_str
     finally:
-        end_tool_call(agent, call_id, "koan_spawn_executor", result_str)
+        end_tool_call(agent, call_id, "koan_request_executor", result_str)
 
 
-# -- Story management tools ---------------------------------------------------
+# -- Story management tools (legacy execution phase) ---------------------------
 
 @mcp.tool(name="koan_select_story")
 async def koan_select_story(story_id: str) -> str:
@@ -710,11 +660,11 @@ async def koan_select_story(story_id: str) -> str:
     result_str: str | None = None
     try:
         assert _app_state is not None
-        epic_dir = _resolve_epic_dir(agent)
-        if not epic_dir:
-            raise ToolError(json.dumps({"error": "no_epic_dir"}))
+        run_dir = _resolve_run_dir(agent)
+        if not run_dir:
+            raise ToolError(json.dumps({"error": "no_run_dir"}))
 
-        await save_story_state(epic_dir, story_id, {
+        await save_story_state(run_dir, story_id, {
             "storyId": story_id,
             "status": "selected",
             "updatedAt": _now_iso(),
@@ -736,11 +686,11 @@ async def koan_complete_story(story_id: str) -> str:
     result_str: str | None = None
     try:
         assert _app_state is not None
-        epic_dir = _resolve_epic_dir(agent)
-        if not epic_dir:
-            raise ToolError(json.dumps({"error": "no_epic_dir"}))
+        run_dir = _resolve_run_dir(agent)
+        if not run_dir:
+            raise ToolError(json.dumps({"error": "no_run_dir"}))
 
-        await save_story_state(epic_dir, story_id, {
+        await save_story_state(run_dir, story_id, {
             "storyId": story_id,
             "status": "done",
             "updatedAt": _now_iso(),
@@ -762,14 +712,14 @@ async def koan_retry_story(story_id: str, failure_summary: str) -> str:
     result_str: str | None = None
     try:
         assert _app_state is not None
-        epic_dir = _resolve_epic_dir(agent)
-        if not epic_dir:
-            raise ToolError(json.dumps({"error": "no_epic_dir"}))
+        run_dir = _resolve_run_dir(agent)
+        if not run_dir:
+            raise ToolError(json.dumps({"error": "no_run_dir"}))
 
-        existing = await load_story_state(epic_dir, story_id)
+        existing = await load_story_state(run_dir, story_id)
         retry_count = existing.get("retryCount", 0) + 1
 
-        await save_story_state(epic_dir, story_id, {
+        await save_story_state(run_dir, story_id, {
             "storyId": story_id,
             "status": "retry",
             "failureSummary": failure_summary,
@@ -793,9 +743,9 @@ async def koan_skip_story(story_id: str, reason: str = "") -> str:
     result_str: str | None = None
     try:
         assert _app_state is not None
-        epic_dir = _resolve_epic_dir(agent)
-        if not epic_dir:
-            raise ToolError(json.dumps({"error": "no_epic_dir"}))
+        run_dir = _resolve_run_dir(agent)
+        if not run_dir:
+            raise ToolError(json.dumps({"error": "no_run_dir"}))
 
         state: dict = {
             "storyId": story_id,
@@ -805,7 +755,7 @@ async def koan_skip_story(story_id: str, reason: str = "") -> str:
         if reason:
             state["skipReason"] = reason
 
-        await save_story_state(epic_dir, story_id, state)
+        await save_story_state(run_dir, story_id, state)
         result_str = f"Story '{story_id}' skipped."
         result_str = _drain_and_append_steering(result_str, agent)
         return result_str

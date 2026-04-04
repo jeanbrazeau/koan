@@ -57,8 +57,17 @@ def format_steering_messages(messages: list[Any]) -> str:
     )
 
 
-def format_phase_boundary(phase: str, messages: list[Any], successors: list[str]) -> str:
-    """Format a phase-boundary response that includes user messages and next-phase options."""
+def format_phase_boundary(
+    phase: str,
+    messages: list[Any],
+    suggested: list[str],
+    phase_descriptions: dict[str, str] | None = None,
+) -> str:
+    """Format a phase-boundary response with user messages and suggested next phases.
+
+    If suggested is empty (stub workflow), renders a graceful end-of-workflow message
+    instead of an empty phases section.
+    """
     title = f"Phase Complete: {phase}"
     lines = [title, "=" * len(title), ""]
 
@@ -71,16 +80,29 @@ def format_phase_boundary(phase: str, messages: list[Any], successors: list[str]
             lines.append(f"**[{ts_str}]** {msg.content}")
         lines.append("")
 
-    lines.append("## Available Next Phases")
-    lines.append("")
-    for s in successors:
-        lines.append(f"- **{s}**")
-    lines.append("")
-
-    lines.append("## Instructions")
-    lines.append("")
-    lines.append("Discuss the completed phase and the user's message(s) with the user.")
-    lines.append("Once the user has confirmed what to do next, call `koan_set_phase` with")
-    lines.append("the chosen phase name. Then call `koan_complete_step` to begin.")
+    if suggested:
+        descs = phase_descriptions or {}
+        lines.append("## Suggested Next Phases")
+        lines.append("")
+        for s in suggested:
+            desc = descs.get(s, "")
+            if desc:
+                lines.append(f"- **{s}** \u2014 {desc}")
+            else:
+                lines.append(f"- **{s}**")
+        lines.append("")
+        lines.append("## Instructions")
+        lines.append("")
+        lines.append("Briefly summarize what was accomplished in this phase. Present the")
+        lines.append("suggested phases above to the user, explaining what each one does.")
+        lines.append("Ask which direction they would like to go. The user can also request")
+        lines.append("any other phase available in this workflow.")
+        lines.append("Once confirmed, call `koan_set_phase` then `koan_complete_step`.")
+    else:
+        lines.append("## Workflow Stub")
+        lines.append("")
+        lines.append("This workflow does not have further phases implemented yet.")
+        lines.append("Summarize what was accomplished in intake and let the user know")
+        lines.append("the workflow will end here for now.")
 
     return "\n".join(lines)

@@ -1,23 +1,22 @@
-# Brief-writer phase -- 3-step workflow.
+# Brief-writer phase -- 2-step workflow (collapsed from 3).
 #
-#   Step 1 (Read)           -- read landscape.md; build mental model; no writes
-#   Step 2 (Draft & Review) -- write brief.md + review gate (loops until Accept)
-#   Step 3 (Finalize)       -- phase complete
+#   Step 1 (Read)   -- read landscape.md; build mental model; no writes
+#   Step 2 (Draft)  -- write brief.md; artifact available in panel
 #
-# Step 2 is review-gated via validate_step_completion.
+# Review gate removed (D1): step 2 completes unconditionally.
+# SCOPE="legacy": part of the old epic pipeline, not used by any active workflow.
 
 from __future__ import annotations
 
 from . import PhaseContext, StepGuidance
-from .review_protocol import REVIEW_PROTOCOL
 
 ROLE = "brief-writer"
-TOTAL_STEPS = 3
+SCOPE = "legacy"
+TOTAL_STEPS = 2
 
 STEP_NAMES: dict[int, str] = {
     1: "Read",
-    2: "Draft & Review",
-    3: "Finalize",
+    2: "Draft",
 }
 
 SYSTEM_PROMPT = (
@@ -32,7 +31,7 @@ SYSTEM_PROMPT = (
     "\n"
     "## Output\n"
     "\n"
-    "One file: **brief.md** in the epic directory.\n"
+    "One file: **brief.md** in the run directory.\n"
     "\n"
     "## Structure\n"
     "\n"
@@ -43,8 +42,6 @@ SYSTEM_PROMPT = (
     "\n"
     "Keep the brief compact -- under 50 lines. No UI flows, no technical design,"
     " no implementation details.\n"
-    "\n"
-    + REVIEW_PROTOCOL
 )
 
 
@@ -53,7 +50,7 @@ SYSTEM_PROMPT = (
 def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
     if step == 1:
         lines = [
-            f"Read `{ctx.epic_dir}/landscape.md`. Build a thorough mental model of:",
+            f"Read `{ctx.run_dir}/landscape.md`. Build a thorough mental model of:",
             "",
             "- Task Summary -- what is being built or changed",
             "- Prior Art -- previous attempts, related systems, or prior conversations",
@@ -71,16 +68,14 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
         return StepGuidance(
             title=STEP_NAMES[2],
             instructions=[
-                f"Draft `{ctx.epic_dir}/brief.md` with the required sections",
+                f"Draft `{ctx.run_dir}/brief.md` with the required sections",
                 "(Summary, Context & Problem, Goals, Constraints). Keep it under 50",
                 "lines. No UI flows, no technical design, no implementation details.",
                 "",
-                f"After writing, invoke `koan_review_artifact` with the path to `{ctx.epic_dir}/brief.md`.",
+                "brief.md is now available in the artifacts panel for review.",
+                "Call `koan_complete_step` when done.",
             ],
         )
-
-    if step == 3:
-        return StepGuidance(title=STEP_NAMES[3], instructions=["Phase complete."])
 
     return StepGuidance(title=f"Step {step}", instructions=[f"Execute step {step}."])
 
@@ -88,26 +83,12 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
 # -- Lifecycle -----------------------------------------------------------------
 
 def get_next_step(step: int, ctx: PhaseContext) -> int | None:
-    if step == 0:
-        return 1
     if step == 1:
         return 2
-    if step == 2:
-        if ctx.last_review_accepted is True:
-            return 3
-        return 2
-    if step == 3:
-        return None
-    return None
+    return None  # step 2 is terminal
 
 
 def validate_step_completion(step: int, ctx: PhaseContext) -> str | None:
-    if step != 2:
-        return None
-    if ctx.last_review_accepted is None:
-        return "You must call koan_review_artifact to present brief.md for review before completing this step."
-    if ctx.last_review_accepted is False:
-        return "The user requested revisions. Address the feedback, then call koan_review_artifact again."
     return None
 
 

@@ -17,7 +17,7 @@ def _utcnow() -> datetime:
 from .config import KoanConfig
 from .probe import ProbeResult
 from .projections import ProjectionStore
-from .types import EpicPhase, Profile, SubagentRole
+from .types import WorkflowPhase, Profile, SubagentRole
 
 
 @dataclass
@@ -28,7 +28,7 @@ class ChatMessage:
 
 @dataclass
 class PendingInteraction:
-    type: Literal["ask", "artifact-review"]
+    type: Literal["ask"]
     agent_id: str
     future: asyncio.Future
     payload: dict
@@ -40,7 +40,7 @@ class AgentState:
     agent_id: str
     role: SubagentRole
     subagent_dir: str
-    epic_dir: str = ""
+    run_dir: str = ""
     label: str = ""
     step: int = 0
     phase_module: Any = None
@@ -57,10 +57,11 @@ class AgentState:
 
 @dataclass
 class AppState:
-    phase: EpicPhase = "intake"
-    epic_dir: str | None = None
+    phase: WorkflowPhase = "intake"
+    run_dir: str | None = None
     project_dir: str = ""
     task_description: str = ""
+    workflow: Any = None  # Workflow | None — imported lazily to avoid circular deps
     start_event: asyncio.Event = field(default_factory=asyncio.Event)
     agents: dict[str, AgentState] = field(default_factory=dict)
     projection_store: ProjectionStore = field(default_factory=ProjectionStore)

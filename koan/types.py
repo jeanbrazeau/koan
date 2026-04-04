@@ -4,7 +4,8 @@
 from dataclasses import dataclass, field
 from typing import Literal
 
-EpicPhase = Literal[
+WorkflowPhase = Literal[
+    # Legacy workflow phases (kept as dead code; no active workflow uses these)
     "intake",
     "brief-generation",
     "core-flows",
@@ -14,6 +15,10 @@ EpicPhase = Literal[
     "execution",
     "implementation-validation",
     "completed",
+    # Plan workflow phases
+    "plan-spec",
+    "plan-review",
+    "execute",
 ]
 
 SubagentRole = Literal[

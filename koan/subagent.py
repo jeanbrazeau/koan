@@ -14,12 +14,11 @@ from typing import TYPE_CHECKING
 import aiofiles
 
 from .audit import EventLog
-from .epic_state import ensure_subagent_directory
+from .run_state import ensure_subagent_directory
 from .events import (
     build_agent_exited,
     build_agent_spawn_failed,
     build_agent_spawned,
-    build_artifact_reviewed,
     build_questions_answered,
     build_tool_bash,
     build_tool_called,
@@ -73,11 +72,13 @@ async def write_task_json(subagent_dir: str, task_dict: dict) -> None:
 
 def _build_phase_ctx(task: dict, subagent_dir: str) -> PhaseContext:
     return PhaseContext(
-        epic_dir=task.get("epic_dir", ""),
+        run_dir=task.get("run_dir", ""),
         subagent_dir=subagent_dir,
         project_dir=task.get("project_dir", ""),
         task_description=task.get("task_description", ""),
+        workflow_name=task.get("workflow", ""),
         phase_instructions=task.get("instructions") or task.get("phase_instructions") or task.get("task"),
+        executor_artifacts=task.get("artifacts", []),
         story_id=task.get("story_id"),
         step_sequence=task.get("step_sequence"),
         completed_phase=task.get("completed_phase"),
@@ -98,9 +99,9 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
     # Own directory creation -- derive if not provided, ensure it exists
     subagent_dir = task.get("subagent_dir", "")
     if not subagent_dir:
-        epic_dir = task.get("epic_dir", "")
+        run_dir = task.get("run_dir", "")
         label = f"{role}-{agent_id[:8]}"
-        subagent_dir = await ensure_subagent_directory(epic_dir, label)
+        subagent_dir = await ensure_subagent_directory(run_dir, label)
         task["subagent_dir"] = subagent_dir
     else:
         Path(subagent_dir).mkdir(parents=True, exist_ok=True)
@@ -170,7 +171,7 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
         agent_id=agent_id,
         role=role,
         subagent_dir=subagent_dir,
-        epic_dir=task.get("epic_dir", ""),
+        run_dir=task.get("run_dir", ""),
         label=task.get("label", ""),
         step=0,
         phase_module=phase_module,
@@ -403,12 +404,6 @@ def _cancel_pending_interactions(agent_id: str, app_state: AppState) -> None:
             store.push_event(
                 "questions_answered",
                 build_questions_answered(token, answers=None, cancelled=True),
-                agent_id=agent_id,
-            )
-        elif active.type == "artifact-review":
-            store.push_event(
-                "artifact_reviewed",
-                build_artifact_reviewed(token, accepted=None, response=None, cancelled=True),
                 agent_id=agent_id,
             )
 

@@ -11,13 +11,11 @@ import { Notification } from './components/Notification'
 import { SettingsOverlay } from './components/SettingsOverlay'
 import { Completion } from './components/Completion'
 import { AskWizard } from './components/interactions/AskWizard'
-import { ArtifactReview } from './components/interactions/ArtifactReview'
 
 function InteractionView() {
   const focus = useStore(s => s.run?.focus)
   if (!focus) return null
   if (focus.type === 'question') return <AskWizard />
-  if (focus.type === 'review') return <ArtifactReview />
   return null
 }
 

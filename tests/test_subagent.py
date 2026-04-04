@@ -34,7 +34,7 @@ class FakeAppState:
     active_interaction: Any = None
     interaction_queue: Any = field(default_factory=lambda: __import__("collections").deque())
     interaction_queue_max: int = 8
-    epic_dir: str | None = None
+    run_dir: str | None = None
     projection_store: object = field(default_factory=lambda: __import__('koan.projections', fromlist=['ProjectionStore']).ProjectionStore())
     run_installations: dict = field(default_factory=dict)
     _active_processes: dict = field(default_factory=dict)
@@ -163,7 +163,7 @@ class TestCompleteStep:
             subagent_dir="/tmp/test",
             step=0,
             phase_module=phase_mod,
-            phase_ctx=PhaseContext(epic_dir="/tmp", subagent_dir="/tmp/test"),
+            phase_ctx=PhaseContext(run_dir="/tmp", subagent_dir="/tmp/test"),
             event_log=event_log,
         )
 
@@ -193,7 +193,7 @@ class TestCompleteStep:
             subagent_dir="/tmp/test",
             step=4,
             phase_module=phase_mod,
-            phase_ctx=PhaseContext(epic_dir="/tmp", subagent_dir="/tmp/test"),
+            phase_ctx=PhaseContext(run_dir="/tmp", subagent_dir="/tmp/test"),
             event_log=AsyncMock(),
         )
 
@@ -222,7 +222,7 @@ class TestCompleteStep:
             subagent_dir="/tmp/test",
             step=4,
             phase_module=phase_mod,
-            phase_ctx=PhaseContext(epic_dir="/tmp", subagent_dir="/tmp/test"),
+            phase_ctx=PhaseContext(run_dir="/tmp", subagent_dir="/tmp/test"),
             event_log=AsyncMock(),
         )
 
@@ -250,7 +250,7 @@ class TestSpawnSubagent:
 
         task = {
             "role": "intake",
-            "epic_dir": str(tmp_path),
+            "run_dir": str(tmp_path),
             "subagent_dir": subagent_dir,
         }
 
@@ -278,7 +278,7 @@ class TestSpawnSubagent:
 
         task = {
             "role": "intake",
-            "epic_dir": str(tmp_path),
+            "run_dir": str(tmp_path),
             "subagent_dir": subagent_dir,
         }
 
@@ -330,7 +330,7 @@ class TestSpawnSubagent:
 
         task = {
             "role": "intake",
-            "epic_dir": str(tmp_path),
+            "run_dir": str(tmp_path),
             "subagent_dir": subagent_dir,
         }
 
@@ -382,15 +382,15 @@ class TestRequestScouts:
         from koan.state import AgentState
         from koan.web.mcp_endpoint import _agent_ctx, _app_state, koan_request_scouts
 
-        app_state = FakeAppState(port=9999, epic_dir=str(tmp_path))
+        app_state = FakeAppState(port=9999, run_dir=str(tmp_path))
 
         agent = AgentState(
             agent_id="scout-parent",
             role="intake",
             subagent_dir=str(tmp_path),
-            epic_dir=str(tmp_path),
+            run_dir=str(tmp_path),
             phase_module=_fake_phase_module(),
-            phase_ctx=PhaseContext(epic_dir=str(tmp_path), subagent_dir=str(tmp_path)),
+            phase_ctx=PhaseContext(run_dir=str(tmp_path), subagent_dir=str(tmp_path)),
             event_log=AsyncMock(),
         )
 
@@ -434,16 +434,16 @@ class TestRequestScouts:
         from koan.state import AgentState
         from koan.web.mcp_endpoint import _agent_ctx, koan_request_scouts
 
-        app_state = FakeAppState(port=9999, epic_dir=str(tmp_path))
+        app_state = FakeAppState(port=9999, run_dir=str(tmp_path))
         app_state.config.scout_concurrency = 1  # serial execution
 
         agent = AgentState(
             agent_id="scout-parent",
             role="intake",
             subagent_dir=str(tmp_path),
-            epic_dir=str(tmp_path),
+            run_dir=str(tmp_path),
             phase_module=_fake_phase_module(),
-            phase_ctx=PhaseContext(epic_dir=str(tmp_path), subagent_dir=str(tmp_path)),
+            phase_ctx=PhaseContext(run_dir=str(tmp_path), subagent_dir=str(tmp_path)),
             event_log=AsyncMock(),
         )
 
@@ -488,15 +488,15 @@ class TestRequestScouts:
         from koan.state import AgentState
         from koan.web.mcp_endpoint import _agent_ctx, koan_request_scouts
 
-        app_state = FakeAppState(port=9999, epic_dir=str(tmp_path))
+        app_state = FakeAppState(port=9999, run_dir=str(tmp_path))
 
         agent = AgentState(
             agent_id="scout-parent",
             role="intake",
             subagent_dir=str(tmp_path),
-            epic_dir=str(tmp_path),
+            run_dir=str(tmp_path),
             phase_module=_fake_phase_module(),
-            phase_ctx=PhaseContext(epic_dir=str(tmp_path), subagent_dir=str(tmp_path)),
+            phase_ctx=PhaseContext(run_dir=str(tmp_path), subagent_dir=str(tmp_path)),
             event_log=AsyncMock(),
         )
 
@@ -560,7 +560,7 @@ class TestDiagnosticFanout:
 
         task = {
             "role": "intake",
-            "epic_dir": str(tmp_path),
+            "run_dir": str(tmp_path),
             "subagent_dir": subagent_dir,
         }
 
@@ -631,7 +631,7 @@ class TestBinaryNotFoundSpawn:
 
         task = {
             "role": "intake",
-            "epic_dir": str(tmp_path),
+            "run_dir": str(tmp_path),
             "subagent_dir": subagent_dir,
         }
 

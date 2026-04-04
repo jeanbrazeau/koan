@@ -37,6 +37,7 @@ EventType = Literal[
     "agent_step_advanced",
     "agent_exited",
     "workflow_completed",
+    "workflow_selected",
     "scout_queued",
     # Activity
     "tool_called",
@@ -59,8 +60,6 @@ EventType = Literal[
     # Focus (interactions)
     "questions_asked",
     "questions_answered",
-    "artifact_review_requested",
-    "artifact_reviewed",
     # Resources
     "artifact_created",
     "artifact_modified",
@@ -218,17 +217,8 @@ class QuestionFocus(KoanBaseModel):
     token: str
     questions: list[dict] = []
 
-class ReviewFocus(KoanBaseModel):
-    """Agent is blocked, artifact needs review."""
-    type: Literal["review"] = "review"
-    agent_id: str
-    token: str
-    path: str = ""
-    description: str = ""
-    content: str = ""
-
 Focus = Annotated[
-    ConversationFocus | QuestionFocus | ReviewFocus,
+    ConversationFocus | QuestionFocus,
     Field(discriminator="type"),
 ]
 
@@ -321,6 +311,7 @@ class SteeringMessage(KoanBaseModel):
 class Run(KoanBaseModel):
     config: RunConfig
     phase: str = ""
+    workflow: str = ""    # active workflow name
     agents: dict[str, Agent] = {}          # all agents by ID — queued, running, done, failed
     focus: Focus | None = None             # None before first agent spawns
     artifacts: dict[str, ArtifactInfo] = {}
@@ -441,6 +432,14 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                     scout_concurrency=payload.get("scout_concurrency", 8),
                 )
                 return projection.model_copy(update={"run": Run(config=config)})
+
+
+            case "workflow_selected":
+                if projection.run is None:
+                    log.warning("fold workflow_selected: run is None, skipping")
+                    return projection
+                new_run = projection.run.model_copy(update={"workflow": payload.get("workflow", "")})
+                return projection.model_copy(update={"run": new_run})
 
             case "phase_started":
                 if projection.run is None:
@@ -940,29 +939,7 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                 })
                 return projection.model_copy(update={"run": new_run})
 
-            case "artifact_review_requested":
-                if projection.run is None or not agent_id:
-                    return projection
-                new_focus = ReviewFocus(
-                    agent_id=agent_id,
-                    token=payload.get("token", ""),
-                    path=payload.get("path", ""),
-                    description=payload.get("description", ""),
-                    content=payload.get("content", ""),
-                )
-                new_run = projection.run.model_copy(update={"focus": new_focus})
-                return projection.model_copy(update={"run": new_run})
 
-            case "artifact_reviewed":
-                if projection.run is None:
-                    return projection
-                pid = _primary_agent_id(projection.run)
-                if pid is None:
-                    return projection
-                new_run = projection.run.model_copy(update={
-                    "focus": ConversationFocus(agent_id=pid),
-                })
-                return projection.model_copy(update={"run": new_run})
 
             # ── Resources ─────────────────────────────────────────────────
 

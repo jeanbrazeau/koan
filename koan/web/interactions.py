@@ -21,10 +21,7 @@ if TYPE_CHECKING:
 
 def _emit_interaction_request(app_state: AppState, interaction: PendingInteraction) -> None:
     """Emit the typed request event for an interaction becoming active."""
-    from ..events import (
-        build_artifact_review_requested,
-        build_questions_asked,
-    )
+    from ..events import build_questions_asked
 
     store = app_state.projection_store
     token = interaction.token
@@ -37,17 +34,6 @@ def _emit_interaction_request(app_state: AppState, interaction: PendingInteracti
             build_questions_asked(token, payload.get("questions", [])),
             agent_id=agent_id,
         )
-    elif interaction.type == "artifact-review":
-        store.push_event(
-            "artifact_review_requested",
-            build_artifact_review_requested(
-                token,
-                payload.get("path", ""),
-                payload.get("description", ""),
-                payload.get("content", ""),
-            ),
-            agent_id=agent_id,
-        )
 
 
 # -- Queue helpers ------------------------------------------------------------
@@ -55,7 +41,7 @@ def _emit_interaction_request(app_state: AppState, interaction: PendingInteracti
 async def enqueue_interaction(
     agent: AgentState,
     app_state: AppState,
-    interaction_type: Literal["ask", "artifact-review"],
+    interaction_type: Literal["ask"],
     payload: dict,
 ) -> asyncio.Future:
     total = len(app_state.interaction_queue) + (1 if app_state.active_interaction else 0)

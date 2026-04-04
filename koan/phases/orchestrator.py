@@ -18,6 +18,7 @@ from __future__ import annotations
 from . import PhaseContext, StepGuidance
 
 ROLE = "orchestrator"
+SCOPE = "legacy"
 TOTAL_STEPS = 2  # default; actual depends on step_sequence
 
 SYSTEM_PROMPT = (
@@ -113,7 +114,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
 
 
 def _pre_step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
-    ed = ctx.epic_dir
+    ed = ctx.run_dir
 
     if step == 1:
         return StepGuidance(
@@ -179,7 +180,7 @@ def _pre_step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
 
 
 def _post_step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
-    ed = ctx.epic_dir
+    ed = ctx.run_dir
     sid = ctx.story_id or "<story-id>"
     story_ref = f"story `{sid}`"
     verify_path = f"{ed}/stories/{sid}/plan/verify.md"

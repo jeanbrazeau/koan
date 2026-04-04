@@ -17,7 +17,6 @@ from koan.projections import (
     Projection,
     ProjectionStore,
     QuestionFocus,
-    ReviewFocus,
     Run,
     RunConfig,
     Settings,
@@ -122,6 +121,16 @@ class TestFoldRunLifecycle:
     def test_workflow_completed_without_run_is_noop(self):
         p = Projection()
         r = fold(p, _e("workflow_completed", {"success": True}))
+        assert r.run is None
+
+    def test_workflow_selected_sets_workflow(self):
+        p = _proj_with_run()
+        r = fold(p, _e("workflow_selected", {"workflow": "plan"}))
+        assert r.run.workflow == "plan"
+
+    def test_workflow_selected_without_run_is_noop(self):
+        p = Projection()
+        r = fold(p, _e("workflow_selected", {"workflow": "plan"}))
         assert r.run is None
 
 
@@ -454,27 +463,6 @@ class TestFoldFocus:
         r = fold(p, _e("questions_answered", {"token": "t1", "cancelled": False}, agent_id="a1"))
         assert isinstance(r.run.focus, ConversationFocus)
         assert r.run.focus.agent_id == "a1"
-
-    def test_artifact_review_requested_sets_review_focus(self):
-        p = _proj_with_primary("a1")
-        r = fold(p, _e("artifact_review_requested", {
-            "token": "t2", "path": "/f.md", "description": "d", "content": "c",
-        }, agent_id="a1"))
-        assert isinstance(r.run.focus, ReviewFocus)
-        assert r.run.focus.path == "/f.md"
-
-    def test_artifact_reviewed_resets_to_conversation_focus(self):
-        p = _proj_with_primary("a1")
-        p = fold(p, _e("artifact_review_requested", {"token": "t2", "path": "/f.md", "description": "", "content": ""}, agent_id="a1"))
-        r = fold(p, _e("artifact_reviewed", {"token": "t2", "cancelled": False}, agent_id="a1"))
-        assert isinstance(r.run.focus, ConversationFocus)
-
-
-# ---------------------------------------------------------------------------
-# fold: settings
-# ---------------------------------------------------------------------------
-
-class TestFoldSettings:
 
     def test_installation_created_adds_to_dict(self):
         p = Projection()

@@ -1,180 +1,159 @@
-# Executor phase -- 2-step workflow.
+# Executor phase -- 3-step workflow.
 #
-#   Step 1 (Comprehension)    -- read and understand the implementation plan
-#   Step 2 (Implementation)   -- implement the plan step by step
+#   Step 1 (Comprehend)   -- read artifacts and codebase; build mental model
+#   Step 2 (Plan)         -- explain implementation approach (no file written)
+#   Step 3 (Implement)    -- implement all changes
 #
 # The executor is the only agent that writes source code.
+# Scope: "general" -- reusable by any workflow.
 
 from __future__ import annotations
 
 from . import PhaseContext, StepGuidance
 
 ROLE = "executor"
-TOTAL_STEPS = 2
+SCOPE = "general"        # reusable by any workflow
+TOTAL_STEPS = 3
 
 STEP_NAMES: dict[int, str] = {
-    1: "Comprehension",
-    2: "Implementation",
+    1: "Comprehend",
+    2: "Plan",
+    3: "Implement",
 }
 
 SYSTEM_PROMPT = (
-    "You are a coding agent. You implement changes to a codebase by following a"
-    " detailed plan written by a planner. You are the only agent in the koan"
-    " workflow that writes source code.\n"
+    "You are a coding agent. You implement changes to a codebase based on"
+    " artifacts and instructions provided by the orchestrator.\n"
     "\n"
-    "## Your role\n"
+    "You receive artifact files to read and free-form instructions. You plan"
+    " your approach, then implement. You are the only agent that writes source"
+    " code.\n"
     "\n"
-    "You receive a plan (plan/plan.md) and supporting context (plan/context.md),"
-    " and you implement each step in order. You do not design. You do not make"
-    " architectural decisions. You execute the plan faithfully.\n"
+    "## Resolve trivial issues independently\n"
     "\n"
-    "## What you receive\n"
+    "- Incorrect file paths or function names in artifacts \u2192 find correct ones\n"
+    "- Syntax errors or typos in plan snippets \u2192 fix them\n"
+    "- Minor import adjustments \u2192 handle them\n"
+    "- Obvious missing error handling \u2192 add it\n"
     "\n"
-    "- **plan/plan.md**: A numbered list of implementation steps. Each step specifies"
-    " the file, location, action, and exact change to make.\n"
-    "- **plan/context.md**: Curated code snippets for the files you will modify --"
-    " function signatures, type definitions, and import blocks.\n"
-    "- **retryContext** (when present): A failure summary from a previous execution"
-    " attempt. Read it carefully -- it describes what went wrong and what you should"
-    " do differently.\n"
+    "## Call koan_ask_question only when\n"
     "\n"
-    "## How to work\n"
+    "- The artifacts are genuinely ambiguous about *what* to build\n"
+    "- You discover a conflict between plan and codebase that isn't trivial\n"
+    "- A dependency or prerequisite is missing that blocks implementation\n"
     "\n"
-    "Work through the plan steps in order. Before touching any file:\n"
+    "## Strict rules\n"
     "\n"
-    "1. Read the file to understand its current state. Plan/context.md is a snapshot;"
-    " the file may have changed due to earlier steps in this execution.\n"
-    "2. Identify exactly where the change goes.\n"
-    "3. Make the change precisely -- no more, no less.\n"
-    "4. Verify the change looks correct before moving on.\n"
-    "\n"
-    "## When plan and reality diverge\n"
-    "\n"
-    "If what you find in the codebase does not match what the plan describes -- the"
-    " function doesn't exist, the signature is different, the file structure changed"
-    " -- you MUST stop immediately and call `koan_ask_question`. Do not improvise a"
-    " solution. Do not make assumptions.\n"
-    "\n"
-    "Describe:\n"
-    "- Which plan step you are on\n"
-    "- What the plan expected to find\n"
-    "- What you actually found\n"
-    "- What you need to know to proceed\n"
-    "\n"
-    "Improvised solutions that seem reasonable in isolation frequently break other"
-    " parts of the system that are not visible in your context window.\n"
-    "\n"
-    "## Strict rules -- violations cause retry cycles\n"
-    "\n"
-    "- MUST implement steps in the order specified by the plan.\n"
-    "- MUST NOT skip any step, even if it seems redundant.\n"
-    "- MUST NOT add features, functions, or logic that the plan does not specify.\n"
-    "- MUST NOT refactor code that the plan does not mention -- even if you notice an improvement opportunity.\n"
-    "- MUST NOT modify test expectations to make tests pass. If a test fails after your implementation, report it via koan_ask_question.\n"
-    "- MUST read each file before modifying it. Context.md is a reference, not a guarantee of current state.\n"
-    "- MUST call koan_ask_question immediately when plan assumptions don't hold. Do not continue to the next step.\n"
-    "\n"
-    "## On retries\n"
-    "\n"
-    "If retryContext is present, this is your second (or later) attempt at this story."
-    " The failure summary tells you what went wrong. Read it before you read the plan,"
-    " and keep the failure context in mind as you implement. Do not repeat the mistake"
-    " from the previous attempt."
+    "- MUST read all listed artifacts before writing any code.\n"
+    "- MUST NOT add features the instructions don't mention.\n"
+    "- MUST NOT refactor code the plan doesn't touch.\n"
+    "- MUST NOT modify test expectations to make tests pass -- report via koan_ask_question.\n"
 )
 
 
 # -- Step guidance -------------------------------------------------------------
 
 def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
-    sid = ctx.story_id or "<story-id>"
-    ed = ctx.epic_dir
-
     if step == 1:
         lines = [
-            f"Read and fully understand the implementation plan for story `{sid}` before writing any code.",
+            "Read and understand the implementation scope before writing any code.",
             "",
-            "## What to read",
+            "## Artifacts to read",
             "",
-            f"1. Read `{ed}/stories/{sid}/plan/plan.md` -- read every step from start to finish. Do not skim.",
-            f"2. Read `{ed}/stories/{sid}/plan/context.md` -- understand the function signatures, types, and imports for every file the plan touches.",
         ]
+
+        if ctx.executor_artifacts:
+            for artifact in ctx.executor_artifacts:
+                lines.append(f"- `{ctx.run_dir}/{artifact}`")
+        else:
+            lines.append("(No specific artifacts listed -- read all relevant files in the run directory.)")
+
+        lines.extend([
+            "",
+            "## Instructions from orchestrator",
+            "",
+            ctx.phase_instructions or "(no additional instructions)",
+            "",
+            "## What to understand",
+            "",
+            "Read every artifact. For each file or module they reference, open it and",
+            "understand its current state. Build a mental model of:",
+            "- What changes are needed",
+            "- Which files are affected",
+            "- What order makes sense",
+            "- Any risks or edge cases",
+            "",
+            "Do NOT write code in this step.",
+            "",
+            "Call `koan_complete_step` with a comprehension summary:",
+            "- What you will change and in what order",
+            "- Files affected",
+            "- Any ambiguities or concerns (do not block on these -- note them)",
+        ])
+
         if ctx.retry_context:
             lines.extend([
                 "",
                 "## Retry context -- read this first",
                 "",
-                "This is a retry attempt. A previous execution of this story failed. The failure summary is:",
+                "This is a retry attempt. A previous execution failed. The failure summary is:",
                 "",
                 ctx.retry_context,
                 "",
-                "Keep this failure context in mind as you read the plan. Identify which step caused the failure and what you will do differently.",
+                "Keep this in mind as you read the artifacts.",
             ])
-        lines.extend([
-            "",
-            "## What to understand",
-            "",
-            "After reading, you must be able to answer these questions without referring back to the files:",
-            "",
-            "- How many steps are in the plan?",
-            "- Which files will you modify?",
-            "- What is the dependency order between steps?",
-            "- Are there any steps that touch the same file (potential ordering conflicts)?",
-            "- What types or interfaces are central to the changes?",
-            "",
-            "Do NOT start writing code in this step. Comprehension only.",
-            "",
-            "Call koan_complete_step with your comprehension summary:",
-            "- Number of steps",
-            "- List of files to modify",
-            "- Any ambiguities or concerns you spotted in the plan (do not block on these -- note them)",
-        ])
-        if ctx.retry_context:
-            lines.append("- How you plan to avoid the previous failure")
+
         return StepGuidance(title=STEP_NAMES[1], instructions=lines)
 
     if step == 2:
         return StepGuidance(
             title=STEP_NAMES[2],
             instructions=[
-                f"Implement the plan for story `{sid}` step by step.",
+                "Explain your implementation approach before coding.",
                 "",
-                "## Execution protocol",
+                "Walk through in your response:",
+                "- What you will change and in what order",
+                "- Any risks or edge cases you identified",
+                "- How you will verify the changes work",
                 "",
-                "Work through plan/plan.md in order. For each step:",
+                "Do NOT write a plan file. This is your reasoning made visible for the",
+                "audit trail, communicated as a regular response.",
                 "",
-                "1. **Read the target file** -- do not rely solely on plan/context.md; read the actual current state of the file.",
-                "2. **Locate the change site** -- find the exact function, class, or section described in the plan step.",
-                "3. **Verify your assumption** -- confirm that what you find matches what the plan describes. If it does not match, call koan_ask_question immediately.",
-                "4. **Make the change** -- implement exactly what the plan step specifies. No more, no less.",
-                "5. **Move to the next step** -- do not review or revisit previous steps.",
+                "Call `koan_complete_step` with your approach summary.",
+            ],
+        )
+
+    if step == 3:
+        return StepGuidance(
+            title=STEP_NAMES[3],
+            instructions=[
+                "Implement the changes according to your plan from step 2.",
                 "",
-                "## Plan-reality mismatch protocol",
+                "For each change:",
+                "1. Read the target file to confirm its current state.",
+                "2. Make the change.",
+                "3. Move to the next change.",
                 "",
-                "If at any point the codebase does not match the plan's description:",
+                "## Trivial issues",
                 "",
-                "- STOP immediately. Do not attempt to adapt the plan.",
-                "- Call `koan_ask_question` with:",
-                "  - The plan step number and description",
-                "  - What the plan expected",
-                "  - What you actually found",
-                "  - What specific information you need to proceed",
+                "Resolve independently:",
+                "- Wrong path \u2192 find the correct one",
+                "- Typo or syntax error in plan \u2192 fix it",
+                "- Missing import \u2192 add it",
                 "",
-                "## Common pitfalls",
+                "## Genuine ambiguity",
                 "",
-                "- Do not add logging, error handling, or validation beyond what the plan specifies.",
-                "- Do not fix code style issues you notice in passing.",
-                "- Do not update imports for files not mentioned in the plan.",
-                "- Do not change test files unless a plan step explicitly says to.",
-                "- Do not run the tests yourself -- the orchestrator will verify.",
+                "Call `koan_ask_question` when:",
+                "- Artifacts are ambiguous about what to build",
+                "- You discover a plan/codebase conflict that isn't trivial",
+                "- A prerequisite is missing that blocks implementation",
                 "",
-                "## When all steps are complete",
+                "## When done",
                 "",
-                "Review your changes at a high level: are all plan steps implemented? Did you accidentally modify something you shouldn't have? Correct any accidental changes.",
-                "",
-                "Then call koan_complete_step with a summary of what you implemented:",
-                "- Each plan step: completed or skipped (with reason if skipped)",
+                "Verify your work (run builds/tests if relevant).",
+                "Call `koan_complete_step` with a summary of what was implemented:",
                 "- Files modified",
-                "- Any concerns or observations for the orchestrator",
+                "- Any concerns or observations",
             ],
         )
 

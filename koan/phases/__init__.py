@@ -19,12 +19,13 @@ class StepGuidance:
 
 @dataclass
 class PhaseContext:
-    epic_dir: str
+    run_dir: str
     subagent_dir: str
     project_dir: str = ""
     task_description: str = ""
+    workflow_name: str = ""              # populated from task["workflow"]
     phase_instructions: str | None = None
-    last_review_accepted: bool | None = None
+    executor_artifacts: list[str] = field(default_factory=list)  # for executor subagent
     proposal_made: bool = False
     next_phase_set: bool = False
     step_sequence: str | None = None
@@ -57,10 +58,15 @@ ORCHESTRATOR_SYSTEM_PROMPT = (
     " execution pipeline from start to finish in a single continuous session.\n"
     "\n"
     "You work through phases in sequence: each phase has numbered steps. Call"
-    " koan_complete_step to advance through steps. When a phase ends,"
-    " koan_complete_step will return the user's message and available next phases."
-    " Converse with the user about what to do next, then call koan_set_phase to"
-    " commit the transition.\n"
+    " koan_complete_step to advance through steps.\n"
+    "\n"
+    "When a phase ends, koan_complete_step returns the user's message and"
+    " suggested next phases with descriptions. At each phase boundary:\n"
+    "1. Briefly summarize what was accomplished and what artifacts were produced.\n"
+    "2. Present the suggested phases, explaining what each one does in plain"
+    "   language (use the descriptions from the boundary response).\n"
+    "3. Ask the user what they would like to do next.\n"
+    "4. Only call koan_set_phase after the user has confirmed the direction.\n"
     "\n"
     "At the start of each phase, koan_complete_step returns your role context for"
     " that phase alongside the first step's instructions.\n"
@@ -86,6 +92,9 @@ from . import (
     scout,
     tech_plan as planner,
     ticket_breakdown,
+    execute as execute_phase,
+    plan_review,
+    plan_spec,
 )
 from typing import Any
 
@@ -98,10 +107,11 @@ PHASE_MODULE_MAP: dict[str, Any] = {
 }
 
 # -- Phase guidance map -------------------------------------------------------
-# Maps EpicPhase strings to the phase module that provides step guidance.
+# Maps WorkflowPhase strings to the phase module that provides step guidance.
 # Used by koan_set_phase to load the module for the new phase.
 
 PHASE_GUIDANCE_MAP: dict[str, Any] = {
+    # Legacy workflow phases (dead code — no active workflow uses these)
     "intake":                    intake,
     "brief-generation":          brief_writer,
     "core-flows":                core_flows,
@@ -110,4 +120,8 @@ PHASE_GUIDANCE_MAP: dict[str, Any] = {
     "cross-artifact-validation": cross_artifact_validation,
     "execution":                 executor,
     "implementation-validation": cross_artifact_validation,
+    # Plan workflow phases
+    "plan-spec":    plan_spec,
+    "plan-review":  plan_review,
+    "execute":      execute_phase,
 }

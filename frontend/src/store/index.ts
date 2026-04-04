@@ -94,9 +94,8 @@ export interface AskQuestion {
 
 export interface ConversationFocus { type: 'conversation'; agentId: string }
 export interface QuestionFocus     { type: 'question';     agentId: string; token: string; questions: AskQuestion[] }
-export interface ReviewFocus       { type: 'review';       agentId: string; token: string; path: string; description: string; content: string }
 
-export type Focus = ConversationFocus | QuestionFocus | ReviewFocus
+export type Focus = ConversationFocus | QuestionFocus
 
 // -- Supporting types ---------------------------------------------------------
 
@@ -127,6 +126,7 @@ export interface SteeringMessage {
 export interface Run {
   config: RunConfig
   phase: string
+  workflow: string    // active workflow name
   agents: Record<string, Agent>
   focus: Focus | null
   artifacts: Record<string, ArtifactInfo>
@@ -178,7 +178,10 @@ export type KoanStore = typeof useStore
 // -- ALL_PHASES (frontend-only derivation helper) ----------------------------
 
 export const ALL_PHASES = [
+  // Legacy workflow phases
   'intake', 'brief-generation', 'core-flows', 'tech-plan',
   'ticket-breakdown', 'cross-artifact-validation',
   'execution', 'implementation-validation',
+  // Plan workflow phases
+  'plan-spec', 'plan-review', 'execute',
 ]

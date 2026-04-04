@@ -1,6 +1,5 @@
-# Artifact listing for workflow-status.md generation.
-# Scans epic root .md files and stories/ recursively, excluding subagents/.
-# Python port of src/planner/epic/artifacts.ts listArtifacts().
+# Artifact listing for run directory.
+# Scans run root .md files and stories/ recursively, excluding subagents/.
 
 from __future__ import annotations
 
@@ -8,8 +7,8 @@ import os
 from pathlib import Path
 
 
-def list_artifacts(epic_dir: str | Path) -> list[dict]:
-    root = Path(epic_dir)
+def list_artifacts(run_dir: str | Path) -> list[dict]:
+    root = Path(run_dir)
     results: list[dict] = []
 
     # Root-level .md files

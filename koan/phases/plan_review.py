@@ -1,0 +1,140 @@
+# Plan-review phase -- 2-step workflow.
+#
+#   Step 1 (Read)      -- read landscape.md and plan.md; no writes
+#   Step 2 (Evaluate)  -- evaluate the plan and report findings via chat
+#
+# Advisory only: findings are reported in chat, not written to a file.
+# Scope: "plan" -- specific to the plan workflow.
+
+from __future__ import annotations
+
+from . import PhaseContext, StepGuidance
+
+ROLE = "orchestrator"
+SCOPE = "plan"           # specific to the plan workflow
+TOTAL_STEPS = 2
+
+STEP_NAMES: dict[int, str] = {
+    1: "Read",
+    2: "Evaluate",
+}
+
+SYSTEM_PROMPT = (
+    "You are a quality reviewer pressure-testing an implementation plan.\n"
+    "\n"
+    "You verify all codebase claims against actual source files. You report findings"
+    " organized by severity. You are advisory -- you do NOT modify plan.md directly.\n"
+    "\n"
+    "## Your role\n"
+    "\n"
+    "Find problems in the plan before the executor runs. Focus on issues that would"
+    " cause the executor to fail or produce wrong results. Do NOT flag trivial issues"
+    " the executor can resolve independently (wrong filenames, syntax errors in"
+    " snippets, missing imports, minor typos -- executors handle these routinely).\n"
+    "\n"
+    "## Evaluation dimensions\n"
+    "\n"
+    "- **Completeness**: Does the plan cover every requirement from landscape.md?\n"
+    "- **Correctness**: Are the file paths, function names, and interfaces accurate?\n"
+    "  Verify against the actual codebase.\n"
+    "- **Feasibility**: Are the implementation steps actionable as described? Would\n"
+    "  an executor be able to follow them without ambiguity?\n"
+    "- **Risks**: What could go wrong during execution? Missing edge cases?\n"
+    "- **Gaps**: Anything not addressed that should be?\n"
+    "\n"
+    "## Strict rules\n"
+    "\n"
+    "- MUST read landscape.md and plan.md before evaluating.\n"
+    "- MUST read the codebase files the plan references. Verify claims.\n"
+    "- MUST NOT modify plan.md.\n"
+    "- MUST NOT flag issues the executor can trivially resolve.\n"
+)
+
+
+# -- Step guidance -------------------------------------------------------------
+
+def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
+    if step == 1:
+        lines = [
+            "Read and comprehend before evaluating. Do NOT write any files in this step.",
+            "",
+            "## What to read",
+            "",
+            f"1. Read `{ctx.run_dir}/landscape.md` -- understand requirements and constraints.",
+            f"2. Read `{ctx.run_dir}/plan.md` -- read every section from start to finish.",
+            "3. Read the codebase files the plan references. For each claim the plan makes",
+            "   (file path, function name, interface, type), verify it against the actual source.",
+            "",
+            "## Build a mental model",
+            "",
+            "After reading, you should be able to answer:",
+            "- What does the plan claim to change, and in which files?",
+            "- Are those files and functions real and accurately described?",
+            "- Does the plan cover all requirements from landscape.md?",
+            "- Are the implementation steps in the right order?",
+            "",
+            "Do NOT write an evaluation yet. Comprehend first.",
+        ]
+        if ctx.phase_instructions:
+            lines.extend(["", "## Additional Context from Workflow Orchestrator", "", ctx.phase_instructions])
+        return StepGuidance(title=STEP_NAMES[1], instructions=lines)
+
+    if step == 2:
+        return StepGuidance(
+            title=STEP_NAMES[2],
+            instructions=[
+                "Evaluate the plan and report findings in your response.",
+                "",
+                "## What to evaluate",
+                "",
+                "**Completeness**: Does the plan cover every requirement from landscape.md?",
+                "List any requirements not addressed.",
+                "",
+                "**Correctness**: Are file paths, function names, and interfaces accurate?",
+                "Note any incorrect references you verified against the codebase.",
+                "",
+                "**Feasibility**: Can an executor follow each step without ambiguity?",
+                "Note any steps that are vague, contradictory, or would require judgment calls.",
+                "",
+                "**Risks**: What could go wrong? Missing edge cases, ordering issues, dependencies?",
+                "",
+                "**Gaps**: Anything the plan should address but doesn't?",
+                "",
+                "## Severity classification",
+                "",
+                "Report findings organized by severity:",
+                "- **Critical**: would cause the executor to fail or produce wrong results",
+                "- **Major**: significant gap or incorrectness requiring plan revision",
+                "- **Minor**: small issue the executor can likely resolve independently",
+                "",
+                "Do NOT flag trivial executor-resolvable issues as major findings.",
+                "",
+                "## Using koan_ask_question",
+                "",
+                "If the review surfaces ambiguities requiring user input (requirements unclear,"
+                " conflicting constraints, genuine design questions), call `koan_ask_question`.",
+                "Only ask questions that affect the evaluation outcome.",
+                "",
+                "## After reporting",
+                "",
+                "Call `koan_complete_step` when your evaluation report is delivered in chat.",
+            ],
+        )
+
+    return StepGuidance(title=f"Step {step}", instructions=[f"Execute step {step}."])
+
+
+# -- Lifecycle -----------------------------------------------------------------
+
+def get_next_step(step: int, ctx: PhaseContext) -> int | None:
+    if step < TOTAL_STEPS:
+        return step + 1
+    return None  # linear, no review gate
+
+
+def validate_step_completion(step: int, ctx: PhaseContext) -> str | None:
+    return None
+
+
+async def on_loop_back(from_step: int, to_step: int, ctx: PhaseContext) -> None:
+    pass

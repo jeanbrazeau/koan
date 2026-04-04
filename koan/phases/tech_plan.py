@@ -11,6 +11,7 @@ from __future__ import annotations
 from . import PhaseContext, StepGuidance
 
 ROLE = "planner"
+SCOPE = "legacy"
 TOTAL_STEPS = 3
 
 STEP_NAMES: dict[int, str] = {
@@ -88,7 +89,7 @@ SYSTEM_PROMPT = (
 
 def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
     sid = ctx.story_id or "<story-id>"
-    ed = ctx.epic_dir
+    ed = ctx.run_dir
 
     if step == 1:
         return StepGuidance(

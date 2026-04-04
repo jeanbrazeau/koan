@@ -23,6 +23,11 @@ def build_run_started(
     }
 
 
+def build_workflow_selected(workflow: str) -> dict:
+    """Build workflow_selected event payload."""
+    return {"workflow": workflow}
+
+
 def build_agent_spawned(agent: AgentState) -> dict:
     return {
         "agent_id": agent.agent_id,
@@ -183,34 +188,6 @@ def build_questions_answered(
     return result
 
 
-def build_artifact_review_requested(
-    token: str,
-    path: str,
-    description: str,
-    content: str,
-) -> dict:
-    return {
-        "token": token,
-        "path": path,
-        "description": description,
-        "content": content,
-    }
-
-
-def build_artifact_reviewed(
-    token: str,
-    accepted: bool | None = None,
-    response: str | None = None,
-    cancelled: bool = False,
-) -> dict:
-    result: dict = {"token": token, "cancelled": cancelled}
-    if accepted is not None:
-        result["accepted"] = accepted
-    if response is not None:
-        result["response"] = response
-    return result
-
-
 # -- Configuration event builders ---------------------------------------------
 
 def build_probe_completed(results: dict[str, bool]) -> dict:
@@ -274,5 +251,3 @@ def build_steering_delivered(count: int) -> dict:
 
 def build_default_scout_concurrency_changed(value: int) -> dict:
     return {"value": value}
-
-

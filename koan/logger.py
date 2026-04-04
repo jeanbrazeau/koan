@@ -22,9 +22,9 @@ def setup_logging(level: str = "INFO") -> None:
     root.addHandler(handler)
 
 
-def set_log_dir(epic_dir: str) -> None:
+def set_log_dir(run_dir: str) -> None:
     root = logging.getLogger("koan")
-    log_path = Path(epic_dir) / "koan.log"
+    log_path = Path(run_dir) / "koan.log"
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
     handler = logging.FileHandler(str(log_path))

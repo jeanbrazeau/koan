@@ -10,6 +10,7 @@ from __future__ import annotations
 from . import PhaseContext, StepGuidance
 
 ROLE = "cross-artifact-validator"
+SCOPE = "legacy"
 TOTAL_STEPS = 2
 
 STEP_NAMES: dict[int, str] = {
@@ -58,7 +59,7 @@ SYSTEM_PROMPT = (
 # -- Step guidance -------------------------------------------------------------
 
 def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
-    ed = ctx.epic_dir
+    ed = ctx.run_dir
 
     if step == 1:
         return StepGuidance(

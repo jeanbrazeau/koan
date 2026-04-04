@@ -14,10 +14,13 @@ from koan.phases import cross_artifact_validation
 from koan.phases import executor
 from koan.phases import orchestrator
 from koan.phases import scout
+from koan.phases import plan_spec
+from koan.phases import plan_review
+from koan.phases import execute as execute_phase
 
 
 def _ctx(**kw) -> PhaseContext:
-    defaults = {"epic_dir": "/tmp/epic", "subagent_dir": "/tmp/sub"}
+    defaults = {"run_dir": "/tmp/run", "subagent_dir": "/tmp/sub"}
     defaults.update(kw)
     return PhaseContext(**defaults)
 
@@ -25,64 +28,150 @@ def _ctx(**kw) -> PhaseContext:
 # -- Intake --------------------------------------------------------------------
 
 class TestIntake:
-    # -- Linear progression (steps 1-2) ----------------------------------------
+    # -- Linear progression (steps 1-3) ----------------------------------------
 
     @pytest.mark.parametrize("step", [1, 2])
     def test_linear_steps(self, step):
         assert intake.get_next_step(step, _ctx()) == step + 1
 
-    # -- Review gate (step 3) --------------------------------------------------
+    def test_step_3_completes(self):
+        """Step 3 (Write) completes unconditionally — no review gate."""
+        assert intake.get_next_step(3, _ctx()) is None
 
-    def test_step_3_accepted_completes(self):
-        assert intake.get_next_step(3, _ctx(last_review_accepted=True)) is None
+    # -- No validation gates ---------------------------------------------------
 
-    def test_step_3_not_accepted_loops(self):
-        assert intake.get_next_step(3, _ctx(last_review_accepted=False)) == 3
+    def test_validate_all_steps_none(self):
+        ctx = _ctx()
+        for s in range(1, 4):
+            assert intake.validate_step_completion(s, ctx) is None
 
-    def test_validate_step_3_never_reviewed(self):
-        result = intake.validate_step_completion(3, _ctx(last_review_accepted=None))
-        assert result is not None
-        assert "koan_review_artifact" in result
+    # -- Step guidance contains workflow context injection ----------------------
 
-    def test_validate_step_3_feedback_pending(self):
-        result = intake.validate_step_completion(3, _ctx(last_review_accepted=False))
-        assert result is not None
-        assert "revision" in result.lower() or "feedback" in result.lower()
+    def test_step_1_guidance_with_phase_instructions(self):
+        ctx = _ctx(phase_instructions="## Scope\nThis is a plan workflow.")
+        g = intake.step_guidance(1, ctx)
+        text = "\n".join(g.instructions)
+        assert "Workflow Context" in text
+        assert "plan workflow" in text
 
-    def test_validate_step_3_accepted(self):
-        assert intake.validate_step_completion(3, _ctx(last_review_accepted=True)) is None
+    def test_step_1_guidance_with_workflow_name(self):
+        ctx = _ctx(workflow_name="plan")
+        g = intake.step_guidance(1, ctx)
+        text = "\n".join(g.instructions)
+        assert "plan" in text
 
-    # -- No gate on other steps ------------------------------------------------
-
-    def test_validate_step_1_no_gate(self):
-        assert intake.validate_step_completion(1, _ctx()) is None
-
-    def test_validate_step_2_no_gate(self):
-        assert intake.validate_step_completion(2, _ctx()) is None
+    def test_step_3_guidance_references_run_dir(self):
+        ctx = _ctx(run_dir="/tmp/myrun")
+        g = intake.step_guidance(3, ctx)
+        text = "\n".join(g.instructions)
+        assert "/tmp/myrun/landscape.md" in text
 
 
 # -- Brief Writer --------------------------------------------------------------
 
 class TestBriefWriter:
-    def test_step_2_accepted_advances(self):
-        assert brief_writer.get_next_step(2, _ctx(last_review_accepted=True)) == 3
-
-    def test_step_2_not_accepted_loops(self):
-        assert brief_writer.get_next_step(2, _ctx(last_review_accepted=False)) == 2
-
-    def test_validate_step_2_never_reviewed(self):
-        result = brief_writer.validate_step_completion(2, _ctx(last_review_accepted=None))
-        assert result is not None
-        assert "koan_review_artifact" in result
-
-    def test_validate_step_2_accepted(self):
-        assert brief_writer.validate_step_completion(2, _ctx(last_review_accepted=True)) is None
-
     def test_step_1_to_2(self):
         assert brief_writer.get_next_step(1, _ctx()) == 2
 
-    def test_step_3_completes(self):
-        assert brief_writer.get_next_step(3, _ctx()) is None
+    def test_step_2_completes(self):
+        """Step 2 is terminal — no review gate."""
+        assert brief_writer.get_next_step(2, _ctx()) is None
+
+    def test_validate_all_none(self):
+        ctx = _ctx()
+        for s in (1, 2):
+            assert brief_writer.validate_step_completion(s, ctx) is None
+
+    def test_total_steps_is_2(self):
+        assert brief_writer.TOTAL_STEPS == 2
+
+
+# -- Plan Spec -----------------------------------------------------------------
+
+class TestPlanSpec:
+    def test_step_1_to_2(self):
+        assert plan_spec.get_next_step(1, _ctx()) == 2
+
+    def test_step_2_completes(self):
+        assert plan_spec.get_next_step(2, _ctx()) is None
+
+    def test_validate_always_none(self):
+        ctx = _ctx()
+        for s in (1, 2):
+            assert plan_spec.validate_step_completion(s, ctx) is None
+
+    def test_total_steps_is_2(self):
+        assert plan_spec.TOTAL_STEPS == 2
+
+    def test_scope_is_plan(self):
+        assert plan_spec.SCOPE == "plan"
+
+    def test_step_1_guidance_references_run_dir(self):
+        ctx = _ctx(run_dir="/tmp/myrun")
+        g = plan_spec.step_guidance(1, ctx)
+        text = "\n".join(g.instructions)
+        assert "landscape.md" in text
+
+    def test_step_2_guidance_references_plan_md(self):
+        ctx = _ctx(run_dir="/tmp/myrun")
+        g = plan_spec.step_guidance(2, ctx)
+        text = "\n".join(g.instructions)
+        assert "plan.md" in text
+
+
+# -- Plan Review ---------------------------------------------------------------
+
+class TestPlanReview:
+    def test_step_1_to_2(self):
+        assert plan_review.get_next_step(1, _ctx()) == 2
+
+    def test_step_2_completes(self):
+        assert plan_review.get_next_step(2, _ctx()) is None
+
+    def test_validate_always_none(self):
+        ctx = _ctx()
+        for s in (1, 2):
+            assert plan_review.validate_step_completion(s, ctx) is None
+
+    def test_total_steps_is_2(self):
+        assert plan_review.TOTAL_STEPS == 2
+
+    def test_scope_is_plan(self):
+        assert plan_review.SCOPE == "plan"
+
+    def test_step_1_guidance_references_landscape_and_plan(self):
+        ctx = _ctx(run_dir="/tmp/myrun")
+        g = plan_review.step_guidance(1, ctx)
+        text = "\n".join(g.instructions)
+        assert "landscape.md" in text
+        assert "plan.md" in text
+
+
+# -- Execute Phase -------------------------------------------------------------
+
+class TestExecutePhase:
+    def test_step_1_to_2(self):
+        assert execute_phase.get_next_step(1, _ctx()) == 2
+
+    def test_step_2_completes(self):
+        assert execute_phase.get_next_step(2, _ctx()) is None
+
+    def test_validate_always_none(self):
+        ctx = _ctx()
+        for s in (1, 2):
+            assert execute_phase.validate_step_completion(s, ctx) is None
+
+    def test_total_steps_is_2(self):
+        assert execute_phase.TOTAL_STEPS == 2
+
+    def test_scope_is_general(self):
+        assert execute_phase.SCOPE == "general"
+
+    def test_step_1_guidance_with_phase_instructions(self):
+        ctx = _ctx(phase_instructions="## What to hand off\nCall koan_request_executor.")
+        g = execute_phase.step_guidance(1, ctx)
+        text = "\n".join(g.instructions)
+        assert "koan_request_executor" in text
 
 
 # -- Orchestrator --------------------------------------------------------------
@@ -105,6 +194,49 @@ class TestOrchestrator:
         assert orchestrator.get_next_step(1, ctx) == 2
 
 
+# -- Executor (rewritten: 3-step) ----------------------------------------------
+
+class TestExecutor:
+    def test_step_1_to_2(self):
+        assert executor.get_next_step(1, _ctx()) == 2
+
+    def test_step_2_to_3(self):
+        assert executor.get_next_step(2, _ctx()) == 3
+
+    def test_step_3_completes(self):
+        assert executor.get_next_step(3, _ctx()) is None
+
+    def test_validate_always_none(self):
+        ctx = _ctx()
+        for s in (1, 2, 3):
+            assert executor.validate_step_completion(s, ctx) is None
+
+    def test_total_steps_is_3(self):
+        assert executor.TOTAL_STEPS == 3
+
+    def test_scope_is_general(self):
+        assert executor.SCOPE == "general"
+
+    def test_step_1_guidance_with_artifacts(self):
+        ctx = _ctx(run_dir="/tmp/myrun", executor_artifacts=["plan.md", "landscape.md"])
+        g = executor.step_guidance(1, ctx)
+        text = "\n".join(g.instructions)
+        assert "/tmp/myrun/plan.md" in text
+        assert "/tmp/myrun/landscape.md" in text
+
+    def test_step_1_guidance_with_phase_instructions(self):
+        ctx = _ctx(phase_instructions="Key constraint: don't touch auth module.")
+        g = executor.step_guidance(1, ctx)
+        text = "\n".join(g.instructions)
+        assert "Key constraint" in text
+
+    def test_step_1_guidance_with_retry_context(self):
+        ctx = _ctx(retry_context="Previous run failed at step 3 due to import error.")
+        g = executor.step_guidance(1, ctx)
+        text = "\n".join(g.instructions)
+        assert "import error" in text
+
+
 # -- Linear modules (all steps linear, no validation gates) --------------------
 
 LINEAR_MODULES = [
@@ -112,7 +244,6 @@ LINEAR_MODULES = [
     (tech_plan, 3),
     (ticket_breakdown, 2),
     (cross_artifact_validation, 2),
-    (executor, 2),
     (scout, 3),
 ]
 
@@ -136,18 +267,20 @@ class TestLinearModules:
 # -- Purity invariant ----------------------------------------------------------
 
 class TestPurity:
-    def test_intake_review_gate_purity(self):
-        ctx = _ctx(last_review_accepted=False)
+    def test_intake_step_3_pure(self):
+        """Intake step 3 always returns None (no review gate)."""
+        ctx = _ctx()
         ctx_copy = copy.deepcopy(ctx)
         r1 = intake.get_next_step(3, ctx)
         r2 = intake.get_next_step(3, ctx)
-        assert r1 == r2
+        assert r1 == r2 == None
         assert ctx == ctx_copy
 
-    def test_brief_writer_purity(self):
-        ctx = _ctx(last_review_accepted=True)
+    def test_brief_writer_step_2_pure(self):
+        """Brief writer step 2 always returns None (no review gate)."""
+        ctx = _ctx()
         ctx_copy = copy.deepcopy(ctx)
         r1 = brief_writer.get_next_step(2, ctx)
         r2 = brief_writer.get_next_step(2, ctx)
-        assert r1 == r2
+        assert r1 == r2 == None
         assert ctx == ctx_copy

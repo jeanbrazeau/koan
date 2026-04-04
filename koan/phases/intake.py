@@ -2,16 +2,17 @@
 #
 #   Step 1 (Gather)   -- read task description, explore obvious files, dispatch scouts
 #   Step 2 (Deepen)   -- process scout results, verify, deepen through dialogue
-#   Step 3 (Write)    -- write landscape.md, present for user review
+#   Step 3 (Write)    -- write landscape.md
 #
-# Step 3 is review-gated: blocks until koan_review_artifact accepted.
+# Review gate removed (D1): step 3 completes unconditionally.
+# Prompt injection model (D8): workflow scope framing appears at top of step 1.
 
 from __future__ import annotations
 
 from . import PhaseContext, StepGuidance
-from .review_protocol import REVIEW_PROTOCOL
 
 ROLE = "intake"
+SCOPE = "general"        # reusable by any workflow
 TOTAL_STEPS = 3
 
 STEP_NAMES: dict[int, str] = {
@@ -26,13 +27,13 @@ SYSTEM_PROMPT = (
     " have complete context for planning.\n"
     "\n"
     "Your output -- a single landscape.md file -- is the sole foundation for all"
-    " downstream work. Every story boundary, every implementation plan, and every"
-    " line of code written downstream depends on the quality and completeness of"
-    " this file. Gaps here compound into wrong plans and wrong code.\n"
+    " downstream work. Every downstream phase and every implementation decision"
+    " depends on the quality and completeness of this file. Gaps here compound"
+    " into wrong plans and wrong code.\n"
     "\n"
-    "An assumption you make without verifying will become a fact the decomposer"
-    " treats as decided. A question you don't ask is an answer you're making up."
-    " When the executor writes the wrong code because landscape.md contained an"
+    "An assumption you make without verifying will become a fact that downstream"
+    " phases treat as decided. A question you don't ask is an answer you're making"
+    " up. When the executor writes the wrong code because landscape.md contained an"
     " unchecked assumption, that failure traces back to this phase.\n"
     "\n"
     "## Your role\n"
@@ -47,7 +48,7 @@ SYSTEM_PROMPT = (
     "- MUST NOT add architectural opinions or suggest approaches.\n"
     "- MUST NOT produce implementation recommendations.\n"
     "- MUST NOT define deliverables, work units, or scope boundaries -- that"
-    " belongs to the decomposer.\n"
+    " belongs to downstream phases.\n"
     "- MUST capture only what was explicitly said. If unclear, mark it as unresolved.\n"
     "- SHOULD prefer multiple-choice questions when the answer space is bounded.\n"
     "- SHOULD ground questions in codebase findings.\n"
@@ -71,41 +72,6 @@ SYSTEM_PROMPT = (
     "prompts, questions) and written artifacts (landscape.md) should remain\n"
     "clear and complete.\n"
     "\n"
-    "Examples of target density (WRONG -> RIGHT):\n"
-    "\n"
-    "Processing scout reports:\n"
-    "  WRONG: \"The kernel-structure scout found that CUDA kernels live in src/kernels/\n"
-    "  and use shared memory for the parallel reduction step. The build-system scout\n"
-    "  found CMake with FindCUDAToolkit. The host-code scout reports that device memory\n"
-    "  is allocated with cudaMalloc and copied back with cudaMemcpy. This answers my\n"
-    "  questions about project structure. Nothing unexpected so far.\"\n"
-    "  RIGHT: \"kernel-structure scout: src/kernels/, shared mem for reductions\n"
-    "  build-system scout: CMake + FindCUDAToolkit\n"
-    "  host-code scout: cudaMalloc -> cudaMemcpy pattern\n"
-    "  All three answered [OK]; no unexpected findings\"\n"
-    "\n"
-    "Resolving conflicting information:\n"
-    "  WRONG: \"There's a conflict between what the user said and what the code\n"
-    "  shows. The user said the data pipeline runs hourly, but the cron expression\n"
-    "  in scheduler.py is set to daily at midnight. I need to figure out which is\n"
-    "  correct. Since the user is describing the desired behavior and the code\n"
-    "  shows the current behavior, this is likely a change they want to make. I\n"
-    "  should note this as an existing gap and ask the user to confirm.\"\n"
-    "  RIGHT: \"[!!] task description: pipeline runs hourly <-> scout: scheduler.py cron = daily@midnight\n"
-    "  task description = desired vs code = current therefore likely a requested change -> ASK user to confirm\"\n"
-    "\n"
-    "Classifying unknowns:\n"
-    "  WRONG: \"Looking at what I've gathered so far, I think I have a good\n"
-    "  understanding of the database schema and the CLI argument parsing. But I\n"
-    "  still don't know how the plugin system loads extensions at runtime -- if we\n"
-    "  get that wrong it could affect story boundaries. The user also mentioned a\n"
-    "  config file format I haven't found, but that's just an implementation detail.\n"
-    "  I should dispatch a scout for the plugin system and ask the user about the\n"
-    "  config format.\"\n"
-    "  RIGHT: \"[OK] db schema, CLI arg parsing\n"
-    "  [FAIL] plugin loading -- wrong assumption changes story boundaries -> SCOUT\n"
-    "  [FAIL] cfg file format -- impl detail, no scope impact -> SAFE\"\n"
-    "\n"
     "## Workflow\n"
     "\n"
     "You work in three steps: gather context (task description + codebase + scouts),"
@@ -113,18 +79,15 @@ SYSTEM_PROMPT = (
     "\n"
     "## Output\n"
     "\n"
-    "One file: **landscape.md** in the epic directory.\n"
+    "One file: **landscape.md** in the run directory.\n"
     "\n"
     "## Tools\n"
     "\n"
     "- Read tools (read, bash, grep, glob, find, ls) -- reading the codebase.\n"
     "- `koan_request_scouts` -- request parallel codebase exploration.\n"
     "- `koan_ask_question` -- ask the user clarifying questions.\n"
-    "- `koan_review_artifact` -- present landscape.md for user review (final step only).\n"
     "- `write` / `edit` -- for writing landscape.md (final step only).\n"
     "- `koan_complete_step` -- signal step completion.\n"
-    "\n"
-    + REVIEW_PROTOCOL
 )
 
 
@@ -133,12 +96,27 @@ SYSTEM_PROMPT = (
 def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
     if step == 1:
         project_dir = ctx.project_dir or ""
-        lines = [
-            "Read the task description, orient yourself in the codebase, and dispatch scouts.",
+        lines = []
+
+        # Workflow scope framing appears at the top if injected (D8)
+        if ctx.phase_instructions:
+            lines.extend([
+                "## Workflow Context",
+                "",
+                ctx.phase_instructions,
+                "",
+            ])
+
+        if ctx.workflow_name:
+            lines.insert(0, f"Active workflow: **{ctx.workflow_name}**")
+            lines.insert(1, "")
+
+        lines.extend([
+            "Read the task description, orient yourself in the codebase, and plan your investigation.",
             "",
             "## 1. Task description",
             "",
-        ]
+        ])
         if ctx.task_description:
             lines.append(f"<task_description>\n{ctx.task_description}\n</task_description>")
         else:
@@ -150,7 +128,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "- **File references**: Every file, directory, or module mentioned.",
             "- **Decisions already made**: Only those explicitly stated and agreed upon.",
             "- **Constraints**: Technical, timeline, compatibility requirements.",
-            "- **Gaps**: Questions raised but unanswered. Things unclear or unstated that would affect story boundaries.",
+            "- **Gaps**: Questions raised but unanswered. Things unclear or unstated that would affect scope.",
             "- **Conventions mentioned**: Any references to coding standards, test approaches, doc standards, or patterns to follow.",
             "",
             "Be faithful to what was said. Do not invent context or infer unstated decisions.",
@@ -175,29 +153,22 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "Just enough to write scout prompts that reference actual function names,",
             "actual patterns, and actual file paths instead of vague labels.",
             "",
-            "## 3. Plan and dispatch scouts",
+            "## 3. Plan your investigation",
             "",
-            "Using the task description and what you observed in the files, identify the",
-            "concerns that need investigation. Consider both:",
+            "Two investigation tools are available:",
             "",
-            "- What the task description explicitly references (files, modules, integration",
-            "  points, assumptions that need verification, project conventions).",
-            "- What the task description did NOT mention but could matter (hidden callers,",
-            "  related subsystems, prior art, invariants, test coverage).",
+            "- **Direct reading**: best for focused tasks where you can reach the",
+            "  relevant files from the orientation step. Fast and precise.",
+            "- **Scouts** (`koan_request_scouts`): best for unfamiliar subsystems,",
+            "  broad dependency tracing, or when you need parallel coverage of",
+            "  multiple unrelated areas. Each scout is a broad investigator that",
+            "  can examine multiple files, trace dependencies, and answer several",
+            "  related questions in a single run.",
             "",
-            "Group related concerns into **3-5 clusters**. Each cluster becomes one",
-            "scout. A scout is a broad investigator -- it can examine multiple files,",
-            "trace dependencies, and answer several related questions in a single run.",
-            "Merge concerns that touch the same area of the codebase or the same",
-            "conceptual boundary into one scout with a multi-part prompt.",
+            "You can use both. Read what you can reach directly; scout what you can't.",
+            "The workflow context above (if present) tells you which posture to default to.",
             "",
-            "3-5 scouts is the target. Fewer than 3 means your prompts are probably",
-            "too broad to produce focused findings. More than 5 means you are splitting",
-            "related concerns that a single scout could cover together.",
-            "",
-            "Use `koan_request_scouts` to dispatch all scouts in a single call.",
-            "",
-            "Each scout needs:",
+            "If dispatching scouts, each needs:",
             "- id: short kebab-case identifier (e.g., 'auth-and-permissions', 'data-layer')",
             "- role: investigator focus (e.g., 'authentication auditor', 'dependency tracer')",
             "- prompt: a rich, multi-part investigation brief. Tell the scout what area",
@@ -205,15 +176,8 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "  paths and function names from the orientation step. A good prompt is 3-8",
             "  sentences covering the full cluster.",
             "",
-            "Example of a well-scoped scout prompt:",
-            "  'Investigate the authentication subsystem rooted at src/auth/. Find all",
-            "   callers of verifyToken(), identify the middleware chain in server.ts,",
-            "   check whether session storage uses Redis or in-memory, and note any",
-            "   TODO or FIXME comments related to auth. Report the permission model",
-            "   (RBAC, ACL, or ad-hoc checks) and how it integrates with the router.'",
+            "Use `koan_request_scouts` to dispatch all scouts in a single call.",
         ])
-        if ctx.phase_instructions:
-            lines.extend(["", "## Additional Context from Workflow Orchestrator", "", ctx.phase_instructions])
         return StepGuidance(title=STEP_NAMES[1], instructions=lines)
 
     if step == 2:
@@ -224,12 +188,11 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "",
                 "Scout results give you a starting point -- not the finish line. Your job now",
                 "is to build genuine, verified understanding by reading code, identifying gaps,",
-                "and asking the user targeted questions. Then doing it again as each answer",
-                "reveals new dimensions you couldn't have seen before.",
+                "and asking the user targeted questions.",
                 "",
                 "This is the only phase where the user can be consulted. After intake, all",
                 "downstream phases work from landscape.md alone. Anything you get wrong here",
-                "will silently propagate through decomposition, planning, and execution.",
+                "will silently propagate through planning and execution.",
                 "",
                 "## 1. Process scout results",
                 "",
@@ -238,12 +201,8 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "- Does it reveal anything unexpected about the codebase?",
                 "- Does it conflict with what the task description stated?",
                 "",
-                "For key findings that affect scope or story boundaries, open the actual files",
-                "and confirm what the scout reported. Scouts are good at exploration but their",
-                "output should be verified. This is especially important for:",
-                "- Integration points the scout identified",
-                "- Patterns or conventions the scout claims to have found",
-                "- Anything that conflicts with the task description",
+                "For key findings that affect scope, open the actual files",
+                "and confirm what the scout reported.",
                 "",
                 "## 2. Map what you know and what you don't",
                 "",
@@ -254,32 +213,21 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "  - Unknown: [what remains unclear or unverified]",
                 "  - Source: [task description / scout findings]",
                 "",
-                "Cover every area relevant to the task, including project conventions (coding",
-                "style, testing strategy, architecture patterns, documentation standards).",
+                "Cover every area relevant to the task, including project conventions.",
                 "",
-                "For each unknown, briefly assess its downstream impact:",
-                "- If you assume wrong, does it change story boundaries?",
+                "For each unknown, assess its downstream impact:",
+                "- If you assume wrong, does it change the approach or scope?",
                 "- Would the executor hit a surprise that requires re-planning?",
                 "",
                 "Mark each unknown as:",
-                "- **ASK**: user input needed -- affects scope, boundaries, or sequencing.",
+                "- **ASK**: user input needed -- affects scope, approach, or sequencing.",
                 "- **SAFE**: genuinely an implementation detail with no scope impact.",
                 "",
                 "## 3. The deepening loop",
                 "",
-                "This is the core of this step. Understanding deepens through dialogue, and",
-                "for any non-trivial task, multiple rounds of questions are expected.",
+                "### a) Ask questions",
                 "",
-                "### a) Ask your first round of questions",
-                "",
-                "For every unknown marked ASK, formulate a question. The user is your",
-                "collaborator, not an interruption. The decomposer cannot ask questions",
-                "later -- this is the only chance to get clarification.",
-                "",
-                "Default: ask. You may skip a question ONLY if ALL of these are true:",
-                "- It is purely an implementation detail (HOW to code something, not WHAT to build).",
-                "- Getting it wrong would not change any story boundary.",
-                "- It cannot be misinterpreted -- there is exactly one reasonable interpretation.",
+                "For every unknown marked ASK, formulate a question.",
                 "",
                 "Call `koan_ask_question` with your questions. Formatting rules:",
                 "- Prefer multiple-choice when the answer space is bounded.",
@@ -292,30 +240,16 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "",
                 "### b) Deepen with each answer",
                 "",
-                "When answers arrive, each one is a thread to pull. Think through:",
-                "",
-                "- **Does the answer reference files or code you haven't read?** Read them now.",
-                "  Confirm the answer against what you find in the codebase.",
-                "- **Does understanding this answer change your picture of another area?**",
-                "  An answer about the data model may reveal an assumption you were making",
-                "  about the API layer. An answer about scope may invalidate a pattern you",
-                "  assumed would apply.",
-                "- **Does it reveal an assumption you were making without realizing it?**",
-                "  The most dangerous gaps are the ones you don't know you have.",
-                "- **Does it raise a new question you couldn't have anticipated before?**",
-                "  This is the ripple effect: each answer shifts your understanding, and",
-                "  that shift may expose new gaps in adjacent areas.",
+                "When answers arrive, each one is a thread to pull:",
+                "- Does the answer reference files or code you haven't read? Read them now.",
+                "- Does understanding this answer change your picture of another area?",
+                "- Does it reveal an assumption you were making without realizing it?",
+                "- Does it raise a new question you couldn't have anticipated before?",
                 "",
                 "### c) Ask follow-up questions",
                 "",
-                "If new ambiguities surface -- and for any non-trivial task, they will --",
-                "call `koan_ask_question` again. There is no limit on rounds. Shallow",
-                "understanding compounds into wrong plans. Deep understanding prevents",
-                "re-work.",
-                "",
-                "Each round should build on the last. Early questions establish the shape",
-                "of the problem. Later questions refine boundaries, resolve edge cases,",
-                "and confirm the assumptions that emerged from earlier answers.",
+                "If new ambiguities surface, call `koan_ask_question` again.",
+                "The workflow context (step 1) guides how many rounds are appropriate.",
                 "",
                 "### d) When are you done?",
                 "",
@@ -324,17 +258,14 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "- You can explain the full context to a downstream planner without hedging.",
                 "- No answer you received left you with a 'I think I know what they mean'",
                 "  feeling -- you either confirmed it or asked.",
-                "",
-                "When in doubt, ask. It is always better to confirm an assumption than to",
-                "let a wrong assumption propagate through planning and execution.",
             ],
         )
 
     if step == 3:
         lines = [
-            f"Write `{ctx.epic_dir}/landscape.md`."
-            if ctx.epic_dir
-            else "Write `landscape.md` to the epic directory.",
+            f"Write `{ctx.run_dir}/landscape.md`."
+            if ctx.run_dir
+            else "Write `landscape.md` to the run directory.",
             "This file is the sole input for all downstream phases. Write it carefully.",
             "",
             "## Formatting rules (apply to all sections)",
@@ -355,10 +286,6 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "",
             "### Prior Art",
             "Previous attempts, referenced plans, related systems, or prior conversations mentioned.",
-            "For each reference: what it contains, what is relevant to the current task, and what to expect when reading it.",
-            "Example:",
-            "  - [phases.md](plans/phases.md) -- phased implementation plan; Phase 5 defines the deliverables this epic covers",
-            "  - Previous PR #42 attempted this but was reverted due to migration issues",
             "If none: (none referenced)",
             "",
             "### Codebase Findings",
@@ -366,7 +293,6 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "",
             "For each area, include:",
             "- **Entry points**: files, functions, or modules that are the primary sites of interest.",
-            "  Use annotated file references: `[filename](path) -- what this file does`.",
             "- **Current behavior**: how the relevant code works today.",
             "- **Patterns**: recurring patterns, conventions, or idioms observed in this area.",
             "- **Integration points**: how this area connects to other parts of the system.",
@@ -375,27 +301,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "",
             "### Project Conventions",
             "Where to find coding standards and patterns for this project -- pointers to sources,",
-            "not the conventions themselves. Downstream agents will read the referenced sources directly.",
-            "",
-            "Cover at minimum these areas. Add any other convention categories relevant to this project:",
-            "",
-            "#### Coding Style",
-            "Where style is defined: linter config, formatter config, or emergent from codebase.",
-            'Example: "ESLint config at [.eslintrc.json](.eslintrc.json)" or "no linter; follows Go stdlib style"',
-            "",
-            "#### Testing Strategy",
-            "Where testing approach is defined: doc, config, patterns.",
-            'Example: "[testing-philosophy.md](doc/01-principles/testing-philosophy.md) -- integration-first with testcontainers"',
-            "",
-            "#### Architecture Patterns",
-            "Where architecture conventions live: docs, or emergent from code.",
-            'Example: "constructor-based DI, no framework; see [BasePhase](src/planner/phases/base-phase.ts)"',
-            "",
-            "#### Documentation",
-            "Where documentation standards are defined.",
-            'Example: "CLAUDE.md per package", "JSDoc on all exports"',
-            "",
-            "If no explicit conventions exist for an area, note whether patterns are emergent from code or absent entirely.",
+            "not the conventions themselves.",
             "",
             "### Decisions",
             "Every question asked and the user's answer.",
@@ -413,24 +319,12 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "## Pre-write verification",
             "",
             "Before writing, verify landscape.md is complete -- a downstream agent must be able",
-            "to understand the full background from this file alone:",
-            "- What is being built or changed, and why?",
-            "- What existing code is affected and how is it structured?",
-            "- Where do project conventions live?",
-            "- What decisions have been made that constrain downstream work?",
-            "- Is every file reference annotated with what it contains?",
-            "",
-            "If you cannot answer any of these from what you've gathered, note it in Open Items.",
+            "to understand the full background from this file alone.",
             "",
             "## After writing",
             "",
-            (
-                f"Call `koan_review_artifact` with the path `{ctx.epic_dir}/landscape.md`"
-                ' and description "Landscape document -- background information for downstream planning".'
-                if ctx.epic_dir
-                else "Call `koan_review_artifact` with the path to landscape.md"
-                ' and description "Landscape document -- background information for downstream planning".'
-            ),
+            "landscape.md is now available in the artifacts panel for review.",
+            "Call `koan_complete_step` to signal phase completion.",
         ]
         return StepGuidance(title=STEP_NAMES[3], instructions=lines)
 
@@ -442,19 +336,11 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
 def get_next_step(step: int, ctx: PhaseContext) -> int | None:
     if step < 3:
         return step + 1
-    # Step 3 (Write): review-gated.
-    if ctx.last_review_accepted is True:
-        return None
-    return 3
+    # Step 3 (Write): terminal — no review gate.
+    return None
 
 
 def validate_step_completion(step: int, ctx: PhaseContext) -> str | None:
-    if step == 3:
-        if ctx.last_review_accepted is None:
-            return "You must call koan_review_artifact to present landscape.md for review before completing this step."
-        if ctx.last_review_accepted is False:
-            return "The user requested revisions. Address the feedback, then call koan_review_artifact again."
-        return None
     return None
 
 

@@ -1,4 +1,4 @@
-# Driver -- coordinates the persistent orchestrator for an epic run.
+# Driver -- coordinates the persistent orchestrator for a workflow run.
 # Simplified: spawns one long-lived orchestrator process for the entire run.
 
 from __future__ import annotations
@@ -6,7 +6,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from .artifacts import list_artifacts
-from .epic_state import ensure_subagent_directory
+from .run_state import ensure_subagent_directory
 from .events import build_artifact_diff
 from .logger import get_logger
 from .subagent import spawn_subagent
@@ -20,11 +20,11 @@ log = get_logger("driver")
 # -- Artifact diff helper ------------------------------------------------------
 
 def _push_artifact_diff(app_state: AppState) -> None:
-    """Scan epic artifacts and emit per-file diff events against current projection."""
-    if not app_state.epic_dir:
+    """Scan run artifacts and emit per-file diff events against current projection."""
+    if not app_state.run_dir:
         return
     try:
-        new_artifacts = list_artifacts(app_state.epic_dir)
+        new_artifacts = list_artifacts(app_state.run_dir)
     except Exception:
         return
     run = app_state.projection_store.projection.run
@@ -45,21 +45,31 @@ async def driver_main(app_state: AppState) -> None:
     log.info("Driver waiting for start event...")
     await app_state.start_event.wait()
 
-    epic_dir = app_state.epic_dir
-    if epic_dir is None:
-        log.error("epic_dir is None after start event -- aborting")
+    run_dir = app_state.run_dir
+    if run_dir is None:
+        log.error("run_dir is None after start event -- aborting")
         return
 
-    app_state.phase = "intake"
-    app_state.projection_store.push_event("phase_started", {"phase": "intake"})
-    subagent_dir = await ensure_subagent_directory(epic_dir, "orchestrator")
+    # Use workflow's initial phase; default to "intake" if no workflow set
+    workflow = app_state.workflow
+    initial_phase = workflow.initial_phase if workflow else "intake"
+    workflow_name = workflow.name if workflow else "plan"
+
+    app_state.phase = initial_phase
+    app_state.projection_store.push_event("phase_started", {"phase": initial_phase})
+    subagent_dir = await ensure_subagent_directory(run_dir, "orchestrator")
+
+    # Inject phase_guidance for the initial phase so intake adapts to workflow scope
+    initial_guidance = workflow.phase_guidance.get(initial_phase, "") if workflow else ""
 
     task = {
         "role": "orchestrator",
-        "epic_dir": epic_dir,
+        "run_dir": run_dir,
         "subagent_dir": subagent_dir,
         "project_dir": app_state.project_dir,
         "task_description": app_state.task_description,
+        "workflow": workflow_name,
+        "phase_instructions": initial_guidance,   # scope framing for initial phase
     }
 
     result = await spawn_subagent(task, app_state)

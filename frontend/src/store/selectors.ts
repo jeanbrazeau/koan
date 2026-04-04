@@ -6,7 +6,7 @@ function groupByDirectory(artifacts: ArtifactInfo[]): Record<string, ArtifactInf
   const tree: Record<string, ArtifactInfo[]> = {}
   for (const a of artifacts) {
     const parts = a.path.split('/')
-    const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : 'epic-root'
+    const dir = parts.length > 1 ? parts.slice(0, -1).join('/') : 'run-root'
     if (!tree[dir]) tree[dir] = []
     tree[dir].push(a)
   }
