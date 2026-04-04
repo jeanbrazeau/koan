@@ -75,8 +75,7 @@ ORCHESTRATOR_SYSTEM_PROMPT = (
     "Rules:\n"
     "- Only call koan_set_phase after the user has confirmed the direction.\n"
     "- When the user indicates they are done, or all phases are complete, exit gracefully.\n"
-    "- Available tools change depending on the current phase. The step 1 guidance"
-    " for each phase lists the tools relevant to that phase."
+    "- Available tools change depending on the current phase."
 )
 
 
