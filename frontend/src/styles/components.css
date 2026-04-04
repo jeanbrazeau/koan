@@ -255,7 +255,7 @@
 .question-context-label {
   font-family: var(--font-mono);
   font-size: var(--font-size-xs);
-  color: var(--text-ghost);
+  color: var(--text-muted);
   text-transform: uppercase;
   letter-spacing: 0.1em;
   margin-bottom: var(--space-4);
@@ -263,9 +263,9 @@
 
 .question-context {
   font-family: var(--font-sans);
-  font-size: var(--font-size-sm);
+  font-size: var(--font-size-md);
   color: var(--text);
-  line-height: 1.7;
+  line-height: 1.6;
 }
 
 .question-context p {
@@ -279,7 +279,7 @@
 .question-context code,
 .question-text code,
 .option-text code {
-  background: var(--bg-inset);
+  background: var(--bg-elevated);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   padding: 1px 5px;
