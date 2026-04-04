@@ -48,13 +48,14 @@ held in memory for the duration of a workflow run.
 
 ---
 
-## Event Types (37 total)
+## Event Types (36 total)
 
 ### Lifecycle (8)
 
 | Event | Payload | `agent_id` |
 |-------|---------|-----------|
 | `run_started` | `{profile, installations, scout_concurrency}` | `None` |
+| `workflow_selected` | `{workflow}` | `None` |
 | `phase_started` | `{phase}` | `None` |
 | `agent_spawned` | `{agent_id, role, label, model, is_primary, started_at_ms}` | set |
 | `agent_spawn_failed` | `{role, error_code, message, details?}` | `None` |
@@ -65,6 +66,9 @@ held in memory for the duration of a workflow run.
 
 `run_started` is emitted by `api_start_run` before the driver begins. It
 creates the `Run` object in the projection with the frozen `RunConfig`.
+
+`workflow_selected` is emitted immediately after `run_started`, recording the
+workflow type chosen by the user. The fold sets `run.workflow` from this event.
 
 `agent_spawned` does not carry `step` — step 0 is implied. `agent_exited` does
 not carry `is_primary` — the fold looks up the agent in `run.agents`.
@@ -98,14 +102,12 @@ on the conversation entry is `True` until `tool_completed` arrives.
 `agent.conversation.pending_thinking`; the completed `ThinkingEntry` is created
 on the next transition (tool call, step advance, or stream delta).
 
-### Focus (4)
+### Focus (2)
 
 | Event | Payload | `agent_id` |
 |-------|---------|-----------|
 | `questions_asked` | `{token, questions}` | set |
 | `questions_answered` | `{token, cancelled, answers?}` | set |
-| `artifact_review_requested` | `{token, path, description, content}` | set |
-| `artifact_reviewed` | `{token, cancelled, accepted?, response?}` | set |
 
 These events transition `run.focus` between variants of the `Focus` union.
 Cancellation (`cancelled: true`) occurs when the agent exits while the
@@ -200,6 +202,7 @@ Projection
 │   └── default_scout_concurrency: int
 ├── run: Run | None
 │   ├── config: RunConfig                        # frozen at run_started
+│   ├── workflow: str                            # workflow name, set by workflow_selected
 │   ├── phase: str
 │   ├── agents: dict[str, Agent]                 # agent_id → Agent (all statuses)
 │   │   └── conversation: Conversation
@@ -209,7 +212,7 @@ Projection
 │   │       ├── is_thinking: bool
 │   │       ├── input_tokens: int
 │   │       └── output_tokens: int
-│   ├── focus: Focus | None                      # discriminated union of 4 variants
+│   ├── focus: Focus | None                      # discriminated union of 2 variants
 │   ├── artifacts: dict[str, ArtifactInfo]       # path → ArtifactInfo
 │   └── completion: CompletionInfo | None
 └── notifications: list[Notification]
@@ -392,16 +395,8 @@ class QuestionFocus(KoanBaseModel):
     token: str
     questions: list[dict]           # raw LLM output, not validated by fold
 
-class ReviewFocus(KoanBaseModel):
-    type: Literal["review"] = "review"
-    agent_id: str
-    token: str
-    path: str
-    description: str
-    content: str
-
 Focus = Annotated[
-    ConversationFocus | QuestionFocus | ReviewFocus,
+    ConversationFocus | QuestionFocus,
     Field(discriminator="type"),
 ]
 ```
@@ -414,7 +409,7 @@ explicit.
 
 ```python
 class ArtifactInfo(KoanBaseModel):
-    path: str           # relative to epic directory
+    path: str           # relative to run directory
     size: int           # bytes
     modified_at: int = 0            # milliseconds since epoch
 
@@ -453,6 +448,9 @@ Settings:     /settings/installations/claude-default/available
 Run config:   /run/config/profile
               /run/config/scoutConcurrency
 
+Run:          /run/workflow
+              /run/phase
+
 Agent:        /run/agents/abc123/status
               /run/agents/abc123/step
               /run/agents/abc123/lastTool
@@ -464,7 +462,6 @@ Conversation: /run/agents/abc123/conversation/pendingThinking
 
 Focus:        /run/focus
 Artifacts:    /run/artifacts/docs~1architecture.md/size
-Phase:        /run/phase
 ```
 
 Named entities (installations, profiles, agents, artifacts) are dicts for
@@ -516,8 +513,6 @@ completed agents.
 | `agent_spawned` (primary) | `run.focus = ConversationFocus(agent_id=...)` |
 | `questions_asked` | `run.focus = QuestionFocus(agent_id=..., token=..., questions=...)` |
 | `questions_answered` | `run.focus = ConversationFocus(agent_id=primary_id)` |
-| `artifact_review_requested` | `run.focus = ReviewFocus(...)` |
-| `artifact_reviewed` | `run.focus = ConversationFocus(agent_id=primary_id)` |
 | `user_message` | `primary_agent.conversation.entries += UserMessageEntry(...)` |
 
 ### Run lifecycle
@@ -525,6 +520,7 @@ completed agents.
 | Event | Action |
 |-------|--------|
 | `run_started` | `projection.run = Run(config=RunConfig(...))` |
+| `workflow_selected` | `run.workflow = payload["workflow"]` |
 | `phase_started` | `run.phase = phase` |
 | `workflow_completed` | `run.completion = CompletionInfo(...)` |
 
@@ -639,6 +635,7 @@ domain types; `projections.py` does not.
 
 ```python
 def build_run_started(profile, installations, scout_concurrency) -> dict
+def build_workflow_selected(workflow: str) -> dict
 def build_agent_spawned(agent: AgentState) -> dict
 def build_agent_exited(exit_code, error=None, usage=None) -> dict
 def build_agent_spawn_failed(role, diagnostic: RunnerDiagnostic) -> dict
@@ -781,6 +778,9 @@ const conversation = useStore(s =>
 // Settings: read directly from store
 const installations = useStore(s => s.settings?.installations ?? {})
 const defaultProfile = useStore(s => s.settings?.defaultProfile ?? 'balanced')
+
+// Run: workflow type
+const workflow = useStore(s => s.run?.workflow)
 ```
 
 ---
@@ -854,14 +854,10 @@ not yet complete and will be committed to `entries` on the next event.
 
 ### Why Focus is a discriminated union
 
-The previous architecture used an `active_interaction` dict with an
-`interaction_type` string that the frontend duck-typed. This created implicit
-coupling between the backend's interaction type strings and the frontend's
-rendering switch. Focus replaces it with an explicit discriminated union where
-every possible main-content state is modeled. The frontend switch on
-`focus.type` is exhaustive — TypeScript will flag unhandled variants. The
-`agent_id` on every variant means the conversation is always available as
-backdrop without a separate lookup.
+An explicit discriminated union models every possible main-content state.
+The frontend switch on `focus.type` is exhaustive — TypeScript will flag
+unhandled variants. The `agent_id` on every variant means the conversation is
+always available as backdrop without a separate lookup.
 
 ### Why Settings vs RunConfig
 
@@ -876,10 +872,10 @@ may override before starting.
 ### Why always-snapshot on reconnect
 
 The previous architecture stored events and replayed them for reconnecting
-clients (`?since=N` returned events `N+1..M`). At 500K events over a full epic,
+clients (`?since=N` returned events `N+1..M`). At 500K events over a full run,
 with patches ranging from 80 bytes to 10KB, storing patches for replay requires
 unbounded memory and adds ordering logic and partial-replay edge cases. A fresh
-50MB snapshot is sent once on reconnect — cheaper, simpler, and handles server
+snapshot is sent once on reconnect — cheaper, simpler, and handles server
 restarts (which would have caused a `fatal_error` in the old protocol)
 identically to a normal reconnect.
 
@@ -910,7 +906,7 @@ structured data. Stdout events are filtered to exclude koan MCP tool names
 `artifact_created`/`artifact_modified`/`artifact_removed` carry exactly what
 changed, not the full current set. The fold maintains `run.artifacts` as a dict
 keyed by path, enabling O(1) per-event updates. `build_artifact_diff()` scans
-the epic directory at phase boundaries and produces the minimal set of events.
+the run directory at phase boundaries and produces the minimal set of events.
 
 ### Why projections.py has zero koan domain imports
 

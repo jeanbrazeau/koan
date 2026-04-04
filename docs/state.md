@@ -1,7 +1,7 @@
 # State & Driver
 
-How the driver manages epic and story state, routes between phases, and
-enforces the file boundary invariant.
+How the driver manages run state, routes between phases, and enforces the file
+boundary invariant.
 
 > Parent doc: [architecture.md](./architecture.md)
 
@@ -17,9 +17,9 @@ The driver writes JSON; LLMs write markdown. Tool code bridges both.
 | **LLM**       | `.md` files, codebase files     | `.md` files (output)                |
 | **Tool code** | `.json` state (to validate)     | `.json` state + `.md` status (both) |
 
-### Why the epic state module must not write markdown
+### Why the run state module must not write markdown
 
-The epic state module (`koan/epic_state.py`) reads and writes JSON only.
+The run state module (`koan/run_state.py`) reads and writes JSON only.
 `status.md` writes belong exclusively in orchestrator tool handlers, which
 bridge the two worlds by writing JSON state (for the driver) and templated
 markdown (for LLMs) in the same operation.
@@ -34,36 +34,33 @@ itself.
 
 ---
 
-## Epic State
+## Run State
 
-`epic-state.json` in the epic directory root. Tracks the current pipeline
-phase and the list of story IDs.
+`run-state.json` in the run directory root. Tracks the current workflow phase,
+the active workflow type, and the list of story IDs.
 
 ```python
-# koan/epic_state.py
+# koan/run_state.py
 {
-    "phase": "intake",  # intake -> brief-generation -> core-flows -> tech-plan
-                        # -> ticket-breakdown -> cross-artifact-validation
-                        # -> execution -> implementation-validation -> completed
-    "stories": []       # populated by driver after filesystem scan
+    "phase": "intake",        # current phase name; valid values depend on the active workflow
+    "workflow": "plan",       # workflow type selected at run start ("plan" | "milestones")
+    "stories": []             # populated by driver after filesystem scan
 }
 ```
 
-### Epic phases
+### Plan workflow phases
 
-| Phase                       | What happens                                                                                |
-| --------------------------- | ------------------------------------------------------------------------------------------- |
-| `intake`                    | Intake subagent reads conversation, scouts codebase, asks user questions                    |
-| `brief-generation`          | Brief-writer subagent distills landscape.md into brief.md; user reviews via artifact review |
-| `core-flows`                | Define user journeys with sequence diagrams                                                 |
-| `tech-plan`                 | Specify technical architecture                                                              |
-| `ticket-breakdown`          | Generate story-sized implementation tickets                                                 |
-| `cross-artifact-validation` | Validate cross-boundary consistency                                                         |
-| `execution`                 | Implement tickets through supervised batch process                                          |
-| `implementation-validation` | Post-execution alignment review                                                             |
-| `completed`                 | All phases done                                                                             |
+| Phase | What happens |
+|-------|--------------|
+| `intake` | Orchestrator reads conversation, scouts codebase, asks clarifying questions. Writes `landscape.md`. |
+| `plan-spec` | Orchestrator reads `landscape.md` and codebase, writes `plan.md`. |
+| `plan-review` | Orchestrator reads `landscape.md` and `plan.md`, evaluates quality, reports findings via chat. |
+| `execute` | Orchestrator composes executor instructions and spawns a single executor subagent. |
 
-
+Phases advance via `koan_set_phase`. Any phase in the active workflow's
+`available_phases` is a valid transition target from any other phase (except
+self-transitions). The suggested transitions in `workflow.suggested_transitions`
+guide the orchestrator's default boundary response but do not restrict the user.
 
 **`scouting` is intentionally absent.** Scouts run inside the
 `koan_request_scouts` tool handler during intake/planning phases,
@@ -127,26 +124,10 @@ The driver spawns the orchestrator once at run start and awaits its exit.
 The orchestrator drives the entire workflow, including phase transitions and
 story execution.
 
-### Story execution (orchestrator-driven)
-
-The orchestrator selects and manages stories during the execution phase via
-MCP tools:
-
-```
-orchestrator calls koan_select_story(story_id)
-  -> story status set to "selected"
-orchestrator calls koan_spawn_executor(story_id, role="planner")
-  -> driver spawns planner subagent, blocks until exit
-orchestrator calls koan_spawn_executor(story_id, role="executor")
-  -> driver spawns executor subagent, blocks until exit
-  -> (if retry needed: pass retry_context to koan_spawn_executor)
-orchestrator calls koan_complete_story / koan_retry_story / koan_skip_story
-```
-
 ### Model config gate
 
 When a web server is available, the pipeline blocks at startup until the user
-confirms model tier selection. This happens before the orchestrator spawns.
+confirms model tier selection and workflow type. This happens before the orchestrator spawns.
 
 ---
 
@@ -164,7 +145,7 @@ os.rename(tmp, file_path)
 
 This applies to:
 
-- `epic-state.json` (driver)
+- `run-state.json` (driver)
 - `stories/{id}/state.json` (driver + orchestrator tools)
 - `stories/{id}/status.md` (orchestrator tools)
 - `subagents/{label}/task.json` (driver, before spawn)
@@ -172,13 +153,13 @@ This applies to:
 
 ---
 
-## Epic Directory Structure
+## Run Directory Structure
 
 ```
-{epic_dir}/
-  epic-state.json           # Epic phase + story list
+~/.koan/runs/{run_id}/
+  run-state.json            # Workflow phase + workflow type + story list
   landscape.md              # Written by orchestrator (intake phase)
-  brief.md                  # Written by orchestrator (brief-generation phase)
+  plan.md                   # Written by orchestrator (plan-spec phase)
   stories/
     {story_id}/
       story.md              # Written by orchestrator (ticket-breakdown phase)
@@ -195,11 +176,7 @@ This applies to:
       task.json
       findings.md           # Scout output
       ...
-    planner-{story_id}/
-      task.json
-      state.json
-      events.jsonl
-    executor-{story_id}/
+    executor-{run_id}/
       task.json
       state.json
       events.jsonl
@@ -216,18 +193,19 @@ transitions.
 
 Key projection fields common to all roles:
 
-| Field             | Type   | Meaning                                                 |
-| ----------------- | ------ | ------------------------------------------------------- |
-| `phase`           | string | Overall phase name (e.g., "intake", "brief-generation") |
-| `step`            | number | Current step index within the phase                     |
-| `step_name`       | string | Human-readable step label (e.g., "Scout (round 2)")     |
-| `tokens_sent`     | number | Cumulative tokens in                                    |
-| `tokens_received` | number | Cumulative tokens out                                   |
+| Field             | Type   | Meaning                                                  |
+| ----------------- | ------ | -------------------------------------------------------- |
+| `phase`           | string | Overall phase name (e.g., "intake", "plan-spec")         |
+| `step`            | number | Current step index within the phase                      |
+| `step_name`       | string | Human-readable step label (e.g., "Scout (round 2)")      |
+| `tokens_sent`     | number | Cumulative tokens in                                     |
+| `tokens_received` | number | Cumulative tokens out                                    |
 
 Orchestrator state tracked in `AppState` (in-memory, not persisted):
 
 | Field | Type | Purpose |
 |-------|------|---------|
+| `workflow` | `Workflow \| None` | Active workflow; set at run start, drives transition validation and phase guidance |
 | `user_message_buffer` | `list[ChatMessage]` | Buffered user chat messages, drained at each `koan_complete_step` |
 | `phase_complete_future` | `asyncio.Future \| None` | Non-None while `koan_complete_step` is blocking at a phase boundary |
 

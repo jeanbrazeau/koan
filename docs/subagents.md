@@ -16,13 +16,13 @@ registry.
 ### `task.json` schema
 
 The manifest is a discriminated union on the `role` field. Common fields
-(`role`, `epic_dir`, `mcp_url`) appear on every variant; role-specific fields
+(`role`, `run_dir`, `mcp_url`) appear on every variant; role-specific fields
 are nested naturally rather than flattened into a shared namespace.
 
 ```json
 {
   "role": "intake",
-  "epic_dir": "/path/to/epic",
+  "run_dir": "/path/to/run",
   "mcp_url": "http://localhost:8420/mcp?agent_id=intake-abc123"
 }
 ```
@@ -33,8 +33,7 @@ Role-specific fields:
 | -------------- | ------------------------------------------------- |
 | `orchestrator` | `project_dir`, `task_description`                 |
 | `scout`        | `question`, `investigator_role`                   |
-| `planner`      | `story_id`                                        |
-| `executor`     | `story_id`, `retry_context` (optional)            |
+| `executor`     | `artifacts`, `instructions`                       |
 
 ### Lifecycle
 
@@ -117,8 +116,7 @@ The MCP endpoint validates required `task.json` fields at agent registration:
 | Role     | Required fields | Failure if missing                                                      |
 | -------- | --------------- | ----------------------------------------------------------------------- |
 | scout    | `question`      | Step 1 guidance has no assignment -> LLM outputs confused text -> exits |
-| planner  | `story_id`      | Malformed paths like `stories//plan/plan.md`                            |
-| executor | `story_id`      | Same path issue                                                         |
+| executor | `artifacts`     | Executor has no files to read before implementing                       |
 
 These checks are intentionally fail-fast because they indicate a broken
 parent->child contract (programming/configuration error), not model behavior.
@@ -136,16 +134,18 @@ Phase modules:
 ```
 koan/phases/
   intake.py              # guidance provider: intake phase
+  plan_spec.py           # guidance provider: plan-spec phase
+  plan_review.py         # guidance provider: plan-review phase
+  execute.py             # guidance provider: execute phase (general-purpose)
   brief_writer.py        # guidance provider: brief-generation phase
   core_flows.py          # guidance provider: core-flows phase
   tech_plan.py           # guidance provider: tech-plan phase
   ticket_breakdown.py    # guidance provider: ticket-breakdown phase
   cross_artifact_validation.py  # guidance provider: cross-artifact-validation and implementation-validation
-  executor.py            # guidance provider: execution phase; also spawned as separate subagent
+  executor.py            # spawned as separate subagent; implements code changes
   orchestrator.py        # guidance provider: pre/post execution steps
   scout.py               # spawned as separate subagent; no step guidance role
   format_step.py         # shared formatting utilities
-  review_protocol.py     # shared review loop logic
 ```
 
 Each phase module exposes:
@@ -153,10 +153,16 @@ Each phase module exposes:
 | Symbol                                  | Kind     | Purpose                              | Default                             |
 | --------------------------------------- | -------- | ------------------------------------ | ----------------------------------- |
 | `SYSTEM_PROMPT`                         | constant | Role identity and rules              | Required                            |
+| `SCOPE`                                 | constant | `"general"`, `"plan"`, or `"legacy"` | Required                            |
 | `step_guidance(step, ctx)`              | function | Return step instructions             | Required                            |
 | `get_next_step(step, ctx)`              | function | Next step or None (done)             | Linear: step+1, None at total_steps |
 | `validate_step_completion(step, ctx)`   | function | Pre-condition check before advancing | None (always allow)                 |
 | `on_loop_back(from_step, to_step, ctx)` | function | Side effects of backward transitions | no-op                               |
+
+`SCOPE` is metadata, not enforcement. It communicates reusability intent:
+`"general"` phases are designed to work across workflows; `"plan"` phases are
+specific to the plan workflow; `"legacy"` phases are dead code from an older
+pipeline, kept for reference.
 
 ### Step progression state machine
 
@@ -166,7 +172,7 @@ koan_complete_step arrives via MCP:
   otherwise       -> validate_step_completion(step)                       [pre-condition check]
                   -> next_step = get_next_step(step)                      [pure: decides where to go]
   next_step is None -> block for user message (asyncio.Future), then
-                       return format_phase_boundary(phase, messages, successors)  [phase boundary]
+                       return format_phase_boundary(phase, messages, suggested, descriptions)  [phase boundary]
   next_step < prev  -> on_loop_back(prev, next_step)                     [side effects of loop]
   next_step != None -> step=next_step, return format_step(step_guidance(next_step)) + any buffered user messages  [advance]
 ```
@@ -225,7 +231,7 @@ from write-bash is intractable at the permission layer.
 ### Role permission matrix
 
 The orchestrator role uses **phase-aware permissions** — available tools
-vary by the current phase. Planner, executor, and scout use static permission sets.
+vary by the current phase. Executor and scout use static permission sets.
 
 **Orchestrator phase-aware permissions:**
 
@@ -234,11 +240,10 @@ vary by the current phase. Planner, executor, and scout use static permission se
 | `koan_complete_step` | All phases |
 | `koan_set_phase` | All phases (blocked mid-story during execution) |
 | `koan_ask_question` | All phases |
-| `koan_request_scouts` | `intake`, `core-flows`, `tech-plan`, `ticket-breakdown`, `cross-artifact-validation` |
-| `koan_review_artifact` | `intake`, `brief-generation`, `core-flows`, `tech-plan`, `ticket-breakdown`, `cross-artifact-validation`, `implementation-validation` |
-| `koan_spawn_executor` | `execution` only |
+| `koan_request_scouts` | `intake`, `core-flows`, `tech-plan`, `ticket-breakdown`, `cross-artifact-validation`, `plan-spec`, `plan-review` |
+| `koan_request_executor` | `execution`, `execute` |
 | `koan_select_story`, `koan_complete_story`, `koan_retry_story`, `koan_skip_story` | `execution` only |
-| `write`, `edit` (epic_dir scoped) | All phases except `brief-generation` step 1 |
+| `write`, `edit` (run_dir scoped) | All phases except `brief-generation` step 1 |
 | `bash` | `execution`, `implementation-validation` |
 
 **Other role static permissions:**
@@ -246,15 +251,41 @@ vary by the current phase. Planner, executor, and scout use static permission se
 | Role           | koan tools                                   | write/edit             | notes                                       |
 | -------------- | -------------------------------------------- | ---------------------- | ------------------------------------------- |
 | **scout**      | `koan_complete_step`                         | none                   | No user interaction. No nested scouts. No file writing. |
-| **planner**    | `koan_complete_step`, `koan_ask_question`, `koan_request_scouts` | path-scoped to epicDir | -- |
 | **executor**   | `koan_complete_step`, `koan_ask_question`    | **unrestricted**       | Must modify the actual codebase             |
 
 ### Path scoping
 
-Planning roles (orchestrator, scout, planner) can only
-`write`/`edit` files inside the epic directory. The permission check resolves
-both the tool's `path` argument and the epic directory, then verifies the tool
-path starts with the epic path.
+Planning roles (orchestrator, scout) can only `write`/`edit` files inside the
+run directory. The permission check resolves both the tool's `path` argument
+and the run directory, then verifies the tool path starts with the run path.
+
+---
+
+## Executor Subagent
+
+The executor is spawned by the orchestrator via `koan_request_executor`. It
+receives structured inputs via `task.json` and implements code changes in a
+3-step workflow:
+
+| Step | Name | What happens |
+|------|------|--------------|
+| 1 | Comprehend | Read all artifacts listed in `task.json`. Understand the plan and codebase context. |
+| 2 | Plan | Identify the specific file edits needed. Do not write code yet. |
+| 3 | Implement | Apply changes, verify they match the plan, report what was done. |
+
+`task.json` fields for the executor role:
+
+| Field | Type | Purpose |
+|-------|------|---------|
+| `artifacts` | `list[str]` | Paths relative to `run_dir` that the executor must read before coding |
+| `instructions` | `str` | Free-form context: key decisions, user direction, review findings. Does NOT repeat artifact contents. |
+
+The executor has unrestricted `write`/`edit` access — it must be able to modify
+the actual codebase. It may call `koan_ask_question` if it encounters genuine
+ambiguity that cannot be resolved from the artifacts and instructions.
+
+`koan_request_executor` blocks until the executor process exits. The orchestrator
+receives a success/failure summary and reports it to the user at the execute phase boundary.
 
 ---
 
@@ -266,7 +297,7 @@ Koan has 6+ roles, but they cluster into 3 capability bands:
 
 | Tier         | Roles                          | Why this tier                                                    |
 | ------------ | ------------------------------ | ---------------------------------------------------------------- |
-| **strong**   | orchestrator, planner          | Complex multi-step reasoning                                     |
+| **strong**   | orchestrator                   | Complex multi-step reasoning                                     |
 | **standard** | executor                       | Code implementation: reliable tool use without deepest reasoning |
 | **cheap**    | scout                          | Narrow codebase investigation: reading files, writing findings   |
 

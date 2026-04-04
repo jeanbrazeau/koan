@@ -18,26 +18,27 @@ that handles both the web dashboard and the MCP tool endpoint. When a tool call
 arrives, the server looks up the agent's state by `agent_id` in an in-process
 registry and handles the call directly.
 
-Four interactions involve blocking -- the HTTP request is held open while the
+Three interactions involve blocking -- the HTTP request is held open while the
 driver awaits an external response:
 
 | Mechanism               | What blocks                  | Who responds                   |
 | ----------------------- | ---------------------------- | ------------------------------ |
 | `koan_ask_question`     | User input needed            | User via web UI                |
-| `koan_review_artifact`  | User review needed           | User via web UI                |
 | `koan_request_scouts`   | Scout subagents running      | Driver (after scouts complete) |
 | Phase-boundary blocking | Phase complete, next unknown | User via `POST /api/chat`      |
 
-User-facing tool calls (`koan_ask_question`, `koan_review_artifact`) go through
-the `PendingInteraction` queue on `AppState`. The MCP handler creates an
-`asyncio.Future`, stores it in `AgentState.pending_tool`, enqueues a
-`PendingInteraction` on `AppState`, and awaits the Future. The HTTP connection
-stays open until the Future resolves.
+User-facing tool calls (`koan_ask_question`) go through the `PendingInteraction`
+queue on `AppState`. The MCP handler creates an `asyncio.Future`, stores it in
+`AgentState.pending_tool`, enqueues a `PendingInteraction` on `AppState`, and
+awaits the Future. The HTTP connection stays open until the Future resolves.
 
 `koan_request_scouts` is handled entirely inline: the handler spawns scouts via
 `asyncio.gather` of `spawn_subagent` calls (bounded by a semaphore), collects
 their results, and returns directly. No `PendingInteraction` is created; the
 HTTP connection is held open only by the `await asyncio.gather(...)` call.
+
+`koan_request_executor` spawns a single executor subagent and blocks until it
+exits. Like scouts, it is handled inline with no `PendingInteraction`.
 
 Phase-boundary blocking uses `AppState.phase_complete_future` directly (not
 `PendingInteraction`). See [Phase-Boundary Blocking](#phase-boundary-blocking).
@@ -57,11 +58,10 @@ When a user-facing blocking tool is called:
    and enqueues a `PendingInteraction` on `AppState.interaction_queue`
 3. If no interaction is currently active, the interaction is promoted to
    `AppState.active_interaction` and an SSE event is pushed to browsers
-   (question form, or review form)
+   (question form)
 4. Handler `await`s the Future -- HTTP connection stays open
 5. User fills the form in the web UI and submits:
    - `POST /api/answer` resolves the Future for `koan_ask_question`
-   - `POST /api/artifact-review` resolves it for `koan_review_artifact`
 6. Handler returns the resolved value as the MCP tool result; the next queued
    interaction (if any) is promoted to active
 
@@ -87,7 +87,7 @@ subagent <---tool result (answer)----------- +
 The `PendingInteraction` object stored in `AppState.active_interaction` (or
 queued in `AppState.interaction_queue`):
 
-- `type` -- one of `"ask"`, `"artifact-review"`
+- `type` -- `"ask"`
 - `agent_id` -- the agent that issued the blocking call
 - `token` -- UUID for SSE correlation
 - `payload` -- type-specific request data
@@ -189,36 +189,25 @@ the concatenated output.
 
 ---
 
-## Artifact Review Flow
+## Executor Flow
 
 ```
-subagent calls koan_review_artifact({ path: ".../brief.md" })
-  -> MCP endpoint checks permissions
-  -> reads file content from path
-  -> creates asyncio.Future, stores in AgentState.pending_tool
-  -> enqueues PendingInteraction { type: "artifact-review" } on AppState
-  -> if no active interaction: promotes to active, pushes SSE `artifact_review_requested`
-     event to browsers (with rendered content)
-  -> awaits Future
-
-user sees rendered markdown in web UI
-  -> clicks "Accept" or types feedback and clicks "Send Feedback"
-  -> POST /api/artifact-review -> resolves Future with feedback string
-
-MCP handler receives resolved value
-  -> clears AgentState.pending_tool
-  -> activates next queued interaction (if any)
-  -> sets AgentState.phase_ctx.last_review_accepted
-  -> returns "ACCEPTED" or "REVISION REQUESTED: {feedback}" as MCP tool result
-
-if feedback == "Accept":
-  LLM calls koan_complete_step -> phase advances
-else:
-  LLM revises artifact, calls koan_review_artifact again
-  (loop repeats with fresh PendingInteraction)
+orchestrator calls koan_request_executor({ artifacts: [...], instructions: "..." })
+  -> MCP endpoint checks permissions (execute or execution phase only)
+  -> no PendingInteraction created
+  -> ensures subagent directory, writes task.json with artifacts + instructions
+  -> spawns executor CLI process via spawn_subagent()
+  -> executor connects to /mcp?agent_id={executor_id}
+  -> executor calls koan_complete_step, reads artifacts, plans, implements
+  -> executor calls koan_complete_step at each step boundary
+  -> executor process exits when done
+  -> MCP handler collects SubagentResult (exit_code, final_response)
+  -> returns success/failure summary as MCP tool result to orchestrator
+  (HTTP connection held open for the duration of execution)
 ```
 
-See [artifact-review.md](./artifact-review.md) for the full protocol.
+The orchestrator reports the result to the user in chat and then calls
+`koan_complete_step` to trigger the execute phase boundary.
 
 ---
 
@@ -239,11 +228,19 @@ orchestrator calls koan_complete_step (last step of a phase)
        await future              # HTTP connection held open
      app_state.phase_complete_future = None
   -> messages = drain_user_messages(app_state)
-  -> successors = get_successor_phases(app_state.phase)
-  -> returns format_phase_boundary(phase, messages, successors)
+  -> suggested = get_suggested_phases(workflow, app_state.phase)
+  -> descs = workflow.phase_descriptions
+  -> returns format_phase_boundary(phase, messages, suggested, descs)
 ```
 
 The Future is resolved when the user sends a message via `POST /api/chat`.
+
+`format_phase_boundary` renders the suggested phases (from
+`workflow.suggested_transitions[current_phase]`) with descriptions and
+instructs the orchestrator to present them to the user. The user can also
+request any other phase in the workflow's `available_phases`. If the
+workflow has no suggested transitions for the current phase (milestones stub),
+`format_phase_boundary` renders a "workflow not yet fully implemented" message.
 
 **Key asyncio invariant:** `api_chat` and `koan_complete_step` run in the same
 asyncio event loop. `api_chat` appends to `user_message_buffer` before calling
@@ -280,8 +277,8 @@ orchestrator calls koan_complete_step (any step)
 
 Messages sent while the orchestrator is mid-step accumulate in the buffer and
 are delivered at the next `koan_complete_step` call. Messages sent during
-`koan_ask_question` or `koan_review_artifact` also buffer and deliver after
-the structured interaction resolves.
+`koan_ask_question` also buffer and deliver after the structured interaction
+resolves.
 
 ---
 

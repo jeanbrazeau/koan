@@ -27,10 +27,10 @@ user questions, then write `landscape.md`.
 | ---- | -------- | ---- | --------------------------------------------------------------------------------- |
 | 1    | Gather   | 1x   | Read conversation, open obvious files (≤5), dispatch 3-5 scouts.                  |
 | 2    | Deepen   | 1x   | Process scout results, verify by reading files, deepen understanding through iterative dialogue. |
-| 3    | Write    | 1x   | Write `landscape.md`. Review gate: calls `koan_review_artifact` before completing.  |
+| 3    | Write    | 1x   | Write `landscape.md`. The artifact is available in the artifacts panel.              |
 
-Step 3 is review-gated: it blocks until `koan_review_artifact` is accepted.
-All other steps advance linearly.
+All steps advance linearly. The phase boundary after step 3 gives the user a
+natural point to review `landscape.md` and discuss next steps.
 
 ---
 
@@ -75,34 +75,22 @@ Key properties:
 
 The Write step produces `landscape.md` with required sections (Task Summary,
 Prior Art, Codebase Findings, Project Conventions, Decisions, Constraints,
-Open Items). Review-gated: the step calls `koan_review_artifact` and loops
-on step 3 until the user accepts.
+Open Items). After writing, the phase completes and the orchestrator presents
+suggested next phases at the boundary.
 
 ---
 
-## Review Gate
+## Phase Boundary
 
-The step engine calls `validate_step_completion(step, ctx)` before
-`get_next_step()`. For step 3, it verifies that `koan_review_artifact` was
-called and accepted:
-
-```python
-def validate_step_completion(step, ctx):
-    if step == 3:
-        if ctx.last_review_accepted is None:
-            return "You must call koan_review_artifact..."
-        if ctx.last_review_accepted is False:
-            return "The user requested revisions..."
-    return None
-```
+After step 3 completes, `get_next_step()` returns `None`, which triggers the
+phase boundary. The orchestrator summarizes what was accomplished, presents
+suggested next phases with descriptions, and asks the user what to do next.
 
 ```python
 def get_next_step(step, ctx):
     if step < 3:
         return step + 1
-    if ctx.last_review_accepted is True:
-        return None  # done
-    return 3  # loop on review
+    return None  # phase complete
 ```
 
 ---

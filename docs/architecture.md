@@ -12,13 +12,10 @@ principles, and pitfalls that govern the codebase.
   scout spawning, phase-boundary blocking, chat message delivery
 - [Token Streaming](./token-streaming.md) -- runner stdout parsing, SSE delta path
 - [State & Driver](./state.md) -- the driver/LLM boundary, JSON vs markdown
-  ownership, epic and story state, orchestrator state
+  ownership, run state, orchestrator state
 - [Projections](./projections.md) -- versioned event log, pure fold, JSON Patch
   protocol, projection model, camelCase wire format
-- [Intake Loop](./intake-loop.md) -- three-step intake design, review gate,
-  prompt engineering principles
-- [Epic Brief](./epic-brief.md) -- brief artifact, brief-generation phase, downstream references
-- [Artifact Review](./artifact-review.md) -- artifact review protocol, review loop, reusability
+- [Intake Loop](./intake-loop.md) -- three-step intake design, prompt engineering principles
 
 ---
 
@@ -81,16 +78,23 @@ Three reinforcement mechanisms make this robust across model capability levels:
 The driver (`koan/driver.py`) spawns the orchestrator and awaits its exit.
 Phase routing is driven by the orchestrator via `koan_set_phase` rather than
 the driver's routing loop. The driver still validates every transition
-(`is_valid_transition()` in the tool handler), updates `epic-state.json`
+(`is_valid_transition()` in the tool handler), updates `run-state.json`
 atomically, emits projection events, and enforces the permission fence. It
 never parses free text or makes judgment calls. All routing decisions flow
 through typed tool parameters.
+
+`is_valid_transition(workflow, from_phase, to_phase)` validates that `to_phase`
+is a member of the active workflow's `available_phases` and is not equal to
+`from_phase`. Any phase in the workflow is reachable from any other — suggested
+transitions guide the orchestrator's default recommendations at phase boundaries,
+but the user can request any available phase. Invalid phase strings raise
+`ToolError`.
 
 ### 4. Default-deny permissions
 
 Every tool call passes through a permission fence (`check_permission()` in
 `koan/lib/permissions.py`). Unknown roles are blocked. Unknown tools are
-blocked. Planning roles can only write inside the epic directory.
+blocked. Planning roles can only write inside the run directory.
 
 The one accepted limitation: `READ_TOOLS` (bash, read, grep, glob, find, ls)
 are always allowed because distinguishing "read bash" from "write bash" is
@@ -110,6 +114,23 @@ into the first user message front-loads complex instructions before the LLM has
 established the `koan_complete_step` calling pattern. Weaker models produce
 text output and exit without entering the workflow. Step guidance is delivered
 exclusively through `koan_complete_step` return values.
+
+**Phase guidance injection.** Each workflow provides a `phase_guidance` dict
+mapping phase names to scope-framing text. When the orchestrator calls
+`koan_set_phase(phase)`, the workflow's guidance for that phase is stored in
+`PhaseContext.phase_instructions`. The step 1 response renders this injection
+at the top of the guidance, before procedural instructions, so scope framing
+reaches the LLM before it reads task details.
+
+The injection contract every `phase_guidance` entry must cover:
+
+| Section | Purpose |
+|---------|---------|
+| **Scope** | What kind of task this workflow targets |
+| **Downstream consumer** | What phase reads the output, what detail level it needs |
+| **Investigation posture** | Direct reading vs. scouts, typical scout count |
+| **Question posture** | How aggressively to ask, typical round count |
+| **User override** | Always present, always last: "follow their lead" |
 
 ### 6. Directory-as-contract
 
@@ -158,6 +179,50 @@ disciplinary synchronization. Any divergence produces subtle display bugs that
 are hard to trace. JSON Patch makes correctness structural: one fold, one
 source of truth, mechanical application on the client.
 
+
+---
+
+## Workflow System
+
+### Workflow definitions
+
+A `Workflow` defines the set of phases available for a run, the initial phase,
+and suggested transitions between phases. Two workflows are defined in
+`koan/lib/workflows.py`:
+
+**plan** — intake → plan-spec → plan-review → execute
+
+| Phase | Role | Steps | Artifact |
+|-------|------|-------|---------|
+| `intake` | Requirement gathering | 3 (Gather → Deepen → Write) | `landscape.md` |
+| `plan-spec` | Technical planning | 2 (Analyze → Write) | `plan.md` |
+| `plan-review` | Quality review | 2 (Read → Evaluate) | Chat report only |
+| `execute` | Implementation handoff | 2 (Compose → Request) | Code changes via executor |
+
+**milestones** — stub workflow; runs intake only, then reports the workflow is
+not yet fully implemented.
+
+### Workflow selection
+
+The user selects a workflow at run start. The selection is stored in
+`AppState.workflow` and used throughout the run for:
+- Phase transition validation (`is_valid_transition`)
+- Phase boundary suggestions (`get_suggested_phases`)
+- Phase guidance injection (`workflow.phase_guidance[phase]`)
+
+### Phase transition validation
+
+```python
+def is_valid_transition(workflow: Workflow, from_phase: str, to_phase: str) -> bool:
+    return (
+        to_phase in workflow.available_phases
+        and to_phase != from_phase
+    )
+```
+
+At phase boundaries, `format_phase_boundary` renders the suggested next phases
+from `workflow.suggested_transitions[current_phase]`. These are recommendations,
+not constraints — the user can request any phase in `workflow.available_phases`.
 
 ---
 
@@ -302,11 +367,11 @@ answers -> MCP response). A separate `escalated` status creates a dead routing
 path -- the driver has nowhere clean to send it without duplicating the ask UI
 flow.
 
-### Don't add `scouting` as an epic phase
+### Don't add `scouting` as a workflow phase
 
 Scouts run inside the `koan_request_scouts` tool handler during
-intake/decomposer/planner phases, not as a top-level driver phase. Adding
-`scouting` to `EpicPhase` would imply a driver state that never exists,
+intake/planning phases, not as a top-level driver phase. Adding
+`scouting` to `WorkflowPhase` would imply a driver state that never exists,
 creating dead code paths.
 
 ### Don't rely on file existence for scout success
