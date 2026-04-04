@@ -1,6 +1,5 @@
 # On-disk state I/O for run and story state files.
 # All JSON writes use atomic tmp+rename to prevent partial reads.
-# Renamed from koan/epic_state.py: all "epic" terminology replaced with "run".
 
 from __future__ import annotations
 

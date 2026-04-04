@@ -1,5 +1,4 @@
 # Subagent manager -- spawn, monitor, and cleanup subagent processes.
-# Replaces the T6 stub in driver.py with a complete lifecycle implementation.
 
 from __future__ import annotations
 

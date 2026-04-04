@@ -1,10 +1,9 @@
-# Brief-writer phase -- 2-step workflow (collapsed from 3).
+# Brief-writer phase -- 2-step workflow.
 #
 #   Step 1 (Read)   -- read landscape.md; build mental model; no writes
 #   Step 2 (Draft)  -- write brief.md; artifact available in panel
 #
-# Review gate removed (D1): step 2 completes unconditionally.
-# SCOPE="legacy": part of the old epic pipeline, not used by any active workflow.
+# SCOPE="legacy": not used by any active workflow.
 
 from __future__ import annotations
 

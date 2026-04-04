@@ -1,5 +1,4 @@
 # Step prompt assembly -- formats StepGuidance into the string returned to the LLM.
-# Python port of src/planner/lib/step.ts formatStep().
 
 from __future__ import annotations
 

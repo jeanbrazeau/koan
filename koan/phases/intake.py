@@ -4,8 +4,8 @@
 #   Step 2 (Deepen)   -- process scout results, verify, deepen through dialogue
 #   Step 3 (Write)    -- write landscape.md
 #
-# Review gate removed (D1): step 3 completes unconditionally.
-# Prompt injection model (D8): workflow scope framing appears at top of step 1.
+# Step 3 completes unconditionally -- no review gate.
+# Workflow scope framing (phase_instructions) appears at the top of step 1 guidance.
 
 from __future__ import annotations
 
@@ -98,7 +98,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
         project_dir = ctx.project_dir or ""
         lines = []
 
-        # Workflow scope framing appears at the top if injected (D8)
+        # Workflow scope framing (phase_instructions) appears at the top of step 1
         if ctx.phase_instructions:
             lines.extend([
                 "## Workflow Context",
