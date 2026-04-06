@@ -1,7 +1,13 @@
 .sb {
   background: var(--color-navy);
-  padding: var(--padding-scout-bar);
   flex-shrink: 0;
+}
+
+.sb-inner {
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+  padding: var(--padding-scout-bar);
 }
 
 /* ---- Summary line ---- */

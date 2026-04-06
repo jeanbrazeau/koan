@@ -43,6 +43,7 @@ export function HeaderBar({
 }: HeaderBarProps) {
   return (
     <header className="hb">
+      <div className="hb-inner">
       <div className="hb-left">
         <div className="hb-logo">
           <LogoMark />
@@ -70,6 +71,7 @@ export function HeaderBar({
         >
           <GearIcon />
         </button>
+      </div>
       </div>
     </header>
   )

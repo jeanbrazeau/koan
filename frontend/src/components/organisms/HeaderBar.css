@@ -1,11 +1,18 @@
 .hb {
   background: var(--color-navy);
   height: var(--header-height);
+  flex-shrink: 0;
+}
+
+.hb-inner {
+  max-width: 1400px;
+  margin: 0 auto;
+  width: 100%;
+  height: 100%;
   padding: 0 24px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  flex-shrink: 0;
 }
 
 /* ---- Left group ---- */

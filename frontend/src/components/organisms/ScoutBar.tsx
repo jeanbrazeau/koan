@@ -36,6 +36,7 @@ export function ScoutBar({ scouts }: ScoutBarProps) {
 
   return (
     <div className="sb">
+      <div className="sb-inner">
       {/* Summary line */}
       <div className="sb-summary">
         <div className="sb-summary-left">
@@ -67,6 +68,7 @@ export function ScoutBar({ scouts }: ScoutBarProps) {
         {scouts.map((s, i) => (
           <ScoutRow key={i} {...s} />
         ))}
+      </div>
       </div>
     </div>
   )
