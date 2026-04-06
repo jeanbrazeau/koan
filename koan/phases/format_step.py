@@ -1,4 +1,11 @@
-# Step prompt assembly -- formats StepGuidance into the string returned to the LLM.
+# Step prompt assembly -- formats StepGuidance into strings returned to the LLM.
+#
+# format_step()          -- normal step guidance with WHEN DONE footer
+# format_phase_complete() -- non-blocking response when a phase ends; instructs
+#                            the orchestrator to summarize and call koan_yield
+# format_user_messages()  -- formats buffered user messages for inclusion in
+#                            koan_yield's tool result
+# format_steering_messages() -- formats steering queue for inline delivery
 
 from __future__ import annotations
 
@@ -56,52 +63,55 @@ def format_steering_messages(messages: list[Any]) -> str:
     )
 
 
-def format_phase_boundary(
+def format_phase_complete(
     phase: str,
-    messages: list[Any],
-    suggested: list[str],
-    phase_descriptions: dict[str, str] | None = None,
+    suggested_phases: list[str],
+    descriptions: dict[str, str] | None = None,
 ) -> str:
-    """Format a phase-boundary response with user messages and suggested next phases.
+    """Non-blocking response when a phase completes.
 
-    If suggested is empty (stub workflow), renders a graceful end-of-workflow message
-    instead of an empty phases section.
+    Tells the orchestrator to summarize its work and call koan_yield with
+    structured suggestions. Does not block — koan_yield handles blocking.
+
+    Args:
+        phase: The phase that just completed (e.g. "intake").
+        suggested_phases: Ordered list of suggested next phase IDs from the workflow.
+        descriptions: Phase descriptions from the workflow definition.
     """
     title = f"Phase Complete: {phase}"
     lines = [title, "=" * len(title), ""]
 
-    if messages:
-        lines.append("## User Message(s)")
-        lines.append("")
-        for msg in messages:
-            ts = datetime.fromtimestamp(msg.timestamp_ms / 1000, tz=timezone.utc)
-            ts_str = ts.strftime("%H:%M:%S UTC")
-            lines.append(f"**[{ts_str}]** {msg.content}")
-        lines.append("")
+    lines.append("Summarize what was accomplished in this phase.")
+    lines.append("")
 
-    if suggested:
-        descs = phase_descriptions or {}
-        lines.append("## Suggested Next Phases")
+    descs = descriptions or {}
+
+    if suggested_phases:
+        lines.append("Then call `koan_yield` with suggestions for the user.")
+        lines.append("Available phases:")
         lines.append("")
-        for s in suggested:
-            desc = descs.get(s, "")
+        for p in suggested_phases:
+            desc = descs.get(p, "")
             if desc:
-                lines.append(f"- **{s}** \u2014 {desc}")
+                lines.append(f"- **{p}** — {desc}")
             else:
-                lines.append(f"- **{s}**")
+                lines.append(f"- **{p}**")
         lines.append("")
-        lines.append("## Instructions")
+        lines.append("For each suggestion, provide:")
+        lines.append("- id: the phase name (e.g. \"plan-spec\")")
+        lines.append("- label: a short action label (e.g. \"Write implementation plan\")")
+        lines.append("- command: a task-specific sentence capturing what would be done")
+        lines.append("  (e.g. \"write dashboard redesign implementation plan\")")
         lines.append("")
-        lines.append("Briefly summarize what was accomplished in this phase. Present the")
-        lines.append("suggested phases above to the user, explaining what each one does.")
-        lines.append("Ask which direction they would like to go. The user can also request")
-        lines.append("any other phase available in this workflow.")
-        lines.append("Once confirmed, call `koan_set_phase` then `koan_complete_step`.")
+        lines.append("Always include a suggestion with id \"done\", label \"End workflow\",")
+        lines.append("and a brief farewell command summarising what was accomplished.")
     else:
-        lines.append("## Workflow Stub")
-        lines.append("")
-        lines.append("This workflow does not have further phases implemented yet.")
-        lines.append("Summarize what was accomplished in intake and let the user know")
-        lines.append("the workflow will end here for now.")
+        lines.append("This workflow has no further phases. Call `koan_yield` with a single")
+        lines.append("suggestion: id \"done\", label \"End workflow\", command describing")
+        lines.append("what was accomplished. Let the user know the workflow ends here.")
+
+    lines.append("")
+    lines.append("WHEN DONE: Call koan_yield with your suggestions.")
+    lines.append("Do NOT call koan_set_phase yet — wait for the user's response.")
 
     return "\n".join(lines)

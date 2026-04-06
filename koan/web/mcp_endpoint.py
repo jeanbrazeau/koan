@@ -3,9 +3,22 @@
 # Exposes build_mcp_asgi_app() which returns an ASGI sub-app that:
 #   1. Validates agent_id from query params before reaching fastmcp.
 #   2. Runs check_permission() on every tool call.
-#   3. Implements koan_complete_step, koan_request_scouts,
+#   3. Implements koan_complete_step, koan_yield, koan_request_scouts,
 #      koan_ask_question, koan_set_phase, koan_request_executor,
 #      and story management tools.
+#
+# Phase boundary flow:
+#   koan_complete_step (last step) → format_phase_complete (non-blocking)
+#   → orchestrator calls koan_yield(suggestions=[...])
+#   → blocks on AppState.yield_future until POST /api/chat resolves it
+#   → orchestrator converses, then calls koan_set_phase(phase) or koan_set_phase("done")
+#
+# koan_yield is phase-agnostic — it works wherever the orchestrator needs to
+# pause for user input, not only at phase boundaries.
+#
+# koan_set_phase("done") is a tombstone: sets AppState.workflow_done = True,
+# emits workflow_completed, and causes the next koan_complete_step to return
+# an exit signal so the orchestrator process terminates cleanly.
 
 from __future__ import annotations
 
@@ -34,7 +47,7 @@ from ..lib.permissions import check_permission
 from ..lib.workflows import get_suggested_phases, is_valid_transition as wf_is_valid
 from ..logger import get_logger
 from ..phases import PHASE_GUIDANCE_MAP, PhaseContext, StepGuidance
-from ..phases.format_step import format_phase_boundary, format_steering_messages, format_step
+from ..phases.format_step import format_phase_complete, format_steering_messages, format_step, format_user_messages
 from .interactions import activate_next_interaction, enqueue_interaction
 
 if TYPE_CHECKING:
@@ -269,53 +282,6 @@ async def _step_within_phase(
     return result
 
 
-async def _step_phase_boundary(
-    agent: AgentState,
-    phase_module: object,
-    ctx: PhaseContext,
-) -> str:
-    """Handle phase boundary: flush conversation, block for user message, return boundary response."""
-    assert _app_state is not None
-    from ..state import drain_steering_messages, drain_user_messages
-
-    # Flush pending text/thinking in the projection
-    from ..events import build_step_advanced
-    _app_state.projection_store.push_event(
-        "agent_step_advanced",
-        build_step_advanced(agent.step, "", total_steps=phase_module.TOTAL_STEPS),
-        agent_id=agent.agent_id,
-    )
-
-    # Scan for new artifacts so they appear before the user is asked to respond
-    from ..driver import _push_artifact_diff
-    _push_artifact_diff(_app_state)
-
-    # Let the frontend know we're waiting for user input at phase boundary
-    _app_state.projection_store.push_event(
-        "phase_boundary_reached",
-        {"phase": _app_state.phase, "message": f"{_app_state.phase.replace('-', ' ').title()} is complete. Send a message to continue."},
-        agent_id=agent.agent_id,
-    )
-
-    # Check for already-buffered messages
-    messages = drain_user_messages(_app_state) + drain_steering_messages(_app_state)
-
-    if not messages:
-        # No messages yet — create Future and block until POST /api/chat resolves it
-        loop = asyncio.get_running_loop()
-        future = loop.create_future()
-        _app_state.phase_complete_future = future
-
-        await future  # yields to event loop; POST /api/chat will set_result(True)
-
-        _app_state.phase_complete_future = None
-        messages = drain_user_messages(_app_state)
-
-    # Use workflow's suggested transitions and phase descriptions
-    workflow = _app_state.workflow
-    suggested = get_suggested_phases(workflow, _app_state.phase) if workflow else []
-    descs = workflow.phase_descriptions if workflow else {}
-    return format_phase_boundary(_app_state.phase, messages, suggested, descs)
 
 
 # -- koan_complete_step -------------------------------------------------------
@@ -330,6 +296,11 @@ async def koan_complete_step(thoughts: str = "") -> str:
     result_str: str | None = None
     try:
         agent.handshake_observed = True
+
+        # workflow_done tombstone — orchestrator called koan_set_phase("done") earlier
+        if _app_state is not None and _app_state.workflow_done:
+            result_str = "All phases complete. You may now exit."
+            return result_str
 
         # Step 0: phase handshake (initial call or post-koan_set_phase)
         if agent.step == 0:
@@ -356,8 +327,19 @@ async def koan_complete_step(thoughts: str = "") -> str:
                 # Non-primary agents (scouts) are done — signal completion
                 result_str = "All steps complete. You may now exit."
                 return result_str
-            # Phase boundary — block for user input
-            result_str = await _step_phase_boundary(agent, phase_module, ctx)
+            # Phase complete — flush conversation and return non-blocking instructions
+            from ..events import build_step_advanced
+            _app_state.projection_store.push_event(
+                "agent_step_advanced",
+                build_step_advanced(agent.step, "", total_steps=phase_module.TOTAL_STEPS),
+                agent_id=agent.agent_id,
+            )
+            from ..driver import _push_artifact_diff
+            _push_artifact_diff(_app_state)
+            workflow = _app_state.workflow
+            suggested = get_suggested_phases(workflow, _app_state.phase) if workflow else []
+            descs = workflow.phase_descriptions if workflow else {}
+            result_str = format_phase_complete(_app_state.phase, suggested, descs)
             result_str = _drain_and_append_steering(result_str, agent)
             return result_str
 
@@ -368,6 +350,73 @@ async def koan_complete_step(thoughts: str = "") -> str:
 
     finally:
         end_tool_call(agent, call_id, "koan_complete_step", result_str)
+
+
+# -- koan_yield ---------------------------------------------------------------
+
+@mcp.tool(name="koan_yield")
+async def koan_yield(
+    summary: str = "",
+    suggestions: list[dict] | None = None,
+) -> str:
+    """Yield to the user for open-ended conversation.
+
+    Blocks until the user sends a message. The message is returned as
+    the tool result. Call this in a loop for multi-turn conversation.
+
+    Optionally provide suggestions — the UI renders them as clickable
+    pills that pre-fill the chat input. The user still has to press Send.
+
+    Each dict in suggestions should have:
+      - id (str): machine key (e.g. "plan-spec", "done")
+      - label (str): display text shown on the pill (e.g. "Write implementation plan")
+      - command (str): text pre-filled in chat input when the pill is clicked
+
+    Args:
+        summary: Brief context about what the agent is waiting for (unused by
+                 the driver; passed for logging/tooling purposes).
+        suggestions: Clickable options shown in the UI above the chat input.
+    """
+    agent = _get_agent()
+    _check_or_raise(agent, "koan_yield", {"summary": summary, "suggestions": suggestions})
+
+    call_id = begin_tool_call(
+        agent, "koan_yield", {"summary": summary},
+        f"{len(suggestions or [])} suggestion(s)",
+    )
+    result_str: str | None = None
+    try:
+        assert _app_state is not None
+        from ..state import drain_user_messages, drain_steering_messages
+
+        # Emit yield_started — renders YieldEntry in the conversation stream and
+        # sets run.active_yield so the UI pins pills above the chat input.
+        from ..events import build_yield_started
+        _app_state.projection_store.push_event(
+            "yield_started",
+            build_yield_started(suggestions or []),
+            agent_id=agent.agent_id,
+        )
+
+        # Check for already-buffered messages (user typed before we yielded)
+        messages = drain_user_messages(_app_state) + drain_steering_messages(_app_state)
+
+        if not messages:
+            loop = asyncio.get_running_loop()
+            future = loop.create_future()
+            _app_state.yield_future = future
+
+            await future  # yields to event loop; POST /api/chat resolves it
+
+            _app_state.yield_future = None
+            messages = drain_user_messages(_app_state)
+
+        result_str = format_user_messages(messages) if messages else "No message received."
+        result_str = _drain_and_append_steering(result_str, agent)
+        return result_str
+    finally:
+        end_tool_call(agent, call_id, "koan_yield", result_str)
+
 
 
 # -- koan_set_phase -----------------------------------------------------------
@@ -399,6 +448,19 @@ async def koan_set_phase(phase: str) -> str:
 
         current = _app_state.phase
         workflow = _app_state.workflow
+
+        # "done" tombstone — cleanly ends the workflow without a phase transition
+        if phase == "done":
+            _app_state.workflow_done = True
+            _app_state.projection_store.push_event("yield_cleared", {})
+            _app_state.projection_store.push_event("workflow_completed", {
+                "success": True,
+                "phase": current,
+                "summary": f"Workflow completed from phase '{current}'",
+            })
+            result_str = "Workflow complete. Call koan_complete_step to finish."
+            result_str = _drain_and_append_steering(result_str, agent)
+            return result_str
 
         # Validate transition using workflow membership check
         if workflow is None or not wf_is_valid(workflow, current, phase):
@@ -434,6 +496,8 @@ async def koan_set_phase(phase: str) -> str:
             {"phase": phase},
             agent_id=agent.agent_id,
         )
+        # Clear any active yield now that a phase transition is committed
+        _app_state.projection_store.push_event("yield_cleared", {})
 
         # Emit a step-advanced event (step=0) as visual phase-transition marker in the feed
         phase_label = phase.replace("-", " ").title()
