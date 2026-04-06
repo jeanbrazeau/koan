@@ -218,9 +218,41 @@ Table columns: status dot (20px col, 6px dot in status color), name (flex, `--fo
 
 White card (`--bg-card`), `--radius-xl`, `1.5px solid --border-input` (this is intentionally darker than card borders for definition). Padding `--padding-input`. Placeholder text in `--text-placeholder`. Below: hint text in `--text-hint` at 11px left-aligned, and a "Send" button right-aligned with `--color-orange` background, white text, `--radius-md`, padding 5px 16px, 13px/500.
 
+### User bubble
+
+The user's own messages in the content stream. Visually distinct from agent prose (orange border) via a gray left border. Background `--bg-card`, `--radius-xl`, `0.5px solid --border-card`, `border-left: 3px solid --text-muted`. Padding: `--padding-card`. Text: `--type-prose` in `--text-primary`, line-height 1.7. Optional timestamp below in `--type-timestamp` / `--text-muted`.
+
+Props: `children: ReactNode`, `timestamp?: string`.
+
+### Phase boundary
+
+Visual separator between workflow phases. A centered label between two horizontal lines. Container: flex, align-items center, gap 12px, padding 20px 0. Lines: flex 1, height 1px, background `--border-divider`. Label: `--type-label`, `--text-muted`, uppercase, letter-spacing 1px, font-weight 500, white-space nowrap.
+
+Props: `label: string`.
+
+### Step header
+
+Step indicator at the top of each step's content stream. Shows "step N/M" in accent color followed by the step name. Container: flex, align-items center, gap 10px. Step label: `--type-step-indicator` (14px), font-weight 500. Active steps: `--color-orange`. Completed steps: `--color-teal`. Step name: `--type-step-header` (16px), font-weight 500, `--text-primary`.
+
+Props: `stepNumber: number`, `totalSteps: number`, `stepName: string`, `status?: 'active' | 'complete'`.
+
 ### Completion banner
 
-Background `--bg-completion`, `--radius-xl`, padding 14px, text centered in `--text-completion` at 14px.
+Phase completion message. Success variant: background `--bg-completion`, `--radius-xl`, padding 14px, text centered in `--text-completion` at `--type-body`. Error variant: background `--bg-base`, `--status-failed` text and 1px border.
+
+Props: `children: ReactNode`, `variant?: 'success' | 'error'`.
+
+### Steering bar
+
+Queued steering messages from the user, shown above the FeedbackInput. Container: background `--bg-selected`, `border-left: 3px solid --color-orange`, `border-radius: 0 --radius-md --radius-md 0`, margin 8px 0. Header: "steering" label in `--font-mono`, `--type-label`, `--color-orange`. Each message: "queued" badge in `--type-label` / `--text-muted`, content in `--type-breadcrumb` / `--text-body`. Returns null when no messages.
+
+Props: `messages: string[]`.
+
+### Checkbox option card
+
+Multi-select variant of the radio option card. Structurally identical to RadioOption but with a square checkbox (18px, `--radius-sm`, `2px solid --border-input`). When selected: border `--color-orange`, filled with `--color-orange`, white checkmark SVG inside. All other styling matches RadioOption.
+
+Props: same as RadioOption (`label`, `selected`, `recommended`, `isCustom`, `customText`, `onCustomTextChange`, `onClick`).
 
 ### Form cards (New Run page)
 
@@ -232,7 +264,13 @@ Two cards side by side in a 2-column grid with 12px gap. The selected card has `
 
 ### Elicitation panels (Deepen view)
 
-Two-panel 1fr/1fr grid with 20px gap. Each panel is a white card (`--bg-card`) with `--radius-2xl` and `0.5px solid --border-card`. The Context panel has a 3px `--color-teal` top border. The Decision panel has a 3px `--color-orange` top border. Panel labels use the respective accent color for text.
+Two-panel 1fr/1fr grid with 20px gap (single column when no context). Each panel is a white card (`--bg-card`) with `--radius-2xl` and `0.5px solid --border-card`. The Context panel (optional) has a 3px `--color-teal` top border. The Decision panel has a 3px `--color-orange` top border. Panel labels use the respective accent color for text.
+
+Supports three modes: `single-select` (RadioOption), `multi-select` (CheckboxOption with "Select all that apply" hint), and `free-text` (textarea only). Supports multi-question pagination with a "N / M" counter and Previous/Next buttons. Error messages displayed below options in `--status-failed`.
+
+The NewRunForm organism is self-contained: it reads profiles and installations directly from the Zustand store, manages all form state internally, and calls the API to start a run. No props required.
+
+Agent installation rows: each row has a runner chip (background `--bg-thinking` lavender, `--radius-md`, padding 6px 12px, runner name in `--font-mono` 13px/500 `--text-thinking`, StatusDot sm) followed by an installation `<select>` dropdown (same styling as profile select but at 13px). Multiple rows stack with 10px gap.
 
 ### Radio option cards (Deepen view)
 
@@ -245,6 +283,27 @@ When `isCustom` is true and selected, a text input appears below the label (8px 
 Primary: `--color-orange` background, white text, `--radius-lg` (8px for larger buttons, 6px for small), 13-15px/500. Used for "Start Run", "Next", "Send".
 
 Secondary/outline: `1.5px solid --border-input`, `--text-subtle`, `--radius-lg`. Used for "Use Defaults".
+
+## Content Stream Rendering
+
+The content stream maps each conversation event type to a molecule:
+
+| Event type | Molecule | Notes |
+|---|---|---|
+| `thinking` | ThinkingBlock + Md | Collapsible, lavender background |
+| `text` | ProseCard + Md | Orange left border, white card |
+| `tool_read/write/edit` | ToolCallRow | status from `inFlight` flag |
+| `tool_bash/grep/ls` | ToolCallRow | status from `inFlight` flag |
+| `tool_generic` | ToolCallRow | uses `toolName` + `summary` |
+| `step` | StepHeader | orange (active) or teal (complete) |
+| `debug_step_guidance` | StepGuidancePill + Md | collapsed by default |
+| `user_message` | UserBubble + Md | gray left border, with timestamp |
+| `phase_boundary` | PhaseBoundary | centered label between lines |
+| `pendingThinking` | ThinkingBlock (always expanded) | live streaming |
+| `pendingText` | ProseCard + Md + streaming cursor | pulsing cursor animation |
+| steering messages | SteeringBar | orange accent bar with queued badges |
+
+The FeedbackInput molecule sits at the bottom of the stream, above any SteeringBar messages.
 
 ## Layout
 
@@ -279,3 +338,9 @@ The geometric mark is two overlapping circles. The larger circle (16px diameter)
 The wordmark "koan" is set in `--font-display` (serif) at 17px/500, colored `--text-on-dark` when on navy, or `--text-primary` when on light backgrounds. Letter-spacing: -0.3px.
 
 The mark and wordmark are separated by 8px. On the header bar, a 1px vertical divider at `--text-on-dark-faint` separates the logo group from the navigation breadcrumb with 16px gap on each side.
+
+## Deferred Items
+
+- **SettingsOverlay redesign** — currently uses migrated tokens from the old design system. Functional but not visually redesigned. Deferred to a future pass.
+- **Thinking/waiting indicators** — the pulsing dot and "Thinking…" / "Starting agent…" indicators use inline CSS classes in app-shell.css rather than standalone molecules. Functional but could be promoted to atoms in a future pass.
+- **Streaming cursor** — the blinking orange cursor during text streaming uses an inline CSS class. Could become an atom.
