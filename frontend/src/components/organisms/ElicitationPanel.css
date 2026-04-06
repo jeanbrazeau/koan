@@ -7,8 +7,22 @@
 
 .ep-grid {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: 2fr 3fr;
   gap: 20px;
+}
+
+.ep-grid > * {
+  min-width: 0;
+}
+
+/* Stack vertically when content column is narrow */
+@container (max-width: 700px) {
+  .ep-grid { grid-template-columns: 1fr; }
+}
+
+/* Fallback for browsers without container queries */
+@media (max-width: 960px) {
+  .ep-grid { grid-template-columns: 1fr; }
 }
 
 /* ---- Panels ---- */
@@ -64,6 +78,12 @@
 
 .ep-panel-body li {
   margin: 2px 0;
+}
+
+.ep-panel-body pre {
+  max-width: 100%;
+  overflow-x: auto;
+  white-space: pre;
 }
 
 /* ---- Question ---- */
