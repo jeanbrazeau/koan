@@ -22,6 +22,8 @@ import jsonpatch
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.alias_generators import to_camel
 
+from .lib.workflows import WORKFLOWS
+
 log = logging.getLogger("koan.projections")
 
 # ---------------------------------------------------------------------------
@@ -336,10 +338,16 @@ class Notification(KoanBaseModel):
 class SteeringMessage(KoanBaseModel):
     content: str
 
+class PhaseInfo(KoanBaseModel):
+    """A phase the user can transition to, as shown in the command palette."""
+    id: str                                # phase key (e.g. "plan-spec")
+    description: str                       # one-line description from the workflow
+
 class Run(KoanBaseModel):
     config: RunConfig
     phase: str = ""
     workflow: str = ""    # active workflow name
+    available_phases: list[PhaseInfo] = []  # populated on workflow_selected; drives the / command palette
     agents: dict[str, Agent] = {}          # all agents by ID — queued, running, done, failed
     focus: Focus | None = None             # None before first agent spawns
     artifacts: dict[str, ArtifactInfo] = {}
@@ -467,7 +475,18 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                 if projection.run is None:
                     log.warning("fold workflow_selected: run is None, skipping")
                     return projection
-                new_run = projection.run.model_copy(update={"workflow": payload.get("workflow", "")})
+                workflow_name = payload.get("workflow", "")
+                workflow = WORKFLOWS.get(workflow_name)
+                available_phases: list[PhaseInfo] = []
+                if workflow is not None:
+                    available_phases = [
+                        PhaseInfo(id=p, description=workflow.phase_descriptions.get(p, ""))
+                        for p in workflow.available_phases
+                    ]
+                new_run = projection.run.model_copy(update={
+                    "workflow": workflow_name,
+                    "available_phases": available_phases,
+                })
                 return projection.model_copy(update={"run": new_run})
 
             case "phase_started":

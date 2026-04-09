@@ -127,17 +127,32 @@ export interface SteeringMessage {
   content: string
 }
 
+export interface Suggestion {
+  id: string
+  label: string
+  command: string
+}
+
+export interface ActiveYield {
+  suggestions: Suggestion[]
+}
+
+export interface PhaseInfo {
+  id: string
+  description: string
+}
+
 export interface Run {
   config: RunConfig
   phase: string
   workflow: string    // active workflow name
+  availablePhases: PhaseInfo[]  // populated on workflow_selected; drives the / command palette
   agents: Record<string, Agent>
   focus: Focus | null
   artifacts: Record<string, ArtifactInfo>
   completion: CompletionInfo | null
   steering: SteeringMessage[]
-  isYielded: boolean
-  availablePhases: { id: string; description: string }[]
+  activeYield: ActiveYield | null  // non-null while orchestrator is blocked in koan_yield
 }
 
 // -- Store --------------------------------------------------------------------

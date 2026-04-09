@@ -219,7 +219,7 @@ function ContentStream() {
             <FeedbackInput
               onSend={msg => api.sendChatMessage(msg)}
               disabled={!!run?.completion}
-              availableCommands={run?.isYielded ? run.availablePhases : undefined}
+              availableCommands={run?.activeYield ? run.availablePhases : undefined}
               onPaletteToggle={setPaletteOpen}
             />
           </>
