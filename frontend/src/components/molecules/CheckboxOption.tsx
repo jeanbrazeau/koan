@@ -4,7 +4,6 @@
  * Used in: elicitation decision panels (multi-select mode).
  */
 import { useEffect, useRef } from 'react'
-import { Badge } from '../atoms/Badge'
 import './CheckboxOption.css'
 
 interface CheckboxOptionProps {
@@ -31,7 +30,7 @@ export function CheckboxOption({ label, selected, recommended, isCustom, customT
 
   return (
     <div
-      className={`co${selected ? ' co--selected' : ''}${isCustom ? ' co--custom' : ''}`}
+      className={`co${selected ? ' co--selected' : ''}${recommended ? ' co--recommended' : ''}${isCustom ? ' co--custom' : ''}`}
       onClick={onClick}
       role="checkbox"
       aria-checked={selected}
@@ -42,7 +41,6 @@ export function CheckboxOption({ label, selected, recommended, isCustom, customT
       <span className="co-content">
         <span className="co-label-row">
           <span className="co-label">{label}</span>
-          {recommended && <Badge variant="success">recommended</Badge>}
         </span>
         {isCustom && selected && (
           <input

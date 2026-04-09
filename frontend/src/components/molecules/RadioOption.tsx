@@ -9,7 +9,6 @@
  */
 
 import { useEffect, useRef } from 'react'
-import { Badge } from '../atoms/Badge'
 import './RadioOption.css'
 
 interface RadioOptionProps {
@@ -31,7 +30,7 @@ export function RadioOption({ label, selected, recommended, isCustom, customText
 
   return (
     <div
-      className={`ro${selected ? ' ro--selected' : ''}${isCustom ? ' ro--custom' : ''}`}
+      className={`ro${selected ? ' ro--selected' : ''}${recommended ? ' ro--recommended' : ''}${isCustom ? ' ro--custom' : ''}`}
       onClick={onClick}
       role="radio"
       aria-checked={selected}
@@ -42,7 +41,6 @@ export function RadioOption({ label, selected, recommended, isCustom, customText
       <span className="ro-content">
         <span className="ro-label-row">
           <span className="ro-label">{label}</span>
-          {recommended && <Badge variant="success">recommended</Badge>}
         </span>
         {isCustom && selected && (
           <input

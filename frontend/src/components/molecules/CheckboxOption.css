@@ -14,6 +14,15 @@
   background: var(--bg-selected);
 }
 
+.co--recommended {
+  border-left: 3px solid var(--color-orange);
+  background: var(--bg-selected);
+}
+
+.co--recommended.co--selected {
+  border-left-width: 1.5px;
+}
+
 .co-box {
   width: 18px;
   height: 18px;

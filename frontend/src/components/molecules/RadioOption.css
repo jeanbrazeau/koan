@@ -14,6 +14,15 @@
   background: var(--bg-selected);
 }
 
+.ro--recommended {
+  border-left: 3px solid var(--color-orange);
+  background: var(--bg-selected);
+}
+
+.ro--recommended.ro--selected {
+  border-left-width: 1.5px;
+}
+
 /* ---- Radio circle ---- */
 .ro-circle {
   width: 18px;
