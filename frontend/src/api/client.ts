@@ -157,3 +157,21 @@ export async function getArtifactContent(
 ): Promise<{ content: string; displayPath: string }> {
   return get(`/api/artifacts/${encodeURIComponent(path)}`)
 }
+
+// -- Sessions ----------------------------------------------------------------
+
+export interface Session {
+  run_id: string
+  task: string
+  workflow: string
+  created_at: number
+  project_dir: string
+}
+
+export async function listSessions(): Promise<{ sessions: Session[] }> {
+  return get('/api/sessions')
+}
+
+export async function deleteSession(run_id: string): Promise<{ ok: boolean; error?: string; message?: string }> {
+  return del(`/api/sessions/${encodeURIComponent(run_id)}`)
+}

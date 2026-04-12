@@ -49,6 +49,7 @@ import { Notification } from './components/Notification'
 // import { SettingsOverlay } from './components/SettingsOverlay'
 import { SettingsPage, type Profile as SPProfile, type Installation as SPInstallation } from './components/organisms/SettingsPage'
 import { ReviewPanel, type ReviewSubmitPayload } from './components/organisms/ReviewPanel'
+import { SessionsPage } from './components/organisms/SessionsPage'
 
 // ---------------------------------------------------------------------------
 // Header data
@@ -705,7 +706,7 @@ export default function App() {
         {page === 'new-run' && <div className="single-column"><NewRunForm /></div>}
         {page === 'sessions' && (
           <div className="single-column">
-            <div className="loading-center">Sessions — coming soon</div>
+            <SessionsPage />
           </div>
         )}
         {page === 'settings' && <ConnectedSettingsPage />}
