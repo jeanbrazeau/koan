@@ -3,7 +3,8 @@
  *
  * Shows a colored icon square, filename (truncated), and a
  * last-modified timestamp. "recent" files get a navy icon,
- * "stable" files get a teal icon.
+ * "stable" files get a teal icon. Clickable when onClick is
+ * provided; highlights when `active`.
  *
  * Used in: artifacts sidebar.
  */
@@ -14,6 +15,8 @@ interface ArtifactCardProps {
   filename: string
   modifiedAgo: string
   variant?: 'recent' | 'stable'
+  active?: boolean
+  onClick?: () => void
 }
 
 const FileIcon = ({ stroke }: { stroke: string }) => (
@@ -23,9 +26,10 @@ const FileIcon = ({ stroke }: { stroke: string }) => (
   </svg>
 )
 
-export function ArtifactCard({ filename, modifiedAgo, variant = 'recent' }: ArtifactCardProps) {
+export function ArtifactCard({ filename, modifiedAgo, variant = 'recent', active, onClick }: ArtifactCardProps) {
+  const cls = `ac${onClick ? ' ac--clickable' : ''}${active ? ' ac--active' : ''}`
   return (
-    <div className="ac">
+    <div className={cls} onClick={onClick} role={onClick ? 'button' : undefined} tabIndex={onClick ? 0 : undefined}>
       <span className={`ac-icon ac-icon--${variant}`}>
         <FileIcon stroke={variant === 'recent' ? '#b8b0d0' : '#d0f0e8'} />
       </span>

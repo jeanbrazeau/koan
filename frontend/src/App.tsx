@@ -82,11 +82,14 @@ function useHeaderData() {
 
 function ConnectedSidebar() {
   const artifacts = useStore(s => s.run?.artifacts ?? {})
+  const reviewingArtifact = useStore(s => s.reviewingArtifact)
+  const setReviewingArtifact = useStore(s => s.setReviewingArtifact)
   const entries = useMemo(() => {
     const now = Date.now()
     const list = Object.values(artifacts).map(a => {
       const mins = Math.floor((now - a.modifiedAt) / 60000)
       return {
+        path: a.path,
         filename: a.path.split('/').pop() || a.path,
         modifiedAgo: mins < 1 ? 'just now' : mins < 60 ? `modified ${mins}m ago` : `modified ${Math.floor(mins / 60)}h ago`,
         variant: mins < 5 ? ('recent' as const) : ('stable' as const),
@@ -94,9 +97,12 @@ function ConnectedSidebar() {
       }
     })
     list.sort((a, b) => b._ts - a._ts)
-    return list.map(({ filename, modifiedAgo, variant }) => ({ filename, modifiedAgo, variant }))
+    return list.map(({ path, filename, modifiedAgo, variant }) => ({ path, filename, modifiedAgo, variant }))
   }, [artifacts])
-  return <ArtifactsSidebarOrg artifacts={entries} />
+  const handleClick = (path: string) => {
+    setReviewingArtifact(reviewingArtifact === path ? null : path)
+  }
+  return <ArtifactsSidebarOrg artifacts={entries} activePath={reviewingArtifact} onArtifactClick={handleClick} />
 }
 
 function ConnectedScoutBar() {

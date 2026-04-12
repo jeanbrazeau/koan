@@ -173,10 +173,14 @@ interface KoanState {
   // Local draft for chat input — set by YieldPanel row selections
   chatDraft: string
 
+  // Local UI state: currently open artifact review (path or null)
+  reviewingArtifact: string | null
+
   // Actions
   setConnected: (v: boolean) => void
   setSettingsOpen: (v: boolean) => void
   setChatDraft: (text: string) => void
+  setReviewingArtifact: (path: string | null) => void
 }
 
 export const useStore = create<KoanState>((set) => ({
@@ -194,10 +198,12 @@ export const useStore = create<KoanState>((set) => ({
 
   settingsOpen: false,
   chatDraft: '',
+  reviewingArtifact: null,
 
   setConnected: (v) => set({ connected: v }),
   setSettingsOpen: (v) => set({ settingsOpen: v }),
   setChatDraft: (text) => set({ chatDraft: text }),
+  setReviewingArtifact: (path) => set({ reviewingArtifact: path }),
 }))
 
 export type KoanStore = typeof useStore

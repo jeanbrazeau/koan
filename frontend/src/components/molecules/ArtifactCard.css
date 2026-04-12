@@ -6,6 +6,23 @@
   background: var(--bg-card-warm);
   border-radius: var(--radius-lg);
   border: 0.5px solid var(--border-divider);
+  transition: background var(--duration-fast) var(--ease-default),
+              border-color var(--duration-fast) var(--ease-default),
+              outline-color var(--duration-fast) var(--ease-default);
+}
+
+.ac--clickable {
+  cursor: pointer;
+}
+
+.ac--clickable:hover {
+  background: var(--bg-selected);
+}
+
+.ac--active {
+  background: var(--bg-selected);
+  outline: 0.5px solid var(--color-orange);
+  outline-offset: -0.5px;
 }
 
 /* ---- Icon square ---- */
