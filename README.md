@@ -126,7 +126,7 @@ Roles map to tiers: orchestrator → strong, executor → standard, scout → ch
 - **[docs/ipc.md](./docs/ipc.md)** -- HTTP MCP inter-process communication,
   blocking tool calls
 - **[docs/state.md](./docs/state.md)** -- run state, driver state, routing
-- **[docs/intake-loop.md](./docs/intake-loop.md)** -- three-step intake design,
+- **[docs/intake-loop.md](./docs/intake-loop.md)** -- two-step intake design,
   prompt engineering principles
 - **[docs/projections.md](./docs/projections.md)** -- versioned event log,
   fold function, SSE protocol

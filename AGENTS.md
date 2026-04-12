@@ -26,7 +26,8 @@ Spoke documents:
 - [docs/subagents.md](docs/subagents.md) -- spawn lifecycle, task manifest, step-first workflow, permissions
 - [docs/ipc.md](docs/ipc.md) -- HTTP MCP tool calls, blocking interactions, scout spawning, koan_yield blocking
 - [docs/state.md](docs/state.md) -- driver/LLM boundary, run state, orchestrator state
-- [docs/intake-loop.md](docs/intake-loop.md) -- three-step intake design, prompt engineering
+- [docs/intake-loop.md](docs/intake-loop.md) -- two-step intake design, prompt engineering
+- [docs/phase-trust.md](docs/phase-trust.md) -- phase trust model, verification boundaries, adversarial review
 - [docs/projections.md](docs/projections.md) -- versioned event log, fold function, projection shape, SSE protocol, version-negotiated catch-up
 - [docs/token-streaming.md](docs/token-streaming.md) -- runner stdout parsing, SSE delta path
 

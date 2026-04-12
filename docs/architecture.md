@@ -15,7 +15,7 @@ principles, and pitfalls that govern the codebase.
   ownership, run state, orchestrator state
 - [Projections](./projections.md) -- versioned event log, pure fold, JSON Patch
   protocol, projection model, camelCase wire format
-- [Intake Loop](./intake-loop.md) -- three-step intake design, prompt engineering principles
+- [Intake Loop](./intake-loop.md) -- two-step intake design, prompt engineering principles
 
 ---
 
