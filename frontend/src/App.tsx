@@ -165,7 +165,7 @@ function renderEntry(entry: ConversationEntry, i: number) {
           key={i}
           prompt={entry.prompt || 'What would you like to do next?'}
           suggestions={entry.suggestions}
-          onSelect={s => setChatDraft(`/${s.id} `)}
+          onSelect={s => setChatDraft(s.command ? `/${s.id} ${s.command}` : `/${s.id} `)}
         />
       )
     }
