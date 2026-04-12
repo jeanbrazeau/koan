@@ -30,7 +30,16 @@ def format_step(g: StepGuidance) -> str:
 
 
 def format_user_messages(messages: list[Any]) -> str:
-    """Format a list of ChatMessage objects into a readable string block."""
+    """Wrap user chat messages in a user-voice envelope for the LLM.
+
+    The envelope is content-agnostic: whether the payload is a review
+    response, a direct reply, or an open-ended message, the framing only
+    asserts "the user said this". Behavior-specific instructions live in
+    the message body (e.g. formatReviewMessage in the frontend names the
+    review-revise-reyield loop). Do NOT add review-aware branching here:
+    handoff minimalism requires this layer to stay ignorant of what kind
+    of user message it is wrapping.
+    """
     parts = []
     for msg in messages:
         ts = datetime.fromtimestamp(msg.timestamp_ms / 1000, tz=timezone.utc)

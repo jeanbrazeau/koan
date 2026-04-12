@@ -359,23 +359,28 @@ async def koan_yield(
     summary: str = "",
     suggestions: list[dict] | None = None,
 ) -> str:
-    """Yield to the user for open-ended conversation.
+    """Yield to the user and wait for their reply.
 
-    Blocks until the user sends a message. The message is returned as
-    the tool result. Call this in a loop for multi-turn conversation.
+    Blocks until the user sends a message; returns it as the tool result.
+    This is the sole human-in-the-loop checkpoint -- call it after finishing
+    an artifact and whenever you need user direction. Call in a loop for
+    multi-turn conversation.
 
-    Optionally provide suggestions — the UI renders them as clickable
-    pills that pre-fill the chat input. The user still has to press Send.
+    REVIEW FEEDBACK LOOP: if the returned message begins with
+    "I've reviewed `<path>`", treat it as a structured review response.
+    The user has inspected the artifact you just produced. Revise the file
+    to address every inline comment and the summary (if present), then call
+    `koan_yield` again to await confirmation or further feedback. Do NOT
+    call `koan_complete_step` between review rounds; stay in the yield loop
+    until the user selects a "done"/"proceed" suggestion or steers elsewhere.
 
-    Each dict in suggestions should have:
-      - id (str): machine key (e.g. "plan-spec", "done")
-      - label (str): display text shown on the pill (e.g. "Write implementation plan")
-      - command (str): text pre-filled in chat input when the pill is clicked
+    Suggestions (optional) render as clickable pills that pre-fill the chat.
+    Each dict: id (phase name or "done"), label (short display), command
+    (pre-filled text on click).
 
     Args:
-        summary: Brief context about what the agent is waiting for (unused by
-                 the driver; passed for logging/tooling purposes).
-        suggestions: Clickable options shown in the UI above the chat input.
+        summary: Brief context about what the agent is waiting for.
+        suggestions: Pills shown above the chat input.
     """
     agent = _get_agent()
     _check_or_raise(agent, "koan_yield", {"summary": summary, "suggestions": suggestions})
