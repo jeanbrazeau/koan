@@ -6,7 +6,7 @@
 #
 # Design notes:
 #   - frozen=True prevents field reassignment after construction (mutation protection).
-#   - frozen=True does NOT make Workflow hashable — dict fields are unhashable.
+#   - frozen=True does NOT make Workflow hashable --dict fields are unhashable.
 #     Do not use Workflow as a dict key or set member.
 #   - Workflows are defined as module-level constants (PLAN_WORKFLOW, etc.).
 #   - Phase transition validation: any phase in available_phases is reachable
@@ -31,6 +31,12 @@ class Workflow:
         phase_descriptions: One-line description of each phase shown at boundaries.
         phase_guidance: Per-phase scope framing injected at the top of step 1
             guidance. Controls investigation depth, question posture, etc.
+
+            Only workflow-agnostic phases (intake, execute) need entries here.
+            These phases are reused across workflows, so the workflow injects
+            context they cannot hardcode. Workflow-specific phases (plan-spec,
+            plan-review) carry their own context -- they do not need injection
+            because they ARE the workflow.
     """
     name: str
     description: str

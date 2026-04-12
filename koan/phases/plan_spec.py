@@ -47,10 +47,10 @@ SYSTEM_PROMPT = (
     "\n"
     "## Strict rules\n"
     "\n"
-    "- MUST read the codebase files the plan references. Verify paths, signatures,\n"
-    "  and types before including them in the plan.\n"
+    "- MUST read codebase files the plan references to write precise instructions.\n"
+    "  You read to understand structure, not to re-verify intake's findings.\n"
     "- MUST NOT write code -- write instructions for an executor that will write code.\n"
-    "- MUST NOT invent file paths or function names without verifying them in the codebase.\n"
+    "- MUST NOT invent file paths or function names you have not seen in the codebase.\n"
 )
 
 
@@ -63,11 +63,16 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "",
             "## What to read",
             "",
-            "1. Review what you learned during intake \u2014 the task scope, codebase",
-            "   findings, decisions, and constraints are in your context.",
-            "2. Read every file the plan will reference. Open the actual source files",
-            "   to verify function signatures, type names, and integration points.",
-            "   Do not rely on intake memory alone \u2014 verify against the actual code.",
+            "Intake has already explored the codebase and resolved ambiguities with the",
+            "user. Trust those findings -- they are your starting point, not something",
+            "to re-investigate.",
+            "",
+            "Read the codebase files you will reference in the plan. Your goal is to",
+            "understand their structure well enough to write precise, file-level",
+            "implementation instructions. Focus on:",
+            "- Function signatures and type names you will reference in plan steps",
+            "- Integration points between files the plan will touch",
+            "- Ordering constraints (what depends on what)",
             "",
             "## What to analyze",
             "",

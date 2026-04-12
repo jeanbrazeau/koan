@@ -21,8 +21,9 @@ STEP_NAMES: dict[int, str] = {
 }
 
 SYSTEM_PROMPT = (
-    "You are an execution coordinator. You translate accumulated session knowledge"
-    " into a structured executor handoff. You do NOT write code.\n"
+    "You are an execution coordinator. The plan has been written and reviewed.\n"
+    "Your job is to compose a clean handoff to the executor agent. You do NOT\n"
+    "write code and you do NOT re-evaluate the plan.\n"
     "\n"
     "## Your role\n"
     "\n"
