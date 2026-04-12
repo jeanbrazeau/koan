@@ -27,6 +27,12 @@ The single source of truth for koan's visual design. `src/styles/variables.css` 
 | `--border-danger` | `#e8c8c8` | Danger button borders, destructive confirmation card borders. |
 | `--border-teal`   | `#b8d8cc` | Teal-accented button borders (Detect, Explore actions).       |
 
+### Interactive colors
+
+| Token                  | Hex       | Usage                                                                    |
+| ---------------------- | --------- | ------------------------------------------------------------------------ |
+| `--color-orange-hover` | `#c06a4f` | Hover state for orange interactive elements (ReviewBlock gutter button). |
+
 ### Component gaps
 
 | Token                 | Value | Usage                                                                |
@@ -218,6 +224,76 @@ Description: `--font-body`, `--type-breadcrumb` (13px), `--text-muted`.
 
 Props: `name: string`, `description: string`.
 
+#### ReviewEvent
+
+An event divider rendered in the content stream when the user submits an artifact review. Uses the same dot-on-divider pattern as PhaseMarker, but with an orange dot (user action) instead of teal (system event).
+
+Container: `padding: 20px 0`, `position: relative`. Same layout structure as PhaseMarker.
+
+Horizontal rule: identical to PhaseMarker (`position: absolute`, full width, `1px`, `--border-divider`).
+
+Content overlay: `position: relative`, `display: flex`, `align-items: center`, `gap: 10px`, `background: var(--bg-base)`, `padding-right: 16px`.
+
+Orange dot: 10px diameter, `background: var(--color-orange)`, `var(--radius-circle)`, `flex-shrink: 0`.
+
+"Review:" label: `--type-label` (11px), `text-transform: uppercase`, `letter-spacing: 1px`, font-weight 500, `--text-muted`.
+
+File name: `--font-mono`, `--type-breadcrumb` (13px), font-weight 500, `--color-orange`.
+
+Separator: "·" in `--text-muted`.
+
+Summary: `--font-body`, `--type-breadcrumb` (13px), `--text-muted`. Shows comment count (e.g., "2 comments submitted").
+
+Props: `path: string`, `commentCount: number`.
+
+#### ReviewBlock
+
+A wrapper around a single rendered markdown block (paragraph, heading, list, code block) inside the ReviewPanel organism. The entire block is a click target for opening a comment input. A small "+" button in the left gutter appears on hover as a visual hint.
+
+Container: `display: flex`, `align-items: center`, `gap: 10px`, `padding: 4px 12px`, `margin: 0 -12px`, `border-radius: var(--radius-lg)`, `cursor: pointer`. Transition: `background var(--duration-fast) var(--ease-default)`.
+
+Hover state: `background: var(--bg-selected)`. The gutter button becomes visible.
+
+Active state (comment input open): `background: var(--bg-selected)`, `border-left: 3px solid --color-orange`, `padding-left: 9px`, `margin-left: -15px`. The gutter button is persistently visible.
+
+Gutter button: flex child, `flex-shrink: 0`, `width: 18px`, `height: 18px`, `--radius-circle`. Background `--color-orange`, white "+" text, 12px. `opacity: 0` by default, `opacity: 1` on block hover or active state. Transition: `opacity var(--duration-fast) var(--ease-default)`. Hover: `background: var(--color-orange-hover)`. The button occupies its 18px width even when invisible (opacity: 0), keeping content indented consistently with no layout shift on hover.
+
+Content wrapper: `flex: 1`, `min-width: 0`. First child margin zeroed via `.rb-content > :first-child { margin-top: 0 }` to align content flush with the gutter button.
+
+Click behavior: clicking anywhere on the block opens the comment input. Text selection is preserved — the click handler checks `window.getSelection()` and skips if text was selected via drag. The gutter button click calls `stopPropagation` to prevent double-firing.
+
+Props: `hasComments: boolean`, `isActive: boolean`, `onClickGutter: () => void`, `children: ReactNode`.
+
+#### ReviewComment
+
+A read-only comment card displayed below its anchor ReviewBlock. Gray left accent on the white card surface (user-content convention, matching UserBubble). A delete button appears on hover.
+
+Container: `border-left: 3px solid --text-muted`, `padding: 6px 12px`, `margin-bottom: 4px`. No background (inherits `--bg-card` from ReviewPanel). Uses the gray left-border convention for user-authored content, matching UserBubble.
+
+Header row: `display: flex`, `align-items: center`, `justify-content: space-between`.
+
+Meta line: `--type-badge` (10px), `--text-muted`, `text-transform: uppercase`, `letter-spacing: 0.5px`, font-weight 500. Shows "You · just now" (timestamps are cosmetic in review context).
+
+Delete button: `×` character, 14px, `--text-muted`, `opacity: 0` by default. Appears on `.rc-comment:hover` via `opacity: 1`. On button hover: `color: --status-failed` (red). Transition: opacity and color, `--duration-fast`. Click calls `onDelete` and stops propagation to prevent ReviewBlock toggle.
+
+Comment text: `--type-breadcrumb` (13px), `line-height: 1.5`, `--text-body`.
+
+Props: `text: string`, `onDelete?: () => void`.
+
+#### ReviewCommentInput
+
+An inline comment input form that appears below a ReviewBlock when the user clicks the gutter "+" button.
+
+Container: `background: var(--bg-card)`, `border: 1.5px solid --color-orange`, `border-radius: var(--radius-lg)`, `padding: 10px 12px`, `margin: 6px 0 12px 0`. Focus ring appears only when the textarea is focused: `:focus-within` adds `box-shadow: 0 0 0 3px var(--focus-ring)`.
+
+Textarea: `--font-body`, `--type-breadcrumb` (13px), `line-height: 1.5`, `--text-body`. No border, transparent background. `min-height: 44px`, `resize: vertical`. Placeholder: `--text-placeholder`, text "Add a comment on this block...".
+
+Actions row: `display: flex`, `justify-content: flex-end`, `gap: 8px`, `margin-top: 6px`. Contains Cancel (Button secondary `xs`) and Add comment (Button primary `xs`).
+
+On "Add comment": the input closes, a ReviewComment card appears in its place, and the block's `hasComment` state becomes true (orange dot indicator visible).
+
+Props: `onAdd: (text: string) => void`, `onCancel: () => void`.
+
 #### FeedbackInput
 
 Text input for sending messages to the orchestrator. Sits at the bottom of the content stream.
@@ -337,7 +413,42 @@ Only the active section renders. Side nav controls which section is visible.
 - **Profiles:** EntityRows + InlineForm for create/edit + Button text trigger. All inside a section card.
 - **Agents:** TabBar for runner types + EntityRows for installations + InlineForm for create/edit. All inside a section card.
 - **Runtime:** NumberInput for scout concurrency (with heading above), then SettingRows with Toggle/Select controls. Hairline `0.5px solid --border-card` divider separates the scalar controls from the SettingRow list. All inside a section card.
+- **Workflow:** SettingRow with Toggle for "Auto-open new or changed artifacts" (default: on). Description: "Automatically open artifacts for review when they are created or modified." Additional SettingRows for future workflow preferences. Inside a section card.
 - **Preferences, Debug, About:** future sections using the same patterns.
+
+### ReviewPanel
+
+Full-width artifact review surface that takes over the content column when an artifact is opened for review. Renders a markdown document with per-block inline commenting. The ArtifactsSidebar remains visible — the user can switch between artifacts during review.
+
+**Trigger:** auto-opens when a new or modified artifact is detected (gated by the "Auto-open artifacts" setting, default: on). Also opens when the user clicks an artifact in the ArtifactsSidebar.
+
+**Yield behavior:** opening a ReviewPanel yields the conversation (same mechanism as AskQuestion). The orchestrator is blocked until the user submits or closes the review. The FeedbackInput is not rendered while ReviewPanel is active.
+
+Card container: `--bg-card`, `--radius-2xl` (12px), `0.5px solid --border-card`, `border-top: 3px solid --color-orange`. Same card treatment as ElicitationPanel decision panel.
+
+**Header:** `display: flex`, `align-items: center`, `gap: 12px`, `padding: 16px 24px`, `border-bottom: 0.5px solid --border-divider-light`.
+
+- "REVIEW" label: `--type-label` (11px), font-weight 500, uppercase, `letter-spacing: 1px`, `--color-orange`. Same treatment as SectionLabel with color="orange".
+- File path: `--font-mono`, `--type-tool-type` (12px), `--text-muted`.
+- Right side: comment count badge — `--type-badge` (10px), `--text-muted`, `padding: 2px 10px`, `background: var(--bg-tool-row)`, `--radius-pill`. Shows "N comments" or "new" badge (`--type-badge`, `--color-orange`, font-weight 500, `padding: 2px 8px`, `background: var(--bg-selected)`, `0.5px solid --color-orange`, `--radius-pill`) when the artifact has not been reviewed yet.
+
+**Body:** `padding: 20px 24px 12px 24px`. Contains a stack of ReviewBlock elements, each wrapping a rendered markdown AST node (paragraph, heading, list, code block, horizontal rule). The markdown is rendered using the existing Md component. Each top-level AST node is wrapped in a ReviewBlock.
+
+**Footer:** `border-top: 0.5px solid --border-divider-light`, `padding: 16px 24px`.
+
+- Top section: "OVERALL FEEDBACK (OPTIONAL)" label (`--type-label`, 11px, font-weight 500, uppercase, `letter-spacing: 0.5px`, `--text-muted`, `margin-bottom: 6px`). Below it, a textarea (`1.5px solid --border-input`, `--radius-lg`, `padding: 10px 14px`, `--font-body`, `--type-breadcrumb` 13px, `--text-body`, `background: var(--bg-card)`, `min-height: 52px`, `resize: vertical`). Focus: `border-color: --color-orange`, `box-shadow: 0 0 0 3px var(--focus-ring)`. Placeholder: "Summarize your review — e.g. 'Looks good, just clarify the channel types and add PagerDuty'".
+- Bottom section (`margin-top: 12px`): `display: flex`, `align-items: center`, `gap: 12px`. Left: hint text (`--type-label` 11px, `--text-hint`) showing "N inline comments will be submitted" or "No comments yet — click + on any block above". Right (pushed via flex spacer): "Close without submitting" (Button secondary `sm`) and "Submit review" (Button primary `sm`).
+
+**Submit payload:** When the user clicks "Submit review", the frontend collects:
+
+1. Per-block comments: each comment paired with the first 200 characters of its anchor block's text content (for the agent to locate the block in the markdown source).
+2. The overall feedback summary text (may be empty).
+
+These are sent to the backend as a single structured message. A ReviewEvent molecule is inserted into the content stream, and the content column returns to the normal stream view.
+
+**Close without submitting:** discards all draft comments and closes the review. No ReviewEvent is inserted. The content column returns to the stream. The artifact can be reopened from the sidebar.
+
+**Switching artifacts:** clicking a different artifact in the ArtifactsSidebar while reviewing swaps the ReviewPanel body to show the new artifact. Draft comments are preserved per-artifact in component-local state — switching back restores them.
 
 ---
 
@@ -408,7 +519,7 @@ A teal dot sitting on a horizontal rule signals a system event — something str
 Left-border color on stream cards encodes content origin:
 
 - **Orange** — agent prose (ProseCard).
-- **Gray (`--text-muted`)** — user messages (UserBubble).
+- **Gray (`--text-muted`)** — user content: messages (UserBubble), review comments (ReviewComment).
 - **Teal** — system events (PhaseMarker label uses teal text rather than a border, but the principle holds).
 
 ### Save model
@@ -430,3 +541,11 @@ FeedbackInput rewrites `/plan-spec ...` into natural language before sending to 
 ### Internal tool call suppression
 
 Koan orchestration tools (`koan_yield`, `koan_complete_step`, `koan_set_phase`) are internal to the workflow engine. Their effects are visible through the molecules they trigger (YieldPanel, StepHeader, PhaseMarker). They do not render as ToolCallRows in the content stream.
+
+### Orange dot-on-divider = user event
+
+The dot-on-divider pattern is extended with color semantics. A **teal dot** signals a system event (PhaseMarker — the workflow engine changed phase). An **orange dot** signals a user event (ReviewEvent — the user submitted artifact feedback). Both use identical layout; only the dot color differs. This preserves the "events happen between content" principle while distinguishing system-initiated from user-initiated transitions.
+
+### Review card pattern
+
+The ReviewPanel card uses `border-top: 3px solid --color-orange`, the same "panel-level attention" signal as ElicitationPanel's decision panel. Both are organisms that yield the conversation and require user action to proceed. The visual consistency communicates this shared interaction pattern: the workflow is paused, waiting for you.
