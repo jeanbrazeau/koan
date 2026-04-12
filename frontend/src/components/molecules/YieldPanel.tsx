@@ -37,7 +37,7 @@ export function YieldPanel({ prompt, suggestions, onSelect }: YieldPanelProps) {
             <span className={`yp-command${s.recommended ? ' yp-command--recommended' : ''}`}>
               <span className="yp-slash">/</span>{s.id}
             </span>
-            <span className="yp-desc">{s.label}</span>
+            <span className="yp-desc">{s.command}</span>
           </div>
         ))}
       </div>
