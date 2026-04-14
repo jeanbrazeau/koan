@@ -3,6 +3,7 @@
 import pytest
 
 from koan.lib.workflows import (
+    CURATION_WORKFLOW,
     MILESTONES_WORKFLOW,
     PLAN_WORKFLOW,
     WORKFLOWS,
@@ -60,6 +61,11 @@ def test_get_suggested_phases_execute():
     assert "plan-review" in phases
 
 
+def test_get_suggested_phases_execute_includes_curation():
+    phases = get_suggested_phases(PLAN_WORKFLOW, "execute")
+    assert "curation" in phases
+
+
 def test_get_suggested_phases_milestones_intake_empty():
     phases = get_suggested_phases(MILESTONES_WORKFLOW, "intake")
     assert phases == []
@@ -107,6 +113,7 @@ def test_plan_workflow_structure():
     assert "plan-spec" in wf.available_phases
     assert "plan-review" in wf.available_phases
     assert "execute" in wf.available_phases
+    assert "curation" in wf.available_phases
     assert wf.initial_phase == "intake"
 
 
@@ -139,6 +146,37 @@ def test_milestones_workflow_structure():
 def test_milestones_workflow_has_intake_guidance():
     assert "intake" in MILESTONES_WORKFLOW.phase_guidance
     assert len(MILESTONES_WORKFLOW.phase_guidance["intake"]) > 0
+
+
+# -- CURATION_WORKFLOW structure -----------------------------------------------
+
+def test_curation_workflow_exists():
+    assert "curation" in WORKFLOWS
+
+
+def test_curation_workflow_structure():
+    wf = CURATION_WORKFLOW
+    assert wf.name == "curation"
+    assert wf.initial_phase == "curation"
+    assert "curation" in wf.available_phases
+
+
+def test_curation_workflow_has_standalone_directive():
+    guidance = CURATION_WORKFLOW.phase_guidance.get("curation", "")
+    # Standalone directive defines the review/document/bootstrap pivot.
+    assert "standalone curation" in guidance
+    assert "Review" in guidance
+    assert "Document" in guidance
+    assert "Bootstrap" in guidance
+
+
+def test_plan_workflow_curation_uses_postmortem_directive():
+    guidance = PLAN_WORKFLOW.phase_guidance.get("curation", "")
+    # Postmortem directive binds source to the in-context transcript and
+    # forbids scout dispatch.
+    assert "postmortem" in guidance
+    assert "transcript" in guidance
+    assert "koan_request_scouts" in guidance
 
 
 # -- Workflow immutability -----------------------------------------------------

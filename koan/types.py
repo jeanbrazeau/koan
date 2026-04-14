@@ -19,6 +19,8 @@ WorkflowPhase = Literal[
     "plan-spec",
     "plan-review",
     "execute",
+    # Curation (memory maintenance) -- reusable across workflows
+    "curation",
 ]
 
 SubagentRole = Literal[

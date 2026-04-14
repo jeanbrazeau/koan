@@ -91,6 +91,7 @@ from . import (
     brief_writer,
     core_flows,
     cross_artifact_validation,
+    curation,
     executor,
     intake,
     orchestrator,
@@ -117,6 +118,7 @@ PHASE_GUIDANCE_MAP: dict[str, Any] = {
     # General-purpose phases (reusable by any workflow)
     "intake":   intake,
     "execute":  execute_phase,
+    "curation": curation,
     # Plan workflow phases (SCOPE="plan")
     "plan-spec":   plan_spec,
     "plan-review": plan_review,

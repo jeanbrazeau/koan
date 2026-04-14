@@ -21,7 +21,7 @@ export function NewRunForm() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedInstallations, setSelectedInstallations] = useState<Record<string, string>>({})
-  const [workflow, setWorkflow] = useState<'plan' | 'milestones'>('plan')
+  const [workflow, setWorkflow] = useState<'plan' | 'milestones' | 'curation'>('plan')
   const [projectDir, setProjectDir] = useState('')
 
   const profilesDict = useStore(s => s.settings.profiles)
@@ -119,6 +119,16 @@ export function NewRunForm() {
             <span className="nrf-wf-info">
               <span className="nrf-wf-name">Milestones <Badge variant="neutral">coming soon</Badge></span>
               <span className="nrf-wf-desc">Break work into milestones with phased delivery</span>
+            </span>
+          </button>
+          <button className={`nrf-wf-option${workflow === 'curation' ? ' nrf-wf-option--selected' : ''}`}
+            onClick={() => setWorkflow('curation')}>
+            <span className={`nrf-wf-radio${workflow === 'curation' ? ' nrf-wf-radio--selected' : ''}`}>
+              {workflow === 'curation' && <span className="nrf-wf-radio-inner" />}
+            </span>
+            <span className="nrf-wf-info">
+              <span className="nrf-wf-name">Memory</span>
+              <span className="nrf-wf-desc">Review, bootstrap, or maintain project knowledge</span>
             </span>
           </button>
         </div>

@@ -96,6 +96,10 @@ _ORCHESTRATOR_SCOUT_PHASES: frozenset[str] = frozenset({
     "intake", "core-flows", "tech-plan", "ticket-breakdown",
     "cross-artifact-validation",
     "plan-spec", "plan-review",   # plan workflow phases
+    # Curation: standalone directive may need scouts to gather source
+    # material from the codebase. Postmortem directive forbids them
+    # in prose.
+    "curation",
 })
 
 _ORCHESTRATOR_STORY_TOOLS: frozenset[str] = frozenset({
