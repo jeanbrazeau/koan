@@ -46,6 +46,7 @@ from ..run_state import (
 from ..lib.permissions import check_permission
 from ..lib.workflows import get_suggested_phases, is_valid_transition as wf_is_valid
 from ..logger import get_logger
+from ..memory import MEMORY_TYPES, MemoryStore
 from ..phases import PHASE_GUIDANCE_MAP, PhaseContext, StepGuidance
 from ..phases.format_step import format_phase_complete, format_steering_messages, format_step, format_user_messages
 from .interactions import activate_next_interaction, enqueue_interaction
@@ -60,6 +61,26 @@ _agent_ctx: ContextVar[AgentState | None] = ContextVar("_agent_ctx", default=Non
 
 # Module-level app_state reference, set by build_mcp_asgi_app().
 _app_state: AppState | None = None
+
+# Lazy-initialized per-process memory store, scoped to app_state.project_dir.
+_memory_store: MemoryStore | None = None
+
+
+def _get_memory_store() -> MemoryStore:
+    """Return a MemoryStore bound to the current project directory."""
+    global _memory_store
+    if _memory_store is None:
+        assert _app_state is not None
+        store = MemoryStore(_app_state.project_dir or ".")
+        store.init()
+        _memory_store = store
+    return _memory_store
+
+
+def _reset_memory_store() -> None:
+    """Test hook: clear the cached MemoryStore."""
+    global _memory_store
+    _memory_store = None
 
 # -- fastmcp server -----------------------------------------------------------
 
@@ -873,6 +894,256 @@ async def koan_skip_story(story_id: str, reason: str = "") -> str:
         return result_str
     finally:
         end_tool_call(agent, call_id, "koan_skip_story", result_str)
+
+
+# -- Memory tools --------------------------------------------------------------
+
+def _validate_memory_type(type_str: str) -> None:
+    if type_str not in MEMORY_TYPES:
+        raise ToolError(json.dumps({
+            "error": "invalid_type",
+            "message": (
+                f"'{type_str}' is not a valid memory type. "
+                f"Valid types: {list(MEMORY_TYPES)}"
+            ),
+        }))
+
+
+def _entry_id_from_path(path_name: str) -> int | None:
+    """Extract NNNN prefix from 'NNNN-slug.md'."""
+    if len(path_name) < 5 or path_name[4] != "-":
+        return None
+    try:
+        return int(path_name[:4])
+    except ValueError:
+        return None
+
+
+@mcp.tool(name="koan_memorize")
+async def koan_memorize(
+    type: str,
+    title: str,
+    body: str,
+    related: list[str] | None = None,
+    entry_id: int | None = None,
+) -> str:
+    """Write a memory entry.
+
+    Creates a new entry when entry_id is omitted. Updates an existing
+    entry when entry_id is provided (the NNNN sequence number from
+    the entry's filename).
+
+    New entries: assigns the next sequence number, generates a filename
+    slug, sets created/modified timestamps automatically.
+
+    Updates: reads the existing entry, replaces the provided fields,
+    updates the modified timestamp. Original filename and created
+    timestamp are preserved.
+
+    The body should begin with 1-3 sentences situating the entry in
+    the project -- this opening context improves semantic search
+    matching. The rest is event-style prose: temporally grounded,
+    attributed, self-contained.
+
+    Args:
+        type: Memory type (decision, context, lesson, procedure)
+        title: Short descriptive name
+        body: Prose content (100-500 tokens). Begin with 1-3 sentences
+              of project context for search matching.
+        related: Filenames of related entries (optional)
+        entry_id: Sequence number for updates (omit for creates)
+    """
+    agent = _get_agent()
+    _check_or_raise(agent, "koan_memorize", {
+        "type": type, "title": title, "entry_id": entry_id,
+    })
+
+    call_id = begin_tool_call(
+        agent, "koan_memorize",
+        {"type": type, "title": title, "entry_id": entry_id},
+        f"{type}: {title}",
+    )
+    result_str: str | None = None
+    try:
+        _validate_memory_type(type)
+
+        store = _get_memory_store()
+
+        if entry_id is None:
+            entry = store.add_entry(
+                type=type,   # type: ignore[arg-type]
+                title=title,
+                body=body,
+                related=related or [],
+            )
+            new_id = _entry_id_from_path(entry.file_path.name) if entry.file_path else None
+            result_str = json.dumps({
+                "op": "created",
+                "type": type,
+                "entry_id": new_id,
+                "file_path": str(entry.file_path) if entry.file_path else None,
+                "created": entry.created,
+                "modified": entry.modified,
+            })
+        else:
+            existing = store.get_entry(entry_id)
+            if existing is None:
+                raise ToolError(json.dumps({
+                    "error": "entry_not_found",
+                    "message": f"No entry with id {entry_id}",
+                }))
+            if existing.type != type:
+                raise ToolError(json.dumps({
+                    "error": "type_mismatch",
+                    "message": (
+                        f"Entry {entry_id} has type '{existing.type}', "
+                        f"not '{type}'"
+                    ),
+                }))
+            existing.title = title
+            existing.body = body
+            if related is not None:
+                existing.related = related
+            store.update_entry(existing)
+            result_str = json.dumps({
+                "op": "updated",
+                "type": type,
+                "entry_id": entry_id,
+                "file_path": str(existing.file_path) if existing.file_path else None,
+                "created": existing.created,
+                "modified": existing.modified,
+            })
+
+        result_str = _drain_and_append_steering(result_str, agent)
+        return result_str
+    finally:
+        end_tool_call(agent, call_id, "koan_memorize", result_str)
+
+
+@mcp.tool(name="koan_forget")
+async def koan_forget(entry_id: int, type: str | None = None) -> str:
+    """Remove a memory entry.
+
+    Deletes the entry file from disk. Git preserves history.
+
+    Args:
+        entry_id: Sequence number (NNNN prefix from filename)
+        type: Memory type (optional). When provided, the found entry's
+              type must match or a type_mismatch error is raised.
+    """
+    agent = _get_agent()
+    _check_or_raise(agent, "koan_forget", {"type": type, "entry_id": entry_id})
+
+    call_id = begin_tool_call(
+        agent, "koan_forget",
+        {"type": type, "entry_id": entry_id},
+        f"{type or '*'}/{entry_id}",
+    )
+    result_str: str | None = None
+    try:
+        if type is not None:
+            _validate_memory_type(type)
+
+        store = _get_memory_store()
+        existing = store.get_entry(entry_id)
+        if existing is None:
+            raise ToolError(json.dumps({
+                "error": "entry_not_found",
+                "message": f"No entry with id {entry_id}",
+            }))
+        if type is not None and existing.type != type:
+            raise ToolError(json.dumps({
+                "error": "type_mismatch",
+                "message": (
+                    f"Entry {entry_id} has type '{existing.type}', "
+                    f"not '{type}'"
+                ),
+            }))
+        path_str = str(existing.file_path) if existing.file_path else None
+        store.forget_entry(existing)
+        result_str = json.dumps({
+            "op": "forgotten",
+            "type": existing.type,
+            "entry_id": entry_id,
+            "file_path": path_str,
+        })
+        result_str = _drain_and_append_steering(result_str, agent)
+        return result_str
+    finally:
+        end_tool_call(agent, call_id, "koan_forget", result_str)
+
+
+def _summary_is_stale(store: MemoryStore) -> bool:
+    """Return True if summary.md is missing or older than any entry file."""
+    summary_path = store._memory_dir / "summary.md"
+    if not summary_path.is_file():
+        # Only stale if at least one entry exists; otherwise there is
+        # nothing to summarize and we do not force a regeneration.
+        return store.entry_count() > 0
+    summary_mtime = summary_path.stat().st_mtime
+    for e in store.list_entries():
+        if e.file_path is None:
+            continue
+        if e.file_path.stat().st_mtime > summary_mtime:
+            return True
+    return False
+
+
+@mcp.tool(name="koan_memory_status")
+async def koan_memory_status(type: str | None = None) -> str:
+    """Get an orientation view of project memory.
+
+    Returns the project summary and a flat listing of all entries.
+    Checks whether summary.md is stale (older than the most recent
+    entry) and regenerates it just-in-time before returning.
+
+    Args:
+        type: Filter listing to a specific memory type (optional).
+              The summary is always project-wide regardless of filter.
+    """
+    agent = _get_agent()
+    _check_or_raise(agent, "koan_memory_status", {"type": type})
+
+    call_id = begin_tool_call(
+        agent, "koan_memory_status", {"type": type}, type or "all",
+    )
+    result_str: str | None = None
+    try:
+        if type is not None:
+            _validate_memory_type(type)
+
+        store = _get_memory_store()
+
+        regenerated = False
+        if _summary_is_stale(store):
+            await store.regenerate_summary()
+            regenerated = True
+
+        summary = store.get_summary() or ""
+        entries = store.list_entries(type=type)  # type: ignore[arg-type]
+        out_entries = [
+            {
+                "entry_id": (
+                    _entry_id_from_path(e.file_path.name)
+                    if e.file_path else None
+                ),
+                "title": e.title,
+                "type": e.type,
+                "created": e.created,
+                "modified": e.modified,
+            }
+            for e in entries
+        ]
+
+        result_str = json.dumps({
+            "summary": summary,
+            "entries": out_entries,
+            "regenerated": regenerated,
+        })
+        result_str = _drain_and_append_steering(result_str, agent)
+        return result_str
+    finally:
+        end_tool_call(agent, call_id, "koan_memory_status", result_str)
 
 
 # -- ASGI wrapper --------------------------------------------------------------

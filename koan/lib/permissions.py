@@ -53,6 +53,9 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "koan_complete_story",
         "koan_retry_story",
         "koan_skip_story",
+        "koan_memorize",
+        "koan_forget",
+        "koan_memory_status",
         "edit",
         "write",
         "bash",
@@ -100,6 +103,11 @@ _ORCHESTRATOR_STORY_TOOLS: frozenset[str] = frozenset({
     "koan_retry_story", "koan_skip_story",
 })
 
+# Memory tools are available to the orchestrator in every phase.
+_ORCHESTRATOR_MEMORY_TOOLS: frozenset[str] = frozenset({
+    "koan_memorize", "koan_forget", "koan_memory_status",
+})
+
 _ORCHESTRATOR_BASH_PHASES: frozenset[str] = frozenset({
     "execution", "implementation-validation",
 })
@@ -134,6 +142,10 @@ def _check_orchestrator_permission(
 
     # Always allowed base koan tools
     if tool_name in ("koan_complete_step", "koan_set_phase", "koan_yield"):
+        return {"allowed": True, "reason": None}
+
+    # Memory tools -- available to the orchestrator in every phase
+    if tool_name in _ORCHESTRATOR_MEMORY_TOOLS:
         return {"allowed": True, "reason": None}
 
     # koan_ask_question — always allowed except brief-generation step 1
