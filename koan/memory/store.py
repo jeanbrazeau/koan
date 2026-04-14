@@ -1,79 +1,64 @@
-# High-level operations over the .koan/memory/ directory tree.
+# High-level operations over the flat .koan/memory/ directory.
 
 from __future__ import annotations
 
 import re
 from pathlib import Path
 
-from .types import (
-    TYPE_DIRS,
-    MemoryEntry,
-    MemoryIndex,
-    MemorySource,
-    MemoryStatus,
-    MemoryType,
-)
-from .parser import parse_entry, parse_index
+from .types import MemoryEntry, MemoryType
+from .parser import parse_entry
 from .writer import write_entry as _write_entry, update_entry as _update_entry
+
+_ENTRY_PATTERN = re.compile(r"^(\d{4})-.*\.md$")
 
 
 class MemoryStore:
-    """File-backed store for koan memory entries."""
+    """File-backed store for koan memory entries in a flat directory."""
 
     def __init__(self, project_root: str | Path) -> None:
         self._root = Path(project_root)
         self._memory_dir = self._root / ".koan" / "memory"
-        self._user_dir = self._root / ".koan" / "user"
 
     # -- Directory management ---------------------------------------------------
 
     def init(self) -> None:
-        """Create the directory structure if it doesn't exist."""
-        for dir_name in TYPE_DIRS.values():
-            (self._memory_dir / dir_name).mkdir(parents=True, exist_ok=True)
-        self._user_dir.mkdir(parents=True, exist_ok=True)
-
-    def _type_dir(self, t: MemoryType) -> Path:
-        return self._memory_dir / TYPE_DIRS[t]
+        """Create the memory directory if it doesn't exist."""
+        self._memory_dir.mkdir(parents=True, exist_ok=True)
 
     # -- Query ------------------------------------------------------------------
 
+    def _iter_entry_paths(self) -> list[Path]:
+        """Return all NNNN-*.md paths in the memory directory, sorted by name."""
+        if not self._memory_dir.is_dir():
+            return []
+        return sorted(
+            p for p in self._memory_dir.iterdir()
+            if p.is_file() and _ENTRY_PATTERN.match(p.name)
+        )
+
     def list_entries(self, type: MemoryType | None = None) -> list[MemoryEntry]:
         """List entries, optionally filtered by type. Sorted by sequence number."""
-        types = [type] if type is not None else list(TYPE_DIRS.keys())
-        entries: list[MemoryEntry] = []
-        pattern = re.compile(r"^(\d{4})-.*\.md$")
-        for t in types:
-            d = self._type_dir(t)
-            if not d.is_dir():
-                continue
-            for p in sorted(d.iterdir()):
-                if pattern.match(p.name):
-                    entries.append(parse_entry(p))
+        entries = [parse_entry(p) for p in self._iter_entry_paths()]
+        if type is not None:
+            entries = [e for e in entries if e.type == type]
         return entries
 
-    def get_entry(self, type: MemoryType, number: int) -> MemoryEntry | None:
-        """Find and parse a specific entry by type and sequence number."""
-        d = self._type_dir(type)
-        if not d.is_dir():
+    def get_entry(self, number: int) -> MemoryEntry | None:
+        """Find and parse a specific entry by global sequence number."""
+        if not self._memory_dir.is_dir():
             return None
         prefix = f"{number:04d}-"
-        for p in d.iterdir():
-            if p.name.startswith(prefix) and p.name.endswith(".md"):
+        for p in self._memory_dir.iterdir():
+            if p.is_file() and p.name.startswith(prefix) and p.name.endswith(".md"):
                 return parse_entry(p)
         return None
 
     def entry_count(self, type: MemoryType | None = None) -> int:
         """Count entries, optionally filtered by type."""
-        types = [type] if type is not None else list(TYPE_DIRS.keys())
-        pattern = re.compile(r"^\d{4}-.*\.md$")
-        count = 0
-        for t in types:
-            d = self._type_dir(t)
-            if not d.is_dir():
-                continue
-            count += sum(1 for p in d.iterdir() if pattern.match(p.name))
-        return count
+        paths = self._iter_entry_paths()
+        if type is None:
+            return len(paths)
+        return sum(1 for p in paths if parse_entry(p).type == type)
 
     # -- Mutations --------------------------------------------------------------
 
@@ -81,30 +66,17 @@ class MemoryStore:
         self,
         type: MemoryType,
         title: str,
-        date: str,
-        source: MemorySource,
-        contextual_introduction: str,
         body: str,
-        status: MemoryStatus = "active",
-        tags: list[str] | None = None,
-        supersedes: str | None = None,
         related: list[str] | None = None,
     ) -> MemoryEntry:
         """Create a new entry, write it to disk, return with file_path set."""
         entry = MemoryEntry(
             title=title,
             type=type,
-            date=date,
-            source=source,
-            status=status,
-            contextual_introduction=contextual_introduction,
             body=body,
-            tags=tags or [],
-            supersedes=supersedes,
             related=related or [],
         )
-        d = self._type_dir(type)
-        path = _write_entry(entry, d)
+        path = _write_entry(entry, self._memory_dir)
         entry.file_path = path
         return entry
 
@@ -112,12 +84,13 @@ class MemoryStore:
         """Write an entry back to its existing file_path."""
         _update_entry(entry)
 
-    def deprecate_entry(self, entry: MemoryEntry) -> None:
-        """Set status to 'deprecated' and write back."""
-        entry.status = "deprecated"
-        _update_entry(entry)
+    def forget_entry(self, entry: MemoryEntry) -> None:
+        """Delete an entry file from disk. Git preserves history."""
+        if entry.file_path is None:
+            raise ValueError("entry has no file_path")
+        entry.file_path.unlink()
 
-    # -- Summaries / indexes ----------------------------------------------------
+    # -- Summary ----------------------------------------------------------------
 
     def get_summary(self) -> str | None:
         """Return the content of summary.md if it exists."""
@@ -126,9 +99,8 @@ class MemoryStore:
             return p.read_text("utf-8")
         return None
 
-    def get_index(self, type: MemoryType) -> MemoryIndex | None:
-        """Return the parsed _index.md for the given type, if it exists."""
-        p = self._type_dir(type) / "_index.md"
-        if p.is_file():
-            return parse_index(p)
-        return None
+    async def regenerate_summary(self, project_name: str = "") -> None:
+        """Regenerate summary.md from all current entries."""
+        from .summarize import regenerate_summary
+
+        await regenerate_summary(self, project_name=project_name)

@@ -9,6 +9,7 @@ dependencies = [
     "aiofiles",
     "jsonpatch",
     "pyyaml",
+    "google-genai>=1.0",
 ]
 
 [project.scripts]

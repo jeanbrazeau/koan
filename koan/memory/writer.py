@@ -1,13 +1,18 @@
-# Write memory entries and indexes to disk.
+# Write memory entries to disk.
 
 from __future__ import annotations
 
 import re
+from datetime import datetime, timezone
 from pathlib import Path
 
 import yaml
 
-from .types import MemoryEntry, MemoryIndex
+from .types import MemoryEntry
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
 def _slugify(title: str, max_len: int = 50) -> str:
@@ -36,35 +41,39 @@ def _render_frontmatter(entry: MemoryEntry) -> str:
     meta: dict = {
         "title": entry.title,
         "type": entry.type,
-        "date": entry.date,
-        "source": entry.source,
-        "status": entry.status,
+        "created": entry.created,
+        "modified": entry.modified,
     }
-    if entry.tags:
-        meta["tags"] = entry.tags
-    if entry.supersedes is not None:
-        meta["supersedes"] = entry.supersedes
-    else:
-        meta["supersedes"] = None
     if entry.related:
         meta["related"] = entry.related
 
-    return yaml.dump(meta, default_flow_style=None, sort_keys=False, allow_unicode=False).rstrip("\n")
+    return yaml.dump(
+        meta,
+        default_flow_style=None,
+        sort_keys=False,
+        allow_unicode=False,
+    ).rstrip("\n")
 
 
 def _render_entry(entry: MemoryEntry) -> str:
-    """Render a complete entry file: frontmatter + intro + body."""
+    """Render a complete entry file: frontmatter + body."""
     fm = _render_frontmatter(entry)
-    return f"---\n{fm}\n---\n\n{entry.contextual_introduction}\n\n{entry.body}\n"
+    return f"---\n{fm}\n---\n\n{entry.body}\n"
 
 
 def write_entry(entry: MemoryEntry, directory: Path) -> Path:
     """Write a new memory entry to ``directory``.
 
     Assigns the next available sequence number, generates a filename
-    slug from the title, writes the file, and returns its path.
+    slug, sets ``created``/``modified`` to the current UTC timestamp
+    if not already set, and returns the written path.
     """
     directory.mkdir(parents=True, exist_ok=True)
+    now = _now_iso()
+    if not entry.created:
+        entry.created = now
+    entry.modified = now
+
     seq = _next_sequence_number(directory)
     slug = _slugify(entry.title)
     filename = f"{seq:04d}-{slug}.md"
@@ -74,23 +83,11 @@ def write_entry(entry: MemoryEntry, directory: Path) -> Path:
 
 
 def update_entry(entry: MemoryEntry) -> None:
-    """Write an entry back to its existing ``file_path``."""
+    """Write an entry back to its existing ``file_path``.
+
+    Preserves ``created``; always refreshes ``modified``.
+    """
     if entry.file_path is None:
         raise ValueError("entry has no file_path; use write_entry for new entries")
+    entry.modified = _now_iso()
     entry.file_path.write_text(_render_entry(entry), "utf-8")
-
-
-def write_index(index: MemoryIndex, directory: Path) -> Path:
-    """Write ``_index.md`` in ``directory``."""
-    directory.mkdir(parents=True, exist_ok=True)
-    meta = {
-        "type": "index",
-        "covers": index.covers,
-        "token_count": index.token_count,
-        "last_generated": index.last_generated,
-    }
-    fm = yaml.dump(meta, default_flow_style=None, sort_keys=False, allow_unicode=False).rstrip("\n")
-    text = f"---\n{fm}\n---\n\n{index.body}\n"
-    path = directory / "_index.md"
-    path.write_text(text, "utf-8")
-    return path
