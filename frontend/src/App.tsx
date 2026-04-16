@@ -132,8 +132,19 @@ function ConnectedScoutBar() {
 // ---------------------------------------------------------------------------
 
 // Orchestration tools whose effects are visible through other molecules
-// (YieldPanel, StepHeader, PhaseMarker). They should not render as rows.
-const SUPPRESSED_TOOLS = new Set(['koan_yield', 'koan_complete_step', 'koan_set_phase'])
+// (StepHeader, PhaseMarker). They should not render as rows.
+const SUPPRESSED_TOOLS = new Set(['koan_complete_step', 'koan_set_phase'])
+
+const KOAN_TOOL_LABELS: Record<string, string> = {
+  koan_request_scouts: 'Dispatching scouts',
+  koan_ask_question: 'Asking question',
+  koan_yield: 'Preparing response',
+  koan_request_executor: 'Starting executor',
+  koan_select_story: 'Selecting story',
+  koan_complete_story: 'Completing story',
+  koan_retry_story: 'Retrying story',
+  koan_skip_story: 'Skipping story',
+}
 
 function renderEntry(entry: ConversationEntry, i: number) {
   switch (entry.type) {
@@ -153,9 +164,12 @@ function renderEntry(entry: ConversationEntry, i: number) {
       return <ToolCallRow key={i} tool="grep" command={entry.pattern} status={entry.inFlight ? 'running' : 'done'} />
     case 'tool_ls':
       return <ToolCallRow key={i} tool="ls" command={entry.path} status={entry.inFlight ? 'running' : 'done'} />
-    case 'tool_generic':
+    case 'tool_generic': {
       if (SUPPRESSED_TOOLS.has(entry.toolName)) return null
-      return <ToolCallRow key={i} tool={entry.toolName} command={entry.summary} status={entry.inFlight ? 'running' : 'done'} />
+      const label = KOAN_TOOL_LABELS[entry.toolName] ?? entry.toolName
+      const cmd = entry.toolName in KOAN_TOOL_LABELS ? '' : entry.summary
+      return <ToolCallRow key={i} tool={label} command={cmd} status={entry.inFlight ? 'running' : 'done'} />
+    }
     case 'step':
       return <StepHeader key={i} stepNumber={entry.step} totalSteps={entry.totalSteps ?? 0} stepName={entry.stepName} />
     case 'debug_step_guidance':

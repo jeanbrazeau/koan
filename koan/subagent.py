@@ -26,6 +26,8 @@ from .events import (
     build_tool_grep,
     build_tool_ls,
     build_tool_read,
+    build_tool_started,
+    build_tool_stopped,
     build_tool_write,
 )
 from .logger import get_logger
@@ -218,11 +220,17 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
     # Falls back to subagent_dir if project_dir is unavailable.
     spawn_cwd = task.get("project_dir") or subagent_dir
     log.info("spawning %s (agent_id=%s) cwd=%s: %s", role, agent_id, spawn_cwd, " ".join(cmd))
+    # limit= raises the asyncio StreamReader per-line buffer above its 64 KB
+    # default. A single stream-json event from the child CLI (long thinking
+    # block, fat tool result, large assistant content envelope) routinely
+    # exceeds 64 KB; readline() then raises LimitOverrunError and the scout's
+    # output becomes unreadable mid-run.
     proc = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
         cwd=spawn_cwd,
+        limit=4 * 1024 * 1024,
     )
     app_state._active_processes[agent_id] = proc
 
@@ -231,13 +239,14 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
         assert proc.stdout is not None
         last_tool_name: str | None = None
         last_call_id: str | None = None
+        streaming_call_ids: dict[int, tuple[str, str]] = {}
 
         async for raw in proc.stdout:
             line = raw.decode("utf-8", errors="replace").rstrip("\n")
             events = runner.parse_stream_event(line)
             for ev in events:
-                # Close in-flight tool when the LLM moves on to thinking
-                # or text output -- those signal the previous tool is done.
+                # Close implicit in-flight tool (non-streaming path) when
+                # the LLM moves on to thinking or text output.
                 if ev.type in ("token_delta", "thinking") and last_call_id is not None:
                     store.push_event(
                         "tool_completed",
@@ -247,7 +256,38 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
                     last_call_id = None
                     last_tool_name = None
 
-                if ev.type == "token_delta":
+                if ev.type == "tool_start":
+                    if last_call_id is not None and last_tool_name is not None:
+                        store.push_event(
+                            "tool_completed",
+                            build_tool_completed(last_call_id, last_tool_name),
+                            agent_id=agent_id,
+                        )
+                        last_call_id = None
+                        last_tool_name = None
+                    call_id = str(uuid.uuid4())
+                    tool_name = ev.tool_name or "tool"
+                    block_idx = ev.block_index if ev.block_index is not None else -1
+                    streaming_call_ids[block_idx] = (call_id, tool_name)
+                    store.push_event(
+                        "tool_started",
+                        build_tool_started(call_id, tool_name),
+                        agent_id=agent_id,
+                    )
+                elif ev.type == "tool_input_delta":
+                    pass
+                elif ev.type == "tool_stop":
+                    block_idx = ev.block_index if ev.block_index is not None else -1
+                    pair = streaming_call_ids.pop(block_idx, None)
+                    if pair is not None:
+                        call_id, tool_name = pair
+                        summary = ev.summary or ""
+                        store.push_event(
+                            "tool_stopped",
+                            build_tool_stopped(call_id, tool_name, summary),
+                            agent_id=agent_id,
+                        )
+                elif ev.type == "token_delta":
                     agent.token_count["received"] = agent.token_count.get("received", 0) + len(ev.content or "")
                     store.push_event("stream_delta", {"delta": ev.content or ""}, agent_id=agent_id)
                 elif ev.type == "thinking":
@@ -256,19 +296,16 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
                     if ev.content:
                         agent.final_response = ev.content
                 elif ev.type == "tool_call":
-                    # Close previous in-flight tool
                     if last_call_id is not None and last_tool_name is not None:
                         store.push_event(
                             "tool_completed",
                             build_tool_completed(last_call_id, last_tool_name),
                             agent_id=agent_id,
                         )
-                    # Open new tool call — emit typed event for recognized tools
                     call_id = str(uuid.uuid4())
                     tool_name = ev.tool_name or "tool"
                     summary = ev.summary or ""
                     if tool_name == "read":
-                        # Separate file path from optional line range (e.g. "foo.py:10-20")
                         file_part, lines_part = summary, ""
                         if ":" in summary:
                             head, tail = summary.rsplit(":", 1)
@@ -298,11 +335,18 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
                     last_call_id = call_id
                     last_tool_name = tool_name
                 elif ev.type == "turn_complete":
-                    # Dropped -- stream_cleared at stdout EOF covers end-of-stream
                     pass
-                # All other unrecognized types are silently dropped
 
-        # Close any in-flight tool at stdout EOF
+        # Close any in-flight streaming tools at stdout EOF
+        for _idx, (cid, tname) in streaming_call_ids.items():
+            store.push_event(
+                "tool_stopped",
+                build_tool_stopped(cid, tname),
+                agent_id=agent_id,
+            )
+        streaming_call_ids.clear()
+
+        # Close any implicit in-flight tool at stdout EOF
         if last_call_id is not None and last_tool_name is not None:
             store.push_event(
                 "tool_completed",

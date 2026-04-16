@@ -97,6 +97,17 @@ def build_tool_called(
     }
 
 
+def build_tool_started(call_id: str, tool: str) -> dict:
+    return {"call_id": call_id, "tool": tool}
+
+
+def build_tool_stopped(call_id: str, tool: str, summary: str = "") -> dict:
+    payload: dict = {"call_id": call_id, "tool": tool}
+    if summary:
+        payload["summary"] = summary
+    return payload
+
+
 # -- Typed tool event builders (recognized tools with extracted metadata) -----
 
 def build_tool_read(call_id: str, file: str, lines: str = "") -> dict:

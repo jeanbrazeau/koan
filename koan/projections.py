@@ -42,6 +42,8 @@ EventType = Literal[
     "workflow_selected",
     "scout_queued",
     # Activity
+    "tool_started",
+    "tool_stopped",
     "tool_called",
     "tool_completed",
     "tool_read",
@@ -702,6 +704,55 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                 new_conv = _flush_conversation(agent.conversation)
                 return projection.model_copy(update={
                     "run": _update_agent_conversation(projection.run, agent_id, new_conv),
+                })
+
+            case "tool_started":
+                if projection.run is None or not agent_id:
+                    return projection
+                agent = projection.run.agents.get(agent_id)
+                if agent is None:
+                    return projection
+                tool_name = payload.get("tool", "")
+                call_id = payload.get("call_id", "")
+                last_tool = tool_name
+                new_conv = _flush_conversation(agent.conversation)
+                new_entry = ToolGenericEntry(
+                    call_id=call_id,
+                    in_flight=True,
+                    tool_name=tool_name,
+                    summary="",
+                )
+                new_conv = new_conv.model_copy(update={
+                    "entries": [*new_conv.entries, new_entry],
+                })
+                return projection.model_copy(update={
+                    "run": _update_agent_conversation(projection.run, agent_id, new_conv,
+                                                      last_tool=last_tool),
+                })
+
+            case "tool_stopped":
+                if projection.run is None or not agent_id:
+                    return projection
+                agent = projection.run.agents.get(agent_id)
+                if agent is None:
+                    return projection
+                call_id = payload.get("call_id", "")
+                summary = payload.get("summary", "")
+                tool_name = payload.get("tool", "")
+                last_tool = f"{tool_name} {summary}".strip() if summary else tool_name
+                new_entries = []
+                for entry in agent.conversation.entries:
+                    if isinstance(entry, BaseToolEntry) and entry.call_id == call_id:
+                        update: dict = {"in_flight": False}
+                        if summary and isinstance(entry, ToolGenericEntry):
+                            update["summary"] = summary
+                        new_entries.append(entry.model_copy(update=update))
+                    else:
+                        new_entries.append(entry)
+                new_conv = agent.conversation.model_copy(update={"entries": new_entries})
+                return projection.model_copy(update={
+                    "run": _update_agent_conversation(projection.run, agent_id, new_conv,
+                                                      last_tool=last_tool),
                 })
 
             case "tool_called":
