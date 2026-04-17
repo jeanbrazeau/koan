@@ -3,7 +3,6 @@
 
 .claude/
 plans/
-.koan/
 .env
 .env.*
 *.log
