@@ -46,7 +46,7 @@ export function HeaderBar({
   step,
   totalSteps,
   currentStep,
-  orchestratorModel = 'opus',
+  orchestratorModel,
   elapsed,
   onSettingsClick,
   mode = 'workflow',
@@ -89,10 +89,12 @@ export function HeaderBar({
 
         {mode === 'workflow' && (
           <div className="hb-right">
-            <div className="hb-orchestrator">
-              <StatusDot status="done" size="sm" />
-              <span className="hb-model">{orchestratorModel}</span>
-            </div>
+            {orchestratorModel && (
+              <div className="hb-orchestrator">
+                <StatusDot status="done" size="sm" />
+                <span className="hb-model">{orchestratorModel}</span>
+              </div>
+            )}
             {elapsed && <span className="hb-elapsed">{elapsed}</span>}
             <button
               className="hb-settings"
