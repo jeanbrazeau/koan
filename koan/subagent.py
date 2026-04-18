@@ -430,6 +430,15 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
         await event_log.emit_runner_diagnostic(diag)
         error_str = "bootstrap_failure"
         exit_code = 1
+    elif exit_code != 0:
+        final = (agent.final_response or "").strip()
+        stderr_lines = [l.strip() for l in stderr_output.splitlines() if l.strip()]
+        stderr_tail = stderr_lines[-1] if stderr_lines else ""
+        error_str = final or stderr_tail or f"exit_code={exit_code}"
+        log.error(
+            "%s (agent_id=%s) exited unexpectedly (exit_code=%d): %s",
+            role, agent_id, exit_code, error_str,
+        )
 
     # Cleanup: remove from active processes, resolve pending interactions
     app_state._active_processes.pop(agent_id, None)
@@ -437,7 +446,7 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
 
     # Finalize audit log
     outcome = "completed" if exit_code == 0 else "failed"
-    await event_log.emit_phase_end(outcome)
+    await event_log.emit_phase_end(outcome, detail=error_str)
     await event_log.close()
 
     final_response = agent.final_response
@@ -454,7 +463,8 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
         agent_id=agent_id,
     )
 
-    log.info("%s (agent_id=%s) exited with code %d", role, agent_id, exit_code)
+    log_fn = log.info if exit_code == 0 else log.warning
+    log_fn("%s (agent_id=%s) exited with code %d", role, agent_id, exit_code)
     return SubagentResult(exit_code=exit_code, final_response=final_response)
 
 
