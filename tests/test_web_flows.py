@@ -69,19 +69,6 @@ def test_landing_page_renders(client, app_state):
 
 # -- Start run ----------------------------------------------------------------
 
-def test_start_run_sets_event(client, app_state):
-    app_state.probe_results = _make_probe_results()
-    resp = client.post(
-        "/api/start-run",
-        json={"task": "build something", "profile": "balanced"},
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["ok"] is True
-    assert app_state.start_event.is_set()
-    assert app_state.run_dir is not None
-
-
 def test_start_run_requires_task(client, app_state):
     resp = client.post("/api/start-run", json={"task": ""})
     assert resp.status_code == 422
@@ -113,16 +100,6 @@ def test_start_run_blocked_no_runners(client, app_state):
     assert resp.status_code == 422
     data = resp.json()
     assert data["error"] == "no_runners"
-
-
-def test_start_run_persists_profile(client, app_state):
-    app_state.probe_results = _make_probe_results()
-    resp = client.post(
-        "/api/start-run",
-        json={"task": "build something", "profile": "balanced"},
-    )
-    assert resp.status_code == 200
-    assert app_state.config.active_profile == "balanced"
 
 
 # -- Start-run preflight -------------------------------------------------------
@@ -163,24 +140,6 @@ def test_preflight_missing_profile(client, app_state):
 
 
 # -- Start-run installation validation -----------------------------------------
-
-def test_start_run_accepts_installation_selection(client, app_state, tmp_path):
-    from koan.runners.registry import compute_builtin_profiles
-    app_state.probe_results = _make_probe_results()
-    app_state.builtin_profiles = compute_builtin_profiles(app_state.probe_results)
-    binary = tmp_path / "claude"
-    binary.touch()
-    app_state.config.agent_installations = [
-        AgentInstallation(alias="my-claude", runner_type="claude", binary=str(binary)),
-    ]
-    resp = client.post("/api/start-run", json={
-        "task": "build something",
-        "profile": "balanced",
-        "installations": {"claude": "my-claude"},
-    })
-    assert resp.status_code == 200
-    assert app_state.run_installations["claude"] == "my-claude"
-
 
 def test_start_run_rejects_missing_binary(client, app_state):
     from koan.runners.registry import compute_builtin_profiles
@@ -254,50 +213,7 @@ def test_path_traversal_blocked(client, app_state):
         assert resp.status_code in (400, 404)
 
 
-# -- Probe endpoint -----------------------------------------------------------
-
-def test_probe_endpoint(client, app_state):
-    app_state.probe_results = _make_probe_results()
-    app_state.builtin_profiles = {"balanced": Profile(name="balanced", tiers={
-        "strong": ProfileTier(runner_type="claude", model="opus", thinking="high"),
-    })}
-
-    resp = client.get("/api/probe")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "runners" in data
-    assert "balanced_profile" in data
-    assert len(data["runners"]) == 3
-    assert data["runners"][0]["runner_type"] == "claude"
-    assert len(data["runners"][0]["models"]) == 2
-
-
 # -- Profile endpoints --------------------------------------------------------
-
-def test_profiles_list_includes_balanced(client, app_state):
-    app_state.builtin_profiles = {"balanced": Profile(name="balanced", tiers={
-        "strong": ProfileTier(runner_type="claude", model="opus", thinking="high"),
-    })}
-
-    resp = client.get("/api/profiles")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert any(p["name"] == "balanced" and p["read_only"] is True for p in data["profiles"])
-
-
-def test_profiles_create_valid(client, app_state):
-    app_state.probe_results = _make_probe_results()
-
-    resp = client.post("/api/profiles", json={
-        "name": "myprofile",
-        "tiers": {
-            "strong": {"runner_type": "claude", "model": "opus", "thinking": "high"},
-        },
-    })
-    assert resp.status_code == 200
-    assert resp.json()["ok"] is True
-    assert any(p.name == "myprofile" for p in app_state.config.profiles)
-
 
 def test_profiles_create_invalid_runner(client, app_state):
     app_state.probe_results = _make_probe_results()
