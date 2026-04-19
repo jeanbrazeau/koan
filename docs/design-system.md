@@ -56,9 +56,61 @@ The single source of truth for koan's visual design. `src/styles/variables.css` 
 | `--settings-nav-width` | 152px | Side navigation column width on the Settings page.                |
 | `--settings-max-width` | 960px | Max width for the Settings page layout container (nav + content). |
 
+### Tool family indicator colors
+
+| Token        | Hex       | Usage                                                                                                                                                                                                            |
+| ------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `--dot-read` | `#5a9a8a` | `StatusDot` `status="read"`. Identifies `read` operations in tool aggregate cards. Aliases `--color-teal`; the alias pattern matches `--status-done`.                                                            |
+| `--dot-grep` | `#7ab0a0` | `StatusDot` `status="grep"`. Identifies `grep` operations. Slightly lighter teal than `--dot-read`; distinguishable from `--dot-read` at 8px stat-block size, secondary to the command text at 6px log-row size. |
+| `--dot-ls`   | `#4a8878` | `StatusDot` `status="ls"`. Identifies `ls` operations. Slightly darker teal than `--dot-read`.                                                                                                                   |
+
+All three tokens belong to the teal family because all three tools are
+read-only exploration operations. Orange is reserved for active state
+(`--color-orange`) and must not appear in tool-family indicator colors.
+
 ---
 
 ## Atoms
+
+### StatusDot
+
+A small colored circle indicating either an operational state or a tool family.
+
+Container: `display: inline-block`, `border-radius: var(--radius-circle)`,
+`flex-shrink: 0`. All variants are static — no animation. In-flight activity
+indicators in consuming molecules are implemented inline (see `ToolCallRow`'s
+`.tcr-running-dot` pattern) rather than through `StatusDot`, so that
+`StatusDot` stays a pure visual primitive and adjacent features that already
+use `StatusDot` (e.g., `ScoutRow`) are not affected by changes in this area.
+
+**Sizes:**
+
+- `sm`: 6px × 6px. Used inside `ToolLogRow` log rows where vertical density
+  matters.
+- `md`: 8px × 8px. Default. Used in `ToolStatBlock` stat blocks, scout tables,
+  artifact cards, and the header orchestrator indicator.
+
+**Status variants — operational state:**
+
+- `running`: `background: var(--status-running)` (orange). Static.
+- `done`: `background: var(--status-done)` (teal). Static.
+- `queued`: `background: var(--status-queued)` (neutral warm gray). Static.
+- `failed`: `background: var(--status-failed)` (red). Static.
+
+**Status variants — tool family:**
+
+- `read`: `background: var(--dot-read)`. Static.
+- `grep`: `background: var(--dot-grep)`. Static.
+- `ls`: `background: var(--dot-ls)`. Static.
+
+The tool-family variants share the `status` prop with the operational variants
+intentionally — the geometry and usage pattern are identical, and a single
+`status` prop keeps consumers' call sites readable.
+
+Type: `Status = 'running' | 'done' | 'queued' | 'failed' | 'read' | 'grep' | 'ls'`,
+`Size = 'sm' | 'md'`.
+
+Props: `status: Status`, `size?: Size` (default `'md'`).
 
 ### TextInput
 
@@ -313,6 +365,206 @@ Footer: flex row. Left: hint text in `--type-label` (11px), `--text-hint`. Defau
 
 Props: `placeholder?: string`, `onSend?: (text: string) => void`, `disabled?: boolean`, `availableCommands?: PhaseCommand[]`, `onPaletteToggle?: (open: boolean) => void`.
 
+#### ToolCallRow
+
+A single horizontal row representing a standalone tool call. Used for
+non-exploration tools (`bash`, `write`, `edit`) that keep their individual
+visual weight outside aggregate cards.
+
+Container: `display: flex`, `align-items: center`, `gap: 10px`,
+`background: var(--bg-tool-row)`, `border-radius: var(--radius-md)`,
+`padding: var(--padding-tool-row)` (7px 14px).
+
+Status indicator column (`width: 13px`, `flex-shrink: 0`) — existing markup,
+not routed through `StatusDot`:
+
+- `done`: teal check SVG (`stroke: var(--color-teal)`, 13×13, 2.5 stroke
+  width).
+- `running`: 6px orange dot rendered as an inline `span.tcr-running-dot`,
+  animated by the local `@keyframes tcr-pulse` at 1.5s ease-in-out infinite.
+- `error`: `✕` character, `color: var(--status-failed)`, 11px.
+
+Type label (`min-width: 36px`, `flex-shrink: 0`):
+`--type-tool-type` (12px), `--text-muted`. Examples: "bash", "write", "edit".
+
+Command / path (`flex: 1`, `min-width: 0`):
+`--font-mono`, `--type-tool-path` (12px), `--text-body`, `white-space: nowrap`,
+`overflow: hidden`, `text-overflow: ellipsis`. The actual path or shell
+command.
+
+Metric (optional, `flex-shrink: 0`, `padding-left: 12px`):
+`--font-mono`, `--type-tool-path` (12px), `--text-muted`. Right-aligned.
+Added in this spec; absent in the original `ToolCallRow`. Examples:
+`"22.8 KB · new"`, `"2.4s · 140 B out"`, `"3 hunks · ±24 lines"`.
+
+Error state: container background `#f6e8e8` (hardcoded, candidate for
+`--bg-tool-row-error` in a future token pass), command and metric text
+`color: var(--text-danger-body)`.
+
+Running state: container `opacity: 0.8`.
+
+Props: `tool: string`, `command: string`, `status?: 'done' | 'running' | 'error'`
+(default `'done'`), `metric?: string`.
+
+#### ToolLogRow
+
+A compact, no-background log row used inside the right pane of
+`ToolAggregateCard`. Visually lighter than `ToolCallRow` — no background fill,
+no explicit type label (the colored dot encodes the tool family instead).
+
+Container: `display: flex`, `align-items: center`, `gap: 10px`,
+`padding: 3px 0`, `font-family: var(--font-mono)`, `font-size: 12px`,
+`line-height: 1.5`.
+
+Status indicator: one of
+
+- `StatusDot size="sm" status={type}` where `type` is `read`, `grep`, or `ls`,
+  for completed operations. Static teal-family dot.
+- An inline pulsing orange dot (6px, same pattern as `ToolCallRow`'s
+  `.tcr-running-dot` — local `@keyframes` on the molecule, independent of
+  `StatusDot`) for the in-flight operation.
+
+Command (`flex: 1`, `min-width: 0`): `--font-mono`, `font-size: 12px`,
+`--text-body`, `white-space: nowrap`, `overflow: hidden`,
+`text-overflow: ellipsis`. Typically a compact path or pattern
+(e.g., `"plan.md:160-560"`, `"^from|^import"`).
+
+Metric (optional, `flex-shrink: 0`, `padding-left: 12px`):
+`font-size: 11px`, `--text-muted`. Right-aligned. Examples:
+`"400 lines · 16.1 KB"`, `"46 matches · 6 files"`.
+
+Running state: command text color becomes `--text-subtle`, metric text color
+becomes `--color-orange`. This muted-text + orange-metric treatment fires
+whenever the row is in its `running` status — there is no separate boolean
+prop for it. A completed read renders with a `--dot-read` StatusDot, normal
+command text, and a `--text-muted` metric; an in-flight read renders with a
+pulsing orange dot, `--text-subtle` command text, and a `--color-orange`
+metric text like "reading…".
+
+Props: `status: 'read' | 'grep' | 'ls' | 'running'`, `command: string`,
+`metric?: string`.
+
+The single `status` prop covers both the dot's visual and the row's running-
+state styling. For an in-flight operation, callers pass `status="running"`
+and get both the pulsing orange dot and the dimmed text; for a completed
+operation, callers pass the tool-family variant and get both the static
+teal-family dot and normal text. The two states always move together, so
+collapsing them into one prop keeps the API honest.
+
+#### ToolStatBlock
+
+A single per-tool-type statistics block in the left pane of
+`ToolAggregateCard`. Presents aggregated scope information — operation count,
+bytes, lines, matches, files touched — for one tool family.
+
+Container: `display: flex`, `flex-direction: column`, `gap: 3px`. Multiple
+blocks within a pane are separated by `gap: 12px` via the parent.
+
+Header row: `display: flex`, `align-items: center`, `gap: 8px`. Contains:
+
+- `StatusDot size="md" status={type}` where `type` is `read`, `grep`, or `ls`.
+- Tool name: `--font-mono`, `font-size: 12px`, `--text-primary`,
+  `font-weight: 500`. E.g., "read", "grep", "ls".
+- Op count: `--font-mono`, `font-size: 11px`, `--text-muted`,
+  `margin-left: auto` (right-aligned). E.g., "4 ops".
+
+Meta lines (`padding-left: 16px` to align under the tool name, past the dot):
+`--font-mono`, `font-size: 11px`, `--text-muted`, `line-height: 1.4`.
+Multiple lines rendered via `<br>` or separate elements. Examples:
+`"612 lines · 24.7 KB"`, `"3 files touched"`, `"76 matches"`.
+
+Active variant: when the currently-running operation in the aggregate belongs
+to this tool type, the tool name becomes `color: var(--color-orange)`,
+font-weight 500. The StatusDot and op count are unchanged. Only one
+`ToolStatBlock` in a card can be active at a time.
+
+Props: `type: 'read' | 'grep' | 'ls'`, `name: string`, `opCount: string`
+(formatted, e.g., `"4 ops"`), `metaLines: string[]`, `active?: boolean`.
+
+#### ToolAggregateCard
+
+A card that groups consecutive exploration tool calls (`read`, `grep`, `ls`)
+into a single two-pane visual unit. Always rendered fully expanded — there is
+no collapsed state. Replaces the run of individual `ToolCallRow` rows that
+would otherwise wall the content stream.
+
+Container: `--bg-card`, `0.5px solid var(--border-card)`,
+`border-left: 3px solid var(--color-orange)`, `--radius-xl` (10px),
+`overflow: hidden`. The 3px orange left border follows the existing
+"left border = content source" convention — tool calls are agent output, so
+the card inherits the same source accent as `ProseCard`. The border color
+does NOT change when the card is in its active state.
+
+Active state — signaled only in the header and in the inner components, not
+in the outer border. When any child operation is in-flight:
+
+1. The header renders a pulsing orange dot plus a short label
+   (e.g., "reading projections.py"). This is the primary signal — visible
+   at a glance, persistent through the entire active period.
+2. The `ToolStatBlock` for the tool type that owns the in-flight operation
+   renders with `active={true}`, turning its tool name orange.
+3. The in-flight `ToolLogRow` in the right pane renders with
+   `status="running"`, replacing its dot with a pulsing orange dot and
+   dimming its command text.
+
+When no child operation is in-flight, the header does not render the running
+indicator and no stat block or log row is in the active/running state.
+
+Header: `display: flex`, `align-items: baseline`, `gap: 10px`,
+`padding: 10px 18px 9px 18px`, `border-bottom: 1px solid var(--border-divider-light)`.
+Contains, in order:
+
+1. Aggregate label: `--type-tool-type` (12px), `--text-muted`,
+   `letter-spacing: 0.3px`. Always the literal string "explore".
+2. Operation count: `--type-body` (14px), `--text-primary`, `font-weight: 500`.
+   E.g., "8 operations".
+3. Spacer (`flex: 1`).
+4. Running indicator (only when `runningLabel` prop is set): inline-flex
+   group — a 6px orange pulsing dot (inline span with local `@keyframes`,
+   same pattern as `ToolCallRow`'s `.tcr-running-dot`, not `StatusDot`)
+   plus a short label in `--font-mono`, `font-size: 11px`, `--color-orange`.
+   The label is a human-readable fragment like "reading projections.py" or
+   "grepping" — supplied by the caller; the card does not compute it.
+   Padding: gap 5px between dot and label.
+5. Elapsed (optional): `--font-mono`, `font-size: 11px`, `--text-hint`,
+   `padding-left: 8px`. A formatted duration string like "3m 24s". Shown for
+   both completed and active cards. This is the aggregate's total wall-clock
+   duration — per-operation durations are intentionally NOT shown anywhere,
+   because exploration tools return near-instantly and per-op duration is
+   noise. See the design rationale section on duration vs scope metrics.
+
+Body: `display: grid`, `grid-template-columns: 240px 1fr`. Two panes with a
+vertical divider between them.
+
+Left pane (stats): `background: var(--bg-card-warm)`,
+`border-right: 1px solid var(--border-divider-light)`, `padding: 14px 16px`,
+`display: flex`, `flex-direction: column`, `gap: 12px`. Contains a stack of
+`ToolStatBlock` molecules, one per tool family present in the aggregate. Tool
+families with zero operations are not rendered. Ordering: `read`, `grep`,
+`ls` (alphabetical-by-convention; the caller orders).
+
+Right pane (log): `padding: 11px 18px 11px 16px`, `display: flex`,
+`flex-direction: column`, `gap: 0`. Contains a stack of `ToolLogRow`
+molecules in strict chronological order. The currently-running row, if any,
+is rendered last.
+
+The two panes carry orthogonal information. The left pane is enduring
+summary — operations fold into their type's totals. The right pane is the
+chronological event stream. The left pane is meant to land the eye; the
+right pane is meant to scroll past.
+
+Props: `operationCount: number`, `runningLabel?: string`
+(when set, card is in active state and the running indicator renders),
+`elapsed?: string`, `statsPane: ReactNode` (typically a list of
+`ToolStatBlock` elements), `logPane: ReactNode` (typically a list of
+`ToolLogRow` elements).
+
+The card uses slot-based composition rather than prescribed data arrays,
+because the grouping logic that produces the stats and log rows lives
+outside the card (in a utility function consumed by `App.tsx`). Keeping
+the card slot-based keeps it pure layout and lets the molecules it contains
+stay independently usable.
+
 ### Settings Molecules
 
 #### FormRow
@@ -549,3 +801,63 @@ The dot-on-divider pattern is extended with color semantics. A **teal dot** sign
 ### Review card pattern
 
 The ReviewPanel card uses `border-top: 3px solid --color-orange`, the same "panel-level attention" signal as ElicitationPanel's decision panel. Both are organisms that yield the conversation and require user action to proceed. The visual consistency communicates this shared interaction pattern: the workflow is paused, waiting for you.
+
+### Tool aggregation scope
+
+Exploration tools (`read`, `grep`, `ls`) are aggregated into
+`ToolAggregateCard` when two or more appear consecutively in the conversation
+stream without any other entry type between them (prose, thinking, user
+message, step boundary, phase marker, `bash`, `write`, `edit`, or any other
+tool). A lone `read` renders as a standalone `ToolCallRow`. A run of two or
+more consecutive reads/greps/ls's collapses into one card.
+
+`bash`, `write`, and `edit` are never aggregated. `bash` has too much
+semantic variance — it can be a one-line formatter, a heavy test run, or an
+arbitrary script — and compressing disparate bash calls into a summary
+obscures rather than clarifies. `write` and `edit` are mutations; each is
+individually significant. All three render as standalone `ToolCallRow`s.
+
+### Tool aggregation active state
+
+Active state on `ToolAggregateCard` is communicated through three in-card
+signals, not through a border color change. When an operation inside the
+card is in-flight:
+
+1. The card header renders a pulsing orange dot plus a short label
+   (e.g., "reading projections.py").
+2. The stat block for the tool type that owns the in-flight operation
+   renders with `active={true}`, turning its tool name orange.
+3. The in-flight log row in the right pane renders with `status="running"`,
+   replacing its dot with a pulsing orange dot and dimming its command
+   text.
+
+The card's left border stays orange throughout (see "Left border = content
+source"). Not changing the border preserves the content-source convention
+without conflating "this is agent content" with "this is happening right
+now." The three in-card signals are enough: the user always has a clear
+"something is still happening" indicator without ambiguity in the outer
+chrome.
+
+The signal is qualitative and textual (label + pulsing dot) rather than
+quantitative and spatial (a progress bar), because the total number of
+operations is not known in advance. A horizontal progress bar would falsely
+imply a completion endpoint; a pulsing dot next to a label does not.
+
+### Duration vs scope metrics
+
+`ToolAggregateCard` and `ToolLogRow` show per-operation scope metrics —
+bytes read, lines read, matches found, files touched, hunks edited — and
+deliberately omit per-operation duration. Exploration tools return in
+milliseconds in practice, so per-op duration is noise that competes for
+attention with the signal.
+
+Per-aggregate duration is shown once, in the card header, because the
+total wall-clock time across a run of exploration ops is legitimately
+useful — it tells the user whether the agent is thinking slowly, spawning
+many ops, or encountering a tool that happened to be genuinely slow. The
+distinction is scale: individual ops are fast, aggregates are not.
+
+`ToolCallRow` (standalone) does show a metric that may include duration for
+`bash` specifically, because bash duration is frequently meaningful.
+`ToolCallRow` for `write` and `edit` shows size/line-count metrics without
+duration.
