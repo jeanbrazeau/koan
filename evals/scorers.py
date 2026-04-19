@@ -7,7 +7,13 @@
 # PASS or FAIL. Missing rubric -> scorer returns None -> inspect_ai skips it.
 #
 # Section enum per phase: summary | questions | artifacts | overall.
-# Workflow-level cross-cutter: rubrics/overall.md at the fixture root.
+# Workflow-level cross-cutter: rubric body from the case file (overall_rubric in metadata).
+#
+# Scorers are independent `@scorer` functions (not a composite dict-valued
+# score) so each shows as its own span in the transcript, its own row in
+# the scoring table, and can be re-run individually via `inspect eval
+# --scorer <name>`. Inspect dispatches them sequentially within a sample;
+# parallelism across samples is controlled via `max_samples`.
 
 from __future__ import annotations
 
@@ -17,19 +23,18 @@ from typing import Callable
 
 from inspect_ai.model import get_model
 from inspect_ai.scorer import (
-    Score, Scorer, accuracy, scorer, stderr, value_to_float,
+    CORRECT,
+    INCORRECT,
+    Score,
+    Scorer,
+    accuracy,
+    scorer,
+    stderr,
 )
 from inspect_ai.solver import TaskState
 
 
 JUDGE_MODEL = "google/gemini-3.1-pro-preview"
-
-# inspect_ai's default value_to_float only recognises CORRECT/INCORRECT/PARTIAL
-# and yes/true/no/false/numeric. Scorers here return "PASS" / "FAIL" as
-# Score.value to match rubric authoring conventions and the last-line grade
-# pattern, so a custom ValueToFloat is required for accuracy() / stderr().
-_PF_TO_FLOAT = value_to_float(correct="PASS", incorrect="FAIL")
-_PF_METRICS = [accuracy(to_float=_PF_TO_FLOAT), stderr(to_float=_PF_TO_FLOAT)]
 
 
 # -- Rubric loading ------------------------------------------------------------
@@ -37,8 +42,11 @@ _PF_METRICS = [accuracy(to_float=_PF_TO_FLOAT), stderr(to_float=_PF_TO_FLOAT)]
 def _load_rubric(state: TaskState, phase: str, section: str) -> str | None:
     fixture_dir = Path(state.metadata["fixture_dir"])
     task_dir = Path(state.metadata["task_dir"])
-    fixture_rubric = fixture_dir / "rubrics" / phase / f"{section}.md"
-    task_rubric = task_dir / "rubrics" / phase / f"{section}.md"
+    # Rubric directories use Python-style underscores regardless of how koan
+    # names the phase internally (e.g. phase "plan-spec" -> dir "plan_spec").
+    phase_dir = phase.replace("-", "_")
+    fixture_rubric = fixture_dir / "rubrics" / phase_dir / f"{section}.md"
+    task_rubric = task_dir / "rubrics" / phase_dir / f"{section}.md"
     parts = []
     if fixture_rubric.exists():
         parts.append(fixture_rubric.read_text(encoding="utf-8"))
@@ -50,20 +58,13 @@ def _load_rubric(state: TaskState, phase: str, section: str) -> str | None:
     return "\n\n".join(parts) if parts else None
 
 
-def _load_workflow_rubric(state: TaskState) -> str | None:
-    fixture_dir = Path(state.metadata["fixture_dir"])
-    task_dir = Path(state.metadata["task_dir"])
-    f_rubric = fixture_dir / "rubrics" / "overall.md"
-    t_rubric = task_dir / "rubrics" / "overall.md"
-    parts = []
-    if f_rubric.exists():
-        parts.append(f_rubric.read_text(encoding="utf-8"))
-    if t_rubric.exists():
-        parts.append(
-            "\n\n## Task-specific additions\n\n"
-            + t_rubric.read_text(encoding="utf-8")
-        )
-    return "\n\n".join(parts) if parts else None
+def _load_case_rubric(state: TaskState) -> str | None:
+    # The overall rubric is now embedded in the case file body and injected
+    # into Sample metadata by load_dataset. Reading from metadata avoids a
+    # second file read at score time and keeps the scorer independent of the
+    # fixtures directory layout.
+    rubric = state.metadata.get("overall_rubric")
+    return rubric if rubric else None
 
 
 # -- Payload selection ---------------------------------------------------------
@@ -119,8 +120,15 @@ def _payload_overall(harvest: dict, phase: str) -> str:
 def _payload_workflow(harvest: dict) -> str:
     summaries = harvest.get("phase_summaries", {})
     tools = harvest.get("tool_calls_by_phase", {})
+    # Use the chronological phase_order captured by harvest_run so the
+    # workflow-level payload reads in the order phases actually ran
+    # (intake -> plan-spec -> ...) rather than alphabetically.
+    order = harvest.get("phase_order") or sorted(summaries.keys())
+    # Append any phases that appear in data but not in phase_order (shouldn't
+    # happen, but keeps the payload lossless if harvest is incomplete).
+    tail = [p for p in summaries.keys() if p not in order]
     blocks = []
-    for phase in sorted(summaries.keys()):
+    for phase in list(order) + tail:
         blocks.append(
             f"# phase: {phase}\n\n"
             f"## summary\n{summaries.get(phase, '')}\n\n"
@@ -153,8 +161,16 @@ async def _grade(rubric: str, payload: str) -> Score:
     out = await model.generate(_JUDGE_PROMPT.format(rubric=rubric, payload=payload))
     text = out.completion.strip()
     last_line = text.splitlines()[-1].strip().upper() if text else "FAIL"
-    value = "PASS" if last_line == "PASS" else "FAIL"
-    return Score(value=value, explanation=text)
+    passing = last_line == "PASS"
+    # CORRECT / INCORRECT are inspect_ai's canonical binary values ("C"/"I").
+    # Default value_to_float recognises them, so default accuracy()/stderr()
+    # work without any custom converter, and `inspect view` renders them with
+    # built-in styling rather than bare numerics.
+    return Score(
+        value=CORRECT if passing else INCORRECT,
+        answer="PASS" if passing else "FAIL",
+        explanation=text,
+    )
 
 
 # -- Scorer factories ----------------------------------------------------------
@@ -168,13 +184,22 @@ def _scorer_name(phase: str, section: str) -> str:
 def _rubric_scorer(phase: str, section: str, payload_fn: Callable):
     # Returns a scorer factory (call with () to get a Scorer). The inner
     # _build function is decorated with @scorer so inspect_ai picks it up;
-    # name= is set explicitly so the registry key matches the factory variable.
-    @scorer(metrics=_PF_METRICS, name=_scorer_name(phase, section))
+    # name= is set explicitly because all eight factories share the same
+    # inner function name (_build) and need distinct registry keys.
+    @scorer(metrics=[accuracy(), stderr()], name=_scorer_name(phase, section))
     def _build() -> Scorer:
         async def score(state: TaskState, target) -> Score | None:
+            # Gate: skip phases that did not run under this case's directed
+            # sequence. Empty scored_phases (no directed_phases in metadata)
+            # falls through so Samples without the field are still scored.
+            directed = state.metadata.get("directed_phases") or []
+            scored_phases = [p for p in directed if p != "done"]
+            if scored_phases and phase not in scored_phases:
+                return None
             rubric = _load_rubric(state, phase, section)
             if rubric is None:
                 # No rubric for this (phase, section) -> skip gracefully.
+                # Inspect treats this as "unscored" rather than FAIL.
                 return None
             harvest = state.metadata.get("harvest", {})
             payload = payload_fn(harvest, phase)
@@ -194,10 +219,10 @@ plan_spec_artifacts = _rubric_scorer("plan-spec", "artifacts", _payload_artifact
 plan_spec_overall   = _rubric_scorer("plan-spec", "overall",   _payload_overall)
 
 
-@scorer(metrics=_PF_METRICS, name="workflow_overall")
+@scorer(metrics=[accuracy(), stderr()], name="workflow_overall")
 def workflow_overall() -> Scorer:
     async def score(state: TaskState, target) -> Score | None:
-        rubric = _load_workflow_rubric(state)
+        rubric = _load_case_rubric(state)
         if rubric is None:
             return None
         harvest = state.metadata.get("harvest", {})

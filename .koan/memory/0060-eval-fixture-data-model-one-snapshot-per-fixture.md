@@ -1,14 +1,14 @@
 ---
-title: Eval fixture data model -- one snapshot per fixture, multiple tasks share the
-  snapshot, rubrics layered fixture-then-task
+title: Eval fixture data model -- fixtures carry state, test cases carry workflow/directed_phases/cross-cutting
+  rubric
 type: context
 created: '2026-04-19T09:50:06Z'
-modified: '2026-04-19T09:50:06Z'
+modified: '2026-04-19T15:19:25Z'
 related:
 - 0050-eval-benchmark-fixtures-are-manual-git-snapshots-of.md
 - 0059-eval-rubric-layout-directory-per-phase-with-fixed.md
 ---
 
-This entry describes the `evals/fixtures/` directory organization that was established on 2026-04-19 during the per-phase eval framework foundation workflow. On 2026-04-19, Leon decided that a fixture is the unit that owns a snapshot: `evals/fixtures/<fixture>/snapshot.tar.gz` is a `git archive` of koan at a specific commit (stored via git-lfs), tightly coupled to the codebase state a task expects. Each fixture directory hosts one or more tasks at `evals/fixtures/<fixture>/tasks/<task>/task.md`, all of which share the fixture's single snapshot. Snapshots never span fixtures: if a different codebase state is needed, that is a different fixture.
+This entry describes the `evals/fixtures/` directory organization as reorganized on 2026-04-19 during the case-file-based rubric reorganization workflow. The original 2026-04-19 design conflated fixture state with test-case definition; later that same day Leon split the two. A fixture still owns a snapshot: `evals/fixtures/<fixture>/snapshot.tar.gz` is a `git archive` of koan at a specific commit (stored via git-lfs), tightly coupled to the codebase state a task expects. Each fixture directory still hosts one or more tasks at `evals/fixtures/<fixture>/tasks/<task>/task.md`, all sharing the fixture's single snapshot. Snapshots never span fixtures: if a different codebase state is needed, that is a different fixture.
 
-Leon decided that rubrics are the shared/reusable layer, layered in two levels. Fixture-level rubrics at `evals/fixtures/<fixture>/rubrics/<phase>/<section>.md` supply generic grading criteria that apply to every task of that fixture. Optional task-level rubrics at `evals/fixtures/<fixture>/tasks/<task>/rubrics/<phase>/<section>.md` supply task-specific addenda appended to the fixture-level rubric at grade time; if neither exists for a given section, the scorer returns `None` and Inspect AI skips it for that sample. The asymmetry between tasks (isolated per-task.md) and rubrics (shared across tasks of a fixture) exists because rubrics encode generic judgment criteria that reuse across task variants on the same snapshot, while each task's `task.md` carries distinct expected findings.
+On 2026-04-19, Leon decided the fixture layer contains only state: the snapshot, each task's `task.md`, and the invariant per-phase rubrics at `fixtures/<f>/rubrics/<phase>/<section>.md` and `fixtures/<f>/tasks/<t>/rubrics/<phase>/<section>.md`. A separate "test case" layer lives at `fixtures/<f>/tasks/<t>/cases/<slug>.md` and carries the parameters that vary across measurements of the same task: `workflow`, `directed_phases`, and the cross-cutting rubric body. Leon stated: "I think we're mixing datasets / snapshots with test cases." The resulting separation: fixture = state; test case = a distinct run configuration that reuses fixture state. Multiple cases can target the same (fixture, task) pair to measure different directed_phases sequences against a shared snapshot. The previous `fixtures/<f>/rubrics/overall.md` and `tasks/<t>/rubrics/overall.md` files were deleted during the reorganization; their content consolidated into the corresponding `cases/full.md` as a concrete migration target.

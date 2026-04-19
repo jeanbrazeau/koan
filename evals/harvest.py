@@ -8,10 +8,15 @@
 
 from __future__ import annotations
 
+import json
+import logging
 from pathlib import Path
 from typing import Any
 
 from koan.state import AppState
+
+
+log = logging.getLogger("koan.evals.harvest")
 
 
 # Only koan MCP tool calls are harvested; built-in tool calls (Read, Write,
@@ -34,14 +39,69 @@ def harvest_run(app_state: AppState) -> dict[str, Any]:
         store.projection.run.phase_summaries
         if store.projection.run else {}
     )
+    phase_order = _phase_order(store.events)
     tool_calls_by_phase = _bucket_tool_calls(store.events)
     artifacts_by_phase = _bucket_artifacts(store.events, run_dir)
-    return {
+    result = {
+        "phase_order": phase_order,
         "phase_summaries": dict(summaries),
         "tool_calls_by_phase": tool_calls_by_phase,
         "artifacts_by_phase": artifacts_by_phase,
         "final_projection": _trim_projection(store.projection),
     }
+    _log_harvest(result)
+    return result
+
+
+def _log_harvest(h: dict[str, Any]) -> None:
+    """Emit diagnostic logging.info lines describing harvested data.
+
+    One block per phase: a one-line summary of counts, followed by the
+    phase summary text (truncated), each koan_ask_question, and each
+    artifact path + size. Useful for debugging without inspect_ai.
+    """
+    phase_order = h["phase_order"]
+    log.info("harvest complete: phases=%s", phase_order or "(none)")
+    for phase in phase_order:
+        summary = h["phase_summaries"].get(phase, "")
+        tools = h["tool_calls_by_phase"].get(phase, [])
+        arts = h["artifacts_by_phase"].get(phase, {})
+        created = arts.get("created", {})
+        modified = arts.get("modified", {})
+        questions = [t for t in tools if t["tool"] == "koan_ask_question"]
+        log.info(
+            "phase=%s summary_chars=%d tool_calls=%d questions=%d "
+            "artifacts_created=%d artifacts_modified=%d",
+            phase, len(summary), len(tools), len(questions),
+            len(created), len(modified),
+        )
+        if summary:
+            log.info("phase=%s summary: %s", phase, _truncate(summary, 800))
+        for t in tools:
+            args = _truncate(json.dumps(t.get("args", {}), default=str), 300)
+            log.info("phase=%s tool=%s args=%s", phase, t.get("tool"), args)
+        for path, content in sorted(created.items()):
+            log.info("phase=%s created=%s (%d chars)", phase, path, len(content))
+        for path, content in sorted(modified.items()):
+            log.info("phase=%s modified=%s (%d chars)", phase, path, len(content))
+
+
+def _truncate(s: str, n: int) -> str:
+    if len(s) <= n:
+        return s
+    return s[: n - 3] + "..."
+
+
+def _phase_order(events: list) -> list[str]:
+    """Return phase names in the order they first appeared as phase_started."""
+    seen: list[str] = []
+    for ev in events:
+        if ev.event_type != "phase_started":
+            continue
+        phase = ev.payload.get("phase", "")
+        if phase and phase not in seen:
+            seen.append(phase)
+    return seen
 
 
 def _bucket_tool_calls(events: list) -> dict[str, list[dict]]:

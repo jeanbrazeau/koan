@@ -8,7 +8,6 @@ and a set of rubrics. One fixture may host multiple tasks.
     <fixture>/
         snapshot.tar.gz             -- git archive of the target project at a specific commit
         rubrics/
-            overall.md              -- workflow-level cross-cutting rubric
             <phase>/
                 summary.md          -- grades the phase summary
                 questions.md        -- grades questions asked during the phase
@@ -17,16 +16,45 @@ and a set of rubrics. One fixture may host multiple tasks.
         tasks/
             <task>/
                 task.md             -- task description (UTF-8 plain text)
-                rubrics/            -- optional task-level rubric addenda
+                rubrics/            -- optional task-level per-phase rubric addenda (invariant across directed-phase variants)
                     <phase>/
                         <section>.md
+                cases/              -- one markdown file per test case; each defines a workflow, a directed phase sequence, and a cross-cutting rubric
+                    <slug>.md
 
 ## Rubric sections
 
 Each phase supports four sections: `summary`, `questions`, `artifacts`, `overall`.
 
-There is also a workflow-level rubric at `rubrics/overall.md` that grades
-cross-phase consistency.
+Cross-cutting / overall rubrics live in case files under `tasks/<task>/cases/<slug>.md`.
+
+## Test cases
+
+Each file under `tasks/<task>/cases/` is a test case. It is a markdown file
+with YAML frontmatter followed by the cross-cutting rubric body.
+
+Frontmatter schema:
+
+    ---
+    workflow: plan              # string -- which koan workflow to run
+    directed_phases:            # list[str] -- phase sequence, last entry must be "done"
+      - intake
+      - plan-spec
+      - done
+    ---
+
+The body below the closing `---` is the cross-cutting rubric used by the
+`workflow_overall` scorer. It must end with:
+`Respond with PASS or FAIL on the last line.`
+
+Phase-scoring semantics: a per-phase scorer grades only if the phase appears
+in the case's `directed_phases`. Phases absent from the list return `None`
+(Inspect skips them) even when a rubric file exists on disk.
+
+Every case file auto-generates an Inspect `@task` named
+`koan_<fixture>_<task>_<case>` with hyphens converted to underscores.
+For example, `fixtures/koan-1/tasks/yolo-flag/cases/full.md` produces
+the task `koan_koan_1_yolo_flag_full`.
 
 ## Rubric layering
 
@@ -35,7 +63,7 @@ the optional task-level rubric addendum. Fixture rubric comes first; task
 addendum is appended. If neither exists for a (phase, section) pair, the scorer
 is skipped for that sample (no score recorded, not a FAIL).
 
-Every rubric file must end with: `Respond with PASS or FAIL on the last line.`
+Every per-phase rubric file must end with: `Respond with PASS or FAIL on the last line.`
 
 ## Artifact content limitation
 
