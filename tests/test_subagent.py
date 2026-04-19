@@ -732,3 +732,13 @@ class TestClaudePostBuildArgs:
         assert "--permission-mode" in args
         pm_idx = args.index("--permission-mode")
         assert args[pm_idx + 1] == "acceptEdits"
+
+    def test_koan_mcp_tools_preapproved(self):
+        from koan.subagent import _claude_post_build_args
+        # Every role must have koan MCP calls pre-approved so the CLI does not
+        # prompt for permission on koan_* tools.
+        for role in ("orchestrator", "executor", "scout", "bogus"):
+            args = _claude_post_build_args(role, "/run", "/proj")
+            assert "--allowedTools" in args, role
+            at_idx = args.index("--allowedTools")
+            assert args[at_idx + 1] == "mcp__koan__*", role

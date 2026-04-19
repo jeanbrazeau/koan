@@ -136,6 +136,7 @@ def _claude_post_build_args(role: str, run_dir: str, project_dir: str) -> list[s
     # restrict which roles receive Write/Edit in their tool vocabulary, so
     # scouts cannot write even though the permission mode is permissive.
     args.extend(["--permission-mode", "acceptEdits"])
+    args.extend(["--allowedTools", "mcp__koan__*"])
     return args
 
 
