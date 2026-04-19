@@ -34,6 +34,9 @@ import { NewRunForm } from './components/organisms/NewRunForm'
 import { ThinkingBlock } from './components/molecules/ThinkingBlock'
 import { ProseCard } from './components/molecules/ProseCard'
 import { ToolCallRow } from './components/molecules/ToolCallRow'
+import { ToolLogRow } from './components/molecules/ToolLogRow'
+import { ToolStatBlock } from './components/molecules/ToolStatBlock'
+import { ToolAggregateCard } from './components/molecules/ToolAggregateCard'
 import { StepGuidancePill } from './components/molecules/StepGuidancePill'
 import { FeedbackInput } from './components/molecules/FeedbackInput'
 import { UserBubble } from './components/molecules/UserBubble'
@@ -50,6 +53,8 @@ import { Notification } from './components/Notification'
 import { SettingsPage, type Profile as SPProfile, type Installation as SPInstallation } from './components/organisms/SettingsPage'
 import { ReviewPanel, type ReviewSubmitPayload } from './components/organisms/ReviewPanel'
 import { SessionsPage } from './components/organisms/SessionsPage'
+
+import type { AggregateChild, AggregateReadChild, AggregateGrepChild, AggregateLsChild, ToolAggregateEntry } from './store/index'
 
 // ---------------------------------------------------------------------------
 // Header data
@@ -146,24 +151,244 @@ const KOAN_TOOL_LABELS: Record<string, string> = {
   koan_skip_story: 'Skipping story',
 }
 
+// ---------------------------------------------------------------------------
+// Aggregate rendering helpers — pure functions, next to renderEntry so the
+// data flow stays readable. Each maps AggregateChild state to display strings
+// or further structured pieces consumed by the card / row components.
+// ---------------------------------------------------------------------------
+
+function pluralizeOps(n: number): string {
+  return n === 1 ? '1 op' : `${n} ops`
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`
+  const kb = n / 1024
+  if (kb < 1024) return `${kb.toFixed(1)} KB`
+  return `${(kb / 1024).toFixed(1)} MB`
+}
+
+function childCommand(child: AggregateChild): string {
+  switch (child.tool) {
+    case 'read': return child.lines ? `${child.file}:${child.lines}` : child.file
+    case 'grep': return child.pattern
+    case 'ls':   return child.path
+  }
+}
+
+function childMetric(child: AggregateChild): string | undefined {
+  switch (child.tool) {
+    case 'read': {
+      if (child.linesRead != null && child.bytesRead != null) {
+        return `${child.linesRead} lines · ${formatBytes(child.bytesRead)}`
+      }
+      if (child.linesRead != null) return `${child.linesRead} lines`
+      return undefined
+    }
+    case 'grep': {
+      if (child.matches != null && child.filesMatched != null) {
+        return `${child.matches} matches · ${child.filesMatched} files`
+      }
+      if (child.matches != null) return `${child.matches} matches`
+      return undefined
+    }
+    case 'ls': {
+      if (child.entries != null) return `${child.entries} entries`
+      return undefined
+    }
+  }
+}
+
+function shortBasename(path: string): string {
+  const slash = path.lastIndexOf('/')
+  return slash >= 0 ? path.slice(slash + 1) : path
+}
+
+function runningLabelFor(child: AggregateChild): string {
+  switch (child.tool) {
+    case 'read': return `reading ${shortBasename(child.file)}`
+    case 'grep': return 'grepping'
+    case 'ls':   return `listing ${shortBasename(child.path)}`
+  }
+}
+
+function findRunningChild(children: AggregateChild[]): AggregateChild | undefined {
+  return children.find(c => c.inFlight)
+}
+
+function groupChildrenByTool(children: AggregateChild[]): {
+  read: AggregateReadChild[]; grep: AggregateGrepChild[]; ls: AggregateLsChild[]
+} {
+  const read: AggregateReadChild[] = []
+  const grep: AggregateGrepChild[] = []
+  const ls: AggregateLsChild[] = []
+  for (const c of children) {
+    if (c.tool === 'read') read.push(c)
+    else if (c.tool === 'grep') grep.push(c)
+    else ls.push(c)
+  }
+  return { read, grep, ls }
+}
+
+function readMetaLines(children: AggregateReadChild[]): string[] {
+  let totalLines = 0
+  let totalBytes = 0
+  let anyLineMetric = false
+  const files = new Set<string>()
+  for (const c of children) {
+    if (c.linesRead != null) { totalLines += c.linesRead; anyLineMetric = true }
+    if (c.bytesRead != null) { totalBytes += c.bytesRead }
+    files.add(c.file)
+  }
+  const lines: string[] = []
+  if (anyLineMetric) {
+    lines.push(totalBytes > 0
+      ? `${totalLines} lines · ${formatBytes(totalBytes)}`
+      : `${totalLines} lines`)
+  }
+  if (files.size !== children.length) {
+    // More than one read hit the same file — worth mentioning file count.
+    lines.push(`${files.size} ${files.size === 1 ? 'file' : 'files'} touched`)
+  }
+  return lines
+}
+
+function grepMetaLines(children: AggregateGrepChild[]): string[] {
+  let totalMatches = 0
+  let totalFiles = 0
+  let anyMetric = false
+  for (const c of children) {
+    if (c.matches != null) { totalMatches += c.matches; anyMetric = true }
+    if (c.filesMatched != null) { totalFiles += c.filesMatched }
+  }
+  const lines: string[] = []
+  if (anyMetric) lines.push(`${totalMatches} matches`)
+  if (totalFiles > 0) lines.push(`${totalFiles} ${totalFiles === 1 ? 'file' : 'files'} searched`)
+  return lines
+}
+
+function lsMetaLines(children: AggregateLsChild[]): string[] {
+  let totalEntries = 0
+  let totalDirs = 0
+  let anyMetric = false
+  for (const c of children) {
+    if (c.entries != null) { totalEntries += c.entries; anyMetric = true }
+    if (c.directories != null) totalDirs += c.directories
+  }
+  const lines: string[] = []
+  if (anyMetric) lines.push(`${totalEntries} entries`)
+  if (totalDirs > 0) lines.push(`${totalDirs} ${totalDirs === 1 ? 'directory' : 'directories'}`)
+  return lines
+}
+
+function aggregateElapsedMs(agg: ToolAggregateEntry, nowMs: number): number {
+  const running = findRunningChild(agg.children)
+  if (running) {
+    return Math.max(0, nowMs - agg.startedAtMs)
+  }
+  let latest = agg.startedAtMs
+  for (const c of agg.children) {
+    if (c.completedAtMs != null && c.completedAtMs > latest) latest = c.completedAtMs
+  }
+  return Math.max(0, latest - agg.startedAtMs)
+}
+
+function renderAggregate(entry: ToolAggregateEntry, i: number) {
+  const children = entry.children
+  if (children.length === 0) return null
+
+  // Single-child aggregates render as a standalone ToolCallRow, matching the
+  // pre-aggregation visual for the common case where no grouping has happened
+  // yet. The row upgrades to a card on the next consecutive exploration tool.
+  if (children.length === 1) {
+    const c = children[0]
+    return (
+      <ToolCallRow
+        key={i}
+        tool={c.tool}
+        command={childCommand(c)}
+        status={c.inFlight ? 'running' : 'done'}
+        metric={childMetric(c)}
+      />
+    )
+  }
+
+  // Two or more children: render the full two-pane aggregate card.
+  const groups = groupChildrenByTool(children)
+  const running = findRunningChild(children)
+  const runningLabel = running ? runningLabelFor(running) : undefined
+  const elapsedMs = aggregateElapsedMs(entry, Date.now())
+
+  const stats = [
+    groups.read.length > 0 && (
+      <ToolStatBlock
+        key="read"
+        type="read"
+        name="read"
+        opCount={pluralizeOps(groups.read.length)}
+        metaLines={readMetaLines(groups.read)}
+        active={running?.tool === 'read'}
+      />
+    ),
+    groups.grep.length > 0 && (
+      <ToolStatBlock
+        key="grep"
+        type="grep"
+        name="grep"
+        opCount={pluralizeOps(groups.grep.length)}
+        metaLines={grepMetaLines(groups.grep)}
+        active={running?.tool === 'grep'}
+      />
+    ),
+    groups.ls.length > 0 && (
+      <ToolStatBlock
+        key="ls"
+        type="ls"
+        name="ls"
+        opCount={pluralizeOps(groups.ls.length)}
+        metaLines={lsMetaLines(groups.ls)}
+        active={running?.tool === 'ls'}
+      />
+    ),
+  ].filter(Boolean)
+
+  const logRows = children.map((c, j) => (
+    <ToolLogRow
+      key={j}
+      status={c.inFlight ? 'running' : c.tool}
+      command={childCommand(c)}
+      metric={c.inFlight
+        ? (c.tool === 'read' ? 'reading…' : c.tool === 'grep' ? 'grepping…' : 'listing…')
+        : childMetric(c)}
+    />
+  ))
+
+  return (
+    <ToolAggregateCard
+      key={i}
+      operationCount={children.length}
+      runningLabel={runningLabel}
+      elapsed={elapsedMs > 0 ? formatElapsed(elapsedMs) : undefined}
+      statsPane={stats}
+      logPane={logRows}
+    />
+  )
+}
+
 function renderEntry(entry: ConversationEntry, i: number) {
   switch (entry.type) {
     case 'thinking':
       return <ThinkingBlock key={i}><Md>{entry.content}</Md></ThinkingBlock>
     case 'text':
       return <ProseCard key={i}><Md>{entry.text}</Md></ProseCard>
-    case 'tool_read':
-      return <ToolCallRow key={i} tool="read" command={entry.lines ? `${entry.file}:${entry.lines}` : entry.file} status={entry.inFlight ? 'running' : 'done'} />
+    case 'tool_aggregate':
+      return renderAggregate(entry, i)
     case 'tool_write':
       return <ToolCallRow key={i} tool="write" command={entry.file} status={entry.inFlight ? 'running' : 'done'} />
     case 'tool_edit':
       return <ToolCallRow key={i} tool="edit" command={entry.file} status={entry.inFlight ? 'running' : 'done'} />
     case 'tool_bash':
       return <ToolCallRow key={i} tool="bash" command={entry.command} status={entry.inFlight ? 'running' : 'done'} />
-    case 'tool_grep':
-      return <ToolCallRow key={i} tool="grep" command={entry.pattern} status={entry.inFlight ? 'running' : 'done'} />
-    case 'tool_ls':
-      return <ToolCallRow key={i} tool="ls" command={entry.path} status={entry.inFlight ? 'running' : 'done'} />
     case 'tool_generic': {
       if (SUPPRESSED_TOOLS.has(entry.toolName)) return null
       const label = KOAN_TOOL_LABELS[entry.toolName] ?? entry.toolName

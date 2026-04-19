@@ -54,6 +54,15 @@
   min-width: 0;
 }
 
+/* ---- Metric (optional) ---- */
+.tcr-metric {
+  font-family: var(--font-mono);
+  font-size: var(--type-tool-path);
+  color: var(--text-muted);
+  flex-shrink: 0;
+  padding-left: 12px;
+}
+
 /* ---- Status variants ---- */
 .tcr--running {
   opacity: 0.8;
@@ -64,6 +73,10 @@
 }
 
 .tcr--error .tcr-command {
+  color: var(--status-failed);
+}
+
+.tcr--error .tcr-metric {
   color: var(--status-failed);
 }
 

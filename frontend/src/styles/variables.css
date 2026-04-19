@@ -169,6 +169,12 @@
   --status-failed:             #c44;
 
 
+  /* ===== Tool Family Indicator Colors ===== */
+  --dot-read:                  #5a9a8a;
+  --dot-grep:                  #7ab0a0;
+  --dot-ls:                    #4a8878;
+
+
   /* ===== Font Families ===== */
   --font-display:              Georgia, "Times New Roman", serif;
   --font-body:                 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;

@@ -37,13 +37,46 @@ export interface StepEntry { type: 'step'; step: number; stepName: string; total
 export interface UserMessageEntry { type: 'user_message'; content: string; timestampMs: number }
 
 interface BaseToolEntry { callId: string; inFlight: boolean }
-export interface ToolReadEntry    extends BaseToolEntry { type: 'tool_read';    file: string; lines: string }
 export interface ToolWriteEntry   extends BaseToolEntry { type: 'tool_write';   file: string }
 export interface ToolEditEntry    extends BaseToolEntry { type: 'tool_edit';    file: string }
 export interface ToolBashEntry    extends BaseToolEntry { type: 'tool_bash';    command: string }
-export interface ToolGrepEntry    extends BaseToolEntry { type: 'tool_grep';    pattern: string }
-export interface ToolLsEntry      extends BaseToolEntry { type: 'tool_ls';      path: string }
 export interface ToolGenericEntry extends BaseToolEntry { type: 'tool_generic'; toolName: string; summary: string }
+
+// Aggregate children — exploration tools (read/grep/ls) never appear as
+// top-level ConversationEntry values. They live only inside ToolAggregateEntry.
+export interface AggregateReadChild extends BaseToolEntry {
+  tool: 'read'
+  file: string
+  lines: string
+  startedAtMs: number
+  completedAtMs: number | null
+  linesRead: number | null
+  bytesRead: number | null
+}
+export interface AggregateGrepChild extends BaseToolEntry {
+  tool: 'grep'
+  pattern: string
+  startedAtMs: number
+  completedAtMs: number | null
+  matches: number | null
+  filesMatched: number | null
+}
+export interface AggregateLsChild extends BaseToolEntry {
+  tool: 'ls'
+  path: string
+  startedAtMs: number
+  completedAtMs: number | null
+  entries: number | null
+  directories: number | null
+}
+export type AggregateChild = AggregateReadChild | AggregateGrepChild | AggregateLsChild
+
+export interface ToolAggregateEntry {
+  type: 'tool_aggregate'
+  children: AggregateChild[]
+  startedAtMs: number
+}
+
 export interface DebugStepGuidanceEntry { type: 'debug_step_guidance'; content: string }
 export interface PhaseBoundaryEntry { type: 'phase_boundary'; phase: string; message: string; description: string }
 
@@ -52,8 +85,8 @@ export interface YieldEntry { type: 'yield'; prompt: string; suggestions: Sugges
 
 export type ConversationEntry =
   | ThinkingEntry | TextEntry | StepEntry | UserMessageEntry
-  | ToolReadEntry | ToolWriteEntry | ToolEditEntry
-  | ToolBashEntry | ToolGrepEntry | ToolLsEntry | ToolGenericEntry
+  | ToolWriteEntry | ToolEditEntry | ToolBashEntry | ToolGenericEntry
+  | ToolAggregateEntry
   | DebugStepGuidanceEntry | PhaseBoundaryEntry | YieldEntry
 
 export interface Conversation {

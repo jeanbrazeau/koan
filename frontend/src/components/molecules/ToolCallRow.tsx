@@ -14,6 +14,9 @@ interface ToolCallRowProps {
   tool: string
   command: string
   status?: 'done' | 'running' | 'error'
+  /** Optional right-aligned metric text. Examples: "22.8 KB · new",
+   *  "2.4s · 140 B out", "3 hunks · ±24 lines". */
+  metric?: string
 }
 
 const CheckSvg = () => (
@@ -22,7 +25,7 @@ const CheckSvg = () => (
   </svg>
 )
 
-export function ToolCallRow({ tool, command, status = 'done' }: ToolCallRowProps) {
+export function ToolCallRow({ tool, command, status = 'done', metric }: ToolCallRowProps) {
   return (
     <div className={`tcr tcr--${status}`}>
       <span className="tcr-indicator">
@@ -32,6 +35,7 @@ export function ToolCallRow({ tool, command, status = 'done' }: ToolCallRowProps
       </span>
       <span className="tcr-type">{tool}</span>
       <span className="tcr-command">{command}</span>
+      {metric && <span className="tcr-metric">{metric}</span>}
     </div>
   )
 }
