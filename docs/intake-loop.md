@@ -1,6 +1,6 @@
 # Intake Phase Design
 
-How the intake phase gathers context in two steps, and the prompt
+How the intake phase gathers context in three steps, and the prompt
 engineering principles that govern it.
 
 > Parent doc: [architecture.md](./architecture.md)
@@ -17,18 +17,20 @@ produced downstream depends on the completeness and accuracy of what intake
 discovers. Gaps compound: a missed decision becomes a wrong plan becomes
 wrong code.
 
-The intake phase runs a focused **two-step workflow**: gather context
-(conversation + codebase orientation + scouts), then deepen understanding
-through dialogue and summarize findings.
+The intake phase runs a focused **three-step workflow**: gather context
+(conversation + codebase orientation + scouts), deepen understanding through
+dialogue and codebase verification, then synthesize findings into a handoff
+summary.
 
 ### Step structure
 
-| Step | Name   | Runs | Purpose                                                                                            |
-| ---- | ------ | ---- | -------------------------------------------------------------------------------------------------- |
-| 1    | Gather | 1x   | Read conversation, open obvious files (<=5), dispatch scouts.                                      |
-| 2    | Deepen | 1x   | Process scout results, verify by reading files, deepen through iterative dialogue, then summarize. |
+| Step | Name      | Runs | Purpose                                                                  |
+| ---- | --------- | ---- | ------------------------------------------------------------------------ |
+| 1    | Gather    | 1x   | Read conversation, open obvious files (<=5), dispatch scouts.            |
+| 2    | Deepen    | 1x   | Process scout results, verify by reading files, deepen through dialogue. |
+| 3    | Summarize | 1x   | Synthesize findings into a concise handoff summary.                      |
 
-All steps advance linearly. The phase boundary after step 2 gives the user a
+All steps advance linearly. The phase boundary after step 3 gives the user a
 natural point to review the summary and discuss next steps.
 
 ---
@@ -71,17 +73,28 @@ Key properties:
 - **Default-ask framing**: Question-asking is the default; skipping requires
   triple justification. This inverts the typical LLM bias toward advancing.
 
-The Deepen step concludes by synthesizing a concise summary covering: task
+### Step 3: Summarize
+
+The Summarize step synthesizes findings into a concise summary covering: task
 scope, key codebase findings, decisions made, constraints, and open items.
 This summary lives in the LLM's context -- downstream phases (plan-spec,
 plan-review) trust it as their starting point. See
 [phase-trust.md](./phase-trust.md) for the trust model.
 
+The Summarize step exists as a distinct step (rather than being folded into the
+end of Deepen) for a structural reason: the RAG injection pipeline captures the
+orchestrator's last prose turn before `koan_yield` at each phase boundary as
+that phase's summary. Embedding the synthesis inside Deepen means subsequent
+`koan_complete_step` calls could follow the synthesis text, displacing it as the
+final captured turn and degrading the RAG anchor for the next phase. A dedicated
+step ensures the synthesis is the last cognitive act before the phase boundary,
+making the captured summary clean and unambiguous.
+
 ---
 
 ## Phase Boundary
 
-After step 2 completes, `get_next_step()` returns `None`, which triggers the
+After step 3 completes, `get_next_step()` returns `None`, which triggers the
 phase boundary. The orchestrator presents suggested next phases with
 descriptions, and asks the user what to do next.
 
@@ -102,12 +115,15 @@ mechanisms that address specific failure modes.
 
 ### MARP (Maximizing Operations per Step)
 
-The two-step structure applies the MARP principle: maximize operations
+The three-step structure applies the MARP principle: maximize operations
 per `koan_complete_step` call while minimizing planning or meta-reasoning
 steps. Each step does real work across multiple activities rather than
-artificially separating them into sequential tool calls. The summary
-(previously a separate step) is folded into the Deepen step's conclusion
-because a strong model can handle both activities in a single pass.
+artificially separating them into sequential tool calls. Gather combines
+reading, orientation, and scout dispatch in a single step. Deepen combines
+scout result processing, direct file verification, and iterative dialogue.
+Summarize is a distinct step rather than being folded into Deepen because
+it serves a structural role in the RAG injection pipeline (see
+[Step 3: Summarize](#step-3-summarize) above).
 
 ### Iterative deepening through dialogue
 
