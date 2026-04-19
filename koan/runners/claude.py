@@ -173,6 +173,10 @@ class ClaudeRunner:
         if thinking != "disabled":
             cmd.extend(["--effort", _EFFORT_MAP[thinking]])
         cmd.extend(["--model", model])
+        # Opus 4.7+ suppresses thinking tokens by default; summarized mode
+        # preserves visibility without overwhelming the stream.
+        if "opus" in model.lower():
+            cmd.extend(["--thinking-display", "summarized"])
         cmd.extend(installation.extra_args)
         return cmd
 

@@ -512,6 +512,51 @@ class TestClaudeRunnerThinkingMode:
         assert cmd[idx + 1] == "max"
 
 
+# -- ClaudeRunner: opus thinking-display --------------------------------------
+
+class TestClaudeRunnerOpusThinkingDisplay:
+    def test_opus_alias_injects_thinking_display(self, tmp_path):
+        runner = ClaudeRunner(subagent_dir=str(tmp_path))
+        cmd = runner.build_command("p", "http://x/mcp", _install("claude"), "opus", "disabled")
+        assert "--thinking-display" in cmd
+        idx = cmd.index("--thinking-display")
+        assert cmd[idx + 1] == "summarized"
+
+    def test_opus_with_suffix_still_matches(self, tmp_path):
+        runner = ClaudeRunner(subagent_dir=str(tmp_path))
+        cmd = runner.build_command("p", "http://x/mcp", _install("claude"), "opus[1m]", "disabled")
+        assert "--thinking-display" in cmd
+        idx = cmd.index("--thinking-display")
+        assert cmd[idx + 1] == "summarized"
+
+    def test_case_insensitive_match(self, tmp_path):
+        runner = ClaudeRunner(subagent_dir=str(tmp_path))
+        cmd = runner.build_command("p", "http://x/mcp", _install("claude"), "OPUS", "disabled")
+        assert "--thinking-display" in cmd
+
+    def test_non_opus_model_has_no_thinking_display(self, tmp_path):
+        runner = ClaudeRunner(subagent_dir=str(tmp_path))
+        for model in ("sonnet", "haiku"):
+            cmd = runner.build_command("p", "http://x/mcp", _install("claude"), model, "disabled")
+            assert "--thinking-display" not in cmd
+
+    def test_thinking_display_before_extra_args(self, tmp_path):
+        runner = ClaudeRunner(subagent_dir=str(tmp_path))
+        inst = AgentInstallation(
+            alias="claude", runner_type="claude", binary="claude",
+            extra_args=["--verbose"],
+        )
+        cmd = runner.build_command("p", "http://x/mcp", inst, "opus", "disabled")
+        # extra_args must remain last
+        assert cmd[-1] == "--verbose"
+        assert "--thinking-display" in cmd
+        td_idx = cmd.index("--thinking-display")
+        # Compare against the LAST --verbose (from extra_args), not the
+        # built-in --verbose that the runner hardcodes earlier in the command.
+        verbose_idx = len(cmd) - 1 - cmd[::-1].index("--verbose")
+        assert td_idx < verbose_idx
+
+
 # -- ClaudeRunner: list_models -------------------------------------------------
 
 class TestClaudeRunnerListModels:
