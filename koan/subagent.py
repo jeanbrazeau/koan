@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,6 +27,7 @@ from .events import (
     build_tool_grep,
     build_tool_ls,
     build_tool_read,
+    build_tool_result_captured,
     build_tool_started,
     build_tool_stopped,
     build_tool_write,
@@ -42,6 +44,52 @@ if TYPE_CHECKING:
     from .state import AppState
 
 log = get_logger("subagent")
+
+
+def _emit_exploration_tool_completion(
+    store,
+    agent_id: str,
+    call_id: str,
+    tool_name: str,
+    summary: str,
+    now_ms: int,
+) -> None:
+    """Emit the typed projection event + tool_completed for a streaming read/grep/ls.
+
+    Called from stream_stdout's tool_stop handler when Claude's streaming path
+    finishes an exploration tool. The args are finalized at tool_stop, so this
+    helper can create the aggregate child and close it in one step. Child
+    metric fields stay None until a matching tool_result_captured arrives
+    from a later user message.
+    """
+    if tool_name == "read":
+        file_part, lines_part = summary, ""
+        if ":" in summary:
+            head, tail = summary.rsplit(":", 1)
+            if tail and (tail[0].isdigit() or "-" in tail):
+                file_part, lines_part = head, tail
+        store.push_event(
+            "tool_read",
+            build_tool_read(call_id, file_part, lines_part, ts_ms=now_ms),
+            agent_id=agent_id,
+        )
+    elif tool_name == "grep":
+        store.push_event(
+            "tool_grep",
+            build_tool_grep(call_id, summary, ts_ms=now_ms),
+            agent_id=agent_id,
+        )
+    else:  # ls
+        store.push_event(
+            "tool_ls",
+            build_tool_ls(call_id, summary, ts_ms=now_ms),
+            agent_id=agent_id,
+        )
+    store.push_event(
+        "tool_completed",
+        build_tool_completed(call_id, tool_name, ts_ms=now_ms),
+        agent_id=agent_id,
+    )
 
 # -- Tool whitelists (Claude Code --tools) -------------------------------------
 #
@@ -269,6 +317,9 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
         last_tool_name: str | None = None
         last_call_id: str | None = None
         streaming_call_ids: dict[int, tuple[str, str]] = {}
+        # Map Claude's tool_use_id -> our local call_id so that later
+        # tool_result events can be attributed to the correct projection entry.
+        call_id_by_tool_use_id: dict[str, str] = {}
 
         async for raw in proc.stdout:
             line = raw.decode("utf-8", errors="replace").rstrip("\n")
@@ -293,7 +344,10 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
                 if ev.type in ("token_delta", "thinking") and last_call_id is not None:
                     store.push_event(
                         "tool_completed",
-                        build_tool_completed(last_call_id, last_tool_name),
+                        build_tool_completed(
+                            last_call_id, last_tool_name,
+                            ts_ms=int(time.time() * 1000),
+                        ),
                         agent_id=agent_id,
                     )
                     last_call_id = None
@@ -303,7 +357,10 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
                     if last_call_id is not None and last_tool_name is not None:
                         store.push_event(
                             "tool_completed",
-                            build_tool_completed(last_call_id, last_tool_name),
+                            build_tool_completed(
+                                last_call_id, last_tool_name,
+                                ts_ms=int(time.time() * 1000),
+                            ),
                             agent_id=agent_id,
                         )
                         last_call_id = None
@@ -312,11 +369,22 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
                     tool_name = ev.tool_name or "tool"
                     block_idx = ev.block_index if ev.block_index is not None else -1
                     streaming_call_ids[block_idx] = (call_id, tool_name)
-                    store.push_event(
-                        "tool_started",
-                        build_tool_started(call_id, tool_name),
-                        agent_id=agent_id,
-                    )
+                    if tool_name in ("read", "grep", "ls"):
+                        # Exploration tools defer their projection emission to
+                        # tool_stop, where the full args are available. Capture
+                        # the tool_use_id → call_id mapping now so a later
+                        # tool_result block can find its aggregate child.
+                        if ev.tool_use_id:
+                            call_id_by_tool_use_id[ev.tool_use_id] = call_id
+                    else:
+                        # Non-exploration tools (bash/write/edit/custom) keep
+                        # the ToolGenericEntry flow — tool_started creates the
+                        # entry, tool_stopped attaches the summary.
+                        store.push_event(
+                            "tool_started",
+                            build_tool_started(call_id, tool_name),
+                            agent_id=agent_id,
+                        )
                 elif ev.type == "tool_input_delta":
                     pass
                 elif ev.type == "tool_stop":
@@ -325,11 +393,17 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
                     if pair is not None:
                         call_id, tool_name = pair
                         summary = ev.summary or ""
-                        store.push_event(
-                            "tool_stopped",
-                            build_tool_stopped(call_id, tool_name, summary),
-                            agent_id=agent_id,
-                        )
+                        if tool_name in ("read", "grep", "ls"):
+                            _emit_exploration_tool_completion(
+                                store, agent_id, call_id, tool_name, summary,
+                                now_ms=int(time.time() * 1000),
+                            )
+                        else:
+                            store.push_event(
+                                "tool_stopped",
+                                build_tool_stopped(call_id, tool_name, summary),
+                                agent_id=agent_id,
+                            )
                 elif ev.type == "token_delta":
                     agent.token_count["received"] = agent.token_count.get("received", 0) + len(ev.content or "")
                     store.push_event("stream_delta", {"delta": ev.content or ""}, agent_id=agent_id)
@@ -342,21 +416,29 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
                     if last_call_id is not None and last_tool_name is not None:
                         store.push_event(
                             "tool_completed",
-                            build_tool_completed(last_call_id, last_tool_name),
+                            build_tool_completed(
+                                last_call_id, last_tool_name,
+                                ts_ms=int(time.time() * 1000),
+                            ),
                             agent_id=agent_id,
                         )
                     call_id = str(uuid.uuid4())
                     tool_name = ev.tool_name or "tool"
                     summary = ev.summary or ""
+                    now_ms = int(time.time() * 1000)
                     if tool_name == "read":
                         file_part, lines_part = summary, ""
                         if ":" in summary:
                             head, tail = summary.rsplit(":", 1)
                             if tail and (tail[0].isdigit() or "-" in tail):
                                 file_part, lines_part = head, tail
+                        # tool_use_id lets tool_result_captured match this call
+                        # later even though the call_id we assigned is local.
+                        if ev.tool_use_id:
+                            call_id_by_tool_use_id[ev.tool_use_id] = call_id
                         store.push_event(
                             "tool_read",
-                            build_tool_read(call_id, file_part, lines_part),
+                            build_tool_read(call_id, file_part, lines_part, ts_ms=now_ms),
                             agent_id=agent_id,
                         )
                     elif tool_name == "write":
@@ -366,9 +448,21 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
                     elif tool_name == "bash":
                         store.push_event("tool_bash", build_tool_bash(call_id, summary), agent_id=agent_id)
                     elif tool_name == "grep":
-                        store.push_event("tool_grep", build_tool_grep(call_id, summary), agent_id=agent_id)
+                        if ev.tool_use_id:
+                            call_id_by_tool_use_id[ev.tool_use_id] = call_id
+                        store.push_event(
+                            "tool_grep",
+                            build_tool_grep(call_id, summary, ts_ms=now_ms),
+                            agent_id=agent_id,
+                        )
                     elif tool_name == "ls":
-                        store.push_event("tool_ls", build_tool_ls(call_id, summary), agent_id=agent_id)
+                        if ev.tool_use_id:
+                            call_id_by_tool_use_id[ev.tool_use_id] = call_id
+                        store.push_event(
+                            "tool_ls",
+                            build_tool_ls(call_id, summary, ts_ms=now_ms),
+                            agent_id=agent_id,
+                        )
                     else:
                         store.push_event(
                             "tool_called",
@@ -377,6 +471,22 @@ async def spawn_subagent(task: dict, app_state: AppState, runner: Runner | None 
                         )
                     last_call_id = call_id
                     last_tool_name = tool_name
+                elif ev.type == "tool_result":
+                    # Runner parsed a tool_result block from a user message.
+                    # Map the LLM's tool_use_id back to our local call_id and
+                    # emit a projection event carrying the parsed metrics.
+                    tool_use_id = ev.tool_use_id or ""
+                    cid = call_id_by_tool_use_id.get(tool_use_id)
+                    if cid is not None:
+                        store.push_event(
+                            "tool_result_captured",
+                            build_tool_result_captured(
+                                cid,
+                                ev.tool_name or "",
+                                metrics=ev.metrics,
+                            ),
+                            agent_id=agent_id,
+                        )
                 elif ev.type == "turn_complete":
                     pass
 

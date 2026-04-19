@@ -10,6 +10,9 @@ import pytest
 
 from koan.projections import (
     Agent,
+    AggregateGrepChild,
+    AggregateLsChild,
+    AggregateReadChild,
     ArtifactInfo,
     BaseToolEntry,
     Conversation,
@@ -23,12 +26,10 @@ from koan.projections import (
     StepEntry,
     TextEntry,
     ThinkingEntry,
+    ToolAggregateEntry,
     ToolBashEntry,
     ToolEditEntry,
     ToolGenericEntry,
-    ToolGrepEntry,
-    ToolLsEntry,
-    ToolReadEntry,
     ToolWriteEntry,
     VersionedEvent,
     fold,
@@ -352,17 +353,61 @@ class TestFoldConversation:
 
 class TestFoldTools:
 
-    def test_tool_read_appends_entry(self):
+    def test_tool_read_creates_aggregate_with_one_child(self):
         p = _proj_with_primary("a1")
-        r = fold(p, _e("tool_read", {"call_id": "c1", "file": "/foo.py", "lines": "1-10"}, agent_id="a1"))
+        r = fold(p, _e("tool_read", {
+            "call_id": "c1", "file": "/foo.py", "lines": "1-10", "ts_ms": 1000,
+        }, agent_id="a1"))
         conv = r.run.agents["a1"].conversation
         assert len(conv.entries) == 1
-        entry = conv.entries[0]
-        assert isinstance(entry, ToolReadEntry)
-        assert entry.file == "/foo.py"
-        assert entry.lines == "1-10"
-        assert entry.in_flight is True
+        agg = conv.entries[0]
+        assert isinstance(agg, ToolAggregateEntry)
+        assert agg.started_at_ms == 1000
+        assert len(agg.children) == 1
+        child = agg.children[0]
+        assert isinstance(child, AggregateReadChild)
+        assert child.file == "/foo.py"
+        assert child.lines == "1-10"
+        assert child.in_flight is True
+        assert child.started_at_ms == 1000
         assert r.run.agents["a1"].last_tool == "read /foo.py:1-10"
+
+    def test_two_consecutive_reads_form_one_aggregate(self):
+        p = _proj_with_primary("a1")
+        p = fold(p, _e("tool_read", {"call_id": "c1", "file": "/a", "lines": "", "ts_ms": 1}, agent_id="a1"))
+        r = fold(p, _e("tool_read", {"call_id": "c2", "file": "/b", "lines": "", "ts_ms": 2}, agent_id="a1"))
+        entries = r.run.agents["a1"].conversation.entries
+        assert len(entries) == 1
+        assert isinstance(entries[0], ToolAggregateEntry)
+        assert entries[0].started_at_ms == 1  # aggregate's started_at_ms is the first child's
+        assert [c.call_id for c in entries[0].children] == ["c1", "c2"]
+
+    def test_read_grep_ls_form_one_aggregate_three_children(self):
+        p = _proj_with_primary("a1")
+        p = fold(p, _e("tool_read", {"call_id": "c1", "file": "/a", "lines": "", "ts_ms": 1}, agent_id="a1"))
+        p = fold(p, _e("tool_grep", {"call_id": "c2", "pattern": "foo", "ts_ms": 2}, agent_id="a1"))
+        r = fold(p, _e("tool_ls", {"call_id": "c3", "path": "/d", "ts_ms": 3}, agent_id="a1"))
+        entries = r.run.agents["a1"].conversation.entries
+        assert len(entries) == 1
+        agg = entries[0]
+        assert isinstance(agg, ToolAggregateEntry)
+        assert isinstance(agg.children[0], AggregateReadChild)
+        assert isinstance(agg.children[1], AggregateGrepChild)
+        assert isinstance(agg.children[2], AggregateLsChild)
+
+    def test_read_bash_read_produces_three_top_level_entries(self):
+        p = _proj_with_primary("a1")
+        p = fold(p, _e("tool_read", {"call_id": "c1", "file": "/a", "lines": "", "ts_ms": 1}, agent_id="a1"))
+        p = fold(p, _e("tool_bash", {"call_id": "c2", "command": "ls"}, agent_id="a1"))
+        r = fold(p, _e("tool_read", {"call_id": "c3", "file": "/b", "lines": "", "ts_ms": 3}, agent_id="a1"))
+        entries = r.run.agents["a1"].conversation.entries
+        assert len(entries) == 3
+        assert isinstance(entries[0], ToolAggregateEntry)
+        assert len(entries[0].children) == 1
+        assert isinstance(entries[1], ToolBashEntry)
+        assert isinstance(entries[2], ToolAggregateEntry)
+        assert len(entries[2].children) == 1
+        assert entries[2].children[0].call_id == "c3"
 
     def test_tool_write_appends_entry(self):
         p = _proj_with_primary("a1")
@@ -382,19 +427,21 @@ class TestFoldTools:
         assert isinstance(entry, ToolBashEntry)
         assert entry.command == "ls -la"
 
-    def test_tool_grep_appends_entry(self):
+    def test_tool_grep_single_event_wraps_in_aggregate(self):
         p = _proj_with_primary("a1")
-        r = fold(p, _e("tool_grep", {"call_id": "c1", "pattern": "def foo"}, agent_id="a1"))
-        entry = r.run.agents["a1"].conversation.entries[0]
-        assert isinstance(entry, ToolGrepEntry)
-        assert entry.pattern == "def foo"
+        r = fold(p, _e("tool_grep", {"call_id": "c1", "pattern": "def foo", "ts_ms": 5}, agent_id="a1"))
+        agg = r.run.agents["a1"].conversation.entries[0]
+        assert isinstance(agg, ToolAggregateEntry)
+        assert isinstance(agg.children[0], AggregateGrepChild)
+        assert agg.children[0].pattern == "def foo"
 
-    def test_tool_ls_appends_entry(self):
+    def test_tool_ls_single_event_wraps_in_aggregate(self):
         p = _proj_with_primary("a1")
-        r = fold(p, _e("tool_ls", {"call_id": "c1", "path": "/src"}, agent_id="a1"))
-        entry = r.run.agents["a1"].conversation.entries[0]
-        assert isinstance(entry, ToolLsEntry)
-        assert entry.path == "/src"
+        r = fold(p, _e("tool_ls", {"call_id": "c1", "path": "/src", "ts_ms": 9}, agent_id="a1"))
+        agg = r.run.agents["a1"].conversation.entries[0]
+        assert isinstance(agg, ToolAggregateEntry)
+        assert isinstance(agg.children[0], AggregateLsChild)
+        assert agg.children[0].path == "/src"
 
     def test_tool_called_appends_generic_entry(self):
         p = _proj_with_primary("a1")
@@ -416,12 +463,34 @@ class TestFoldTools:
         r = fold(p, _e("tool_called", {"call_id": "c1", "tool": "mcp__koan__step", "args": {}}, agent_id="a1"))
         assert r.run.agents["a1"].conversation.entries == []
 
-    def test_tool_completed_clears_in_flight(self):
+    def test_tool_completed_marks_aggregate_child_done(self):
         p = _proj_with_primary("a1")
-        p = fold(p, _e("tool_read", {"call_id": "c1", "file": "/f", "lines": ""}, agent_id="a1"))
+        p = fold(p, _e("tool_read", {"call_id": "c1", "file": "/a", "lines": "", "ts_ms": 1}, agent_id="a1"))
+        p = fold(p, _e("tool_read", {"call_id": "c2", "file": "/b", "lines": "", "ts_ms": 2}, agent_id="a1"))
+        r = fold(p, _e("tool_completed", {"call_id": "c1", "tool": "read", "ts_ms": 5}, agent_id="a1"))
+        agg = r.run.agents["a1"].conversation.entries[0]
+        assert isinstance(agg, ToolAggregateEntry)
+        # c1 completed, c2 still in-flight — sibling untouched
+        by_id = {c.call_id: c for c in agg.children}
+        assert by_id["c1"].in_flight is False
+        assert by_id["c1"].completed_at_ms == 5
+        assert by_id["c2"].in_flight is True
+        assert by_id["c2"].completed_at_ms is None
+
+    def test_tool_completed_for_top_level_tool_still_works(self):
+        p = _proj_with_primary("a1")
+        p = fold(p, _e("tool_bash", {"call_id": "c1", "command": "ls"}, agent_id="a1"))
         assert p.run.agents["a1"].conversation.entries[0].in_flight is True
-        r = fold(p, _e("tool_completed", {"call_id": "c1", "tool": "read"}, agent_id="a1"))
+        r = fold(p, _e("tool_completed", {"call_id": "c1", "tool": "bash"}, agent_id="a1"))
         assert r.run.agents["a1"].conversation.entries[0].in_flight is False
+
+    def test_tool_completed_unknown_call_id_is_noop(self):
+        p = _proj_with_primary("a1")
+        p = fold(p, _e("tool_read", {"call_id": "c1", "file": "/a", "lines": ""}, agent_id="a1"))
+        r = fold(p, _e("tool_completed", {"call_id": "missing", "tool": "read"}, agent_id="a1"))
+        # Projection shape unchanged; c1 still in-flight.
+        agg = r.run.agents["a1"].conversation.entries[0]
+        assert agg.children[0].in_flight is True
 
     def test_tool_flushes_pending_fields(self):
         p = _proj_with_primary("a1")
@@ -430,7 +499,7 @@ class TestFoldTools:
         conv = r.run.agents["a1"].conversation
         assert len(conv.entries) == 2
         assert isinstance(conv.entries[0], TextEntry)   # flushed
-        assert isinstance(conv.entries[1], ToolReadEntry)
+        assert isinstance(conv.entries[1], ToolAggregateEntry)
         assert conv.pending_text == ""
 
     def test_tool_events_per_agent_not_primary_only(self):
@@ -440,7 +509,69 @@ class TestFoldTools:
         p = fold(p, _e("agent_spawned", {"agent_id": "s1", "role": "scout", "is_primary": False, "started_at_ms": 0}, agent_id="s1"))
         r = fold(p, _e("tool_read", {"call_id": "c1", "file": "/f", "lines": ""}, agent_id="s1"))
         assert len(r.run.agents["s1"].conversation.entries) == 1
-        assert isinstance(r.run.agents["s1"].conversation.entries[0], ToolReadEntry)
+        assert isinstance(r.run.agents["s1"].conversation.entries[0], ToolAggregateEntry)
+
+    # --- tool_result_captured -----------------------------------------------
+
+    def test_tool_result_captured_attaches_read_metrics(self):
+        p = _proj_with_primary("a1")
+        p = fold(p, _e("tool_read", {"call_id": "c1", "file": "/a", "lines": "", "ts_ms": 1}, agent_id="a1"))
+        r = fold(p, _e("tool_result_captured", {
+            "call_id": "c1", "tool": "read",
+            "metrics": {"lines_read": 42, "bytes_read": 1024},
+        }, agent_id="a1"))
+        child = r.run.agents["a1"].conversation.entries[0].children[0]
+        assert isinstance(child, AggregateReadChild)
+        assert child.lines_read == 42
+        assert child.bytes_read == 1024
+
+    def test_tool_result_captured_grep_leaves_read_siblings_alone(self):
+        p = _proj_with_primary("a1")
+        p = fold(p, _e("tool_read", {"call_id": "c1", "file": "/a", "lines": "", "ts_ms": 1}, agent_id="a1"))
+        p = fold(p, _e("tool_grep", {"call_id": "c2", "pattern": "x", "ts_ms": 2}, agent_id="a1"))
+        r = fold(p, _e("tool_result_captured", {
+            "call_id": "c2", "tool": "grep",
+            "metrics": {"matches": 7, "files_matched": 3},
+        }, agent_id="a1"))
+        agg = r.run.agents["a1"].conversation.entries[0]
+        read_child = agg.children[0]
+        grep_child = agg.children[1]
+        assert isinstance(read_child, AggregateReadChild)
+        assert read_child.lines_read is None  # untouched
+        assert isinstance(grep_child, AggregateGrepChild)
+        assert grep_child.matches == 7
+        assert grep_child.files_matched == 3
+
+    def test_tool_result_captured_unknown_call_id_is_noop(self):
+        p = _proj_with_primary("a1")
+        p = fold(p, _e("tool_read", {"call_id": "c1", "file": "/a", "lines": ""}, agent_id="a1"))
+        before = p.run.agents["a1"].conversation.entries[0]
+        r = fold(p, _e("tool_result_captured", {
+            "call_id": "missing", "tool": "read",
+            "metrics": {"lines_read": 1},
+        }, agent_id="a1"))
+        # Projection shape unchanged — returns same projection reference semantics
+        assert r.run.agents["a1"].conversation.entries[0] == before
+
+    def test_tool_result_captured_no_metrics_is_noop(self):
+        p = _proj_with_primary("a1")
+        p = fold(p, _e("tool_read", {"call_id": "c1", "file": "/a", "lines": ""}, agent_id="a1"))
+        r = fold(p, _e("tool_result_captured", {"call_id": "c1", "tool": "read"}, agent_id="a1"))
+        child = r.run.agents["a1"].conversation.entries[0].children[0]
+        assert child.lines_read is None
+        assert child.bytes_read is None
+
+    def test_tool_result_captured_ls_metrics(self):
+        p = _proj_with_primary("a1")
+        p = fold(p, _e("tool_ls", {"call_id": "c1", "path": "/d", "ts_ms": 1}, agent_id="a1"))
+        r = fold(p, _e("tool_result_captured", {
+            "call_id": "c1", "tool": "ls",
+            "metrics": {"entries": 12, "directories": 3},
+        }, agent_id="a1"))
+        child = r.run.agents["a1"].conversation.entries[0].children[0]
+        assert isinstance(child, AggregateLsChild)
+        assert child.entries == 12
+        assert child.directories == 3
 
 
 # ---------------------------------------------------------------------------

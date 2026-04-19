@@ -13,7 +13,7 @@ from ..types import AgentInstallation, ModelInfo, ThinkingMode
 class StreamEvent:
     type: Literal[
         "token_delta", "turn_complete", "tool_call", "thinking", "assistant_text",
-        "tool_start", "tool_input_delta", "tool_stop",
+        "tool_start", "tool_input_delta", "tool_stop", "tool_result",
     ]
     content: str | None = None
     is_thinking: bool = False
@@ -22,6 +22,11 @@ class StreamEvent:
     summary: str | None = None
     tool_use_id: str | None = None
     block_index: int | None = None
+    # Populated for tool_result events: tool-family-specific metrics parsed
+    # from the model's tool_result block content. None when the runner could
+    # not interpret the result; the consumer treats this as "no metrics" and
+    # leaves projection state unchanged for that call_id.
+    metrics: dict | None = None
 
 
 @dataclass(kw_only=True)

@@ -110,8 +110,11 @@ def build_tool_stopped(call_id: str, tool: str, summary: str = "") -> dict:
 
 # -- Typed tool event builders (recognized tools with extracted metadata) -----
 
-def build_tool_read(call_id: str, file: str, lines: str = "") -> dict:
-    return {"call_id": call_id, "tool": "read", "file": file, "lines": lines}
+def build_tool_read(call_id: str, file: str, lines: str = "", ts_ms: int = 0) -> dict:
+    return {
+        "call_id": call_id, "tool": "read", "file": file, "lines": lines,
+        "ts_ms": ts_ms,
+    }
 
 
 def build_tool_write(call_id: str, file: str) -> dict:
@@ -126,22 +129,48 @@ def build_tool_bash(call_id: str, command: str) -> dict:
     return {"call_id": call_id, "tool": "bash", "command": command}
 
 
-def build_tool_grep(call_id: str, pattern: str) -> dict:
-    return {"call_id": call_id, "tool": "grep", "pattern": pattern}
+def build_tool_grep(call_id: str, pattern: str, ts_ms: int = 0) -> dict:
+    return {
+        "call_id": call_id, "tool": "grep", "pattern": pattern,
+        "ts_ms": ts_ms,
+    }
 
 
-def build_tool_ls(call_id: str, path: str) -> dict:
-    return {"call_id": call_id, "tool": "ls", "path": path}
+def build_tool_ls(call_id: str, path: str, ts_ms: int = 0) -> dict:
+    return {
+        "call_id": call_id, "tool": "ls", "path": path,
+        "ts_ms": ts_ms,
+    }
 
 
 def build_tool_completed(
     call_id: str,
     tool: str,
     result: str | None = None,
+    ts_ms: int = 0,
 ) -> dict:
-    payload: dict = {"call_id": call_id, "tool": tool}
+    payload: dict = {"call_id": call_id, "tool": tool, "ts_ms": ts_ms}
     if result is not None:
         payload["result"] = result
+    return payload
+
+
+def build_tool_result_captured(
+    call_id: str,
+    tool: str,
+    metrics: dict | None = None,
+) -> dict:
+    """Build a tool_result_captured event.
+
+    Emitted by the runner layer after it has parsed a tool_result block from
+    a user message in the model's stream. `metrics` is a tool-family-specific
+    dict that the fold attaches to the matching aggregate child. When the
+    runner parser could not interpret the result, metrics is None and the
+    fold leaves the child's metric fields unchanged.
+    """
+    payload: dict = {"call_id": call_id, "tool": tool}
+    if metrics is not None:
+        payload["metrics"] = metrics
     return payload
 
 
