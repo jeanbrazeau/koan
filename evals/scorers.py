@@ -9,6 +9,13 @@
 from inspect_ai.scorer import Scorer, model_graded_qa
 
 
+# Pin the judge model so results are reproducible regardless of the caller's
+# --model flag or INSPECT_EVAL_MODEL env. Gemini 3.1 Pro has a 1M-token input
+# window, which matters because {answer} is the concatenated artifacts from a
+# full plan run and can be large.
+JUDGE_MODEL = "google/gemini-3.1-pro-preview"
+
+
 _PLAN_SPECIFICITY_TEMPLATE = """
 You are evaluating a software engineering plan produced by an AI orchestrator.
 
@@ -70,14 +77,14 @@ Respond with exactly one word on the last line: PASS or FAIL.
 
 def plan_specificity() -> Scorer:
     """Grade whether the plan cites specific file paths and function names."""
-    return model_graded_qa(template=_PLAN_SPECIFICITY_TEMPLATE)
+    return model_graded_qa(template=_PLAN_SPECIFICITY_TEMPLATE, model=JUDGE_MODEL)
 
 
 def question_quality() -> Scorer:
     """Grade whether the orchestrator asked targeted, non-obvious questions."""
-    return model_graded_qa(template=_QUESTION_QUALITY_TEMPLATE)
+    return model_graded_qa(template=_QUESTION_QUALITY_TEMPLATE, model=JUDGE_MODEL)
 
 
 def memory_relevance() -> Scorer:
     """Grade whether captured memory entries are specific to the task."""
-    return model_graded_qa(template=_MEMORY_RELEVANCE_TEMPLATE)
+    return model_graded_qa(template=_MEMORY_RELEVANCE_TEMPLATE, model=JUDGE_MODEL)
