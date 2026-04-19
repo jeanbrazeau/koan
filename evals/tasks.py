@@ -3,9 +3,9 @@
 
 from inspect_ai import Task, task
 
-from .dataset import load_dataset
-from .scorers import memory_relevance, plan_specificity, question_quality
-from .solver import koan_solver
+from evals.dataset import load_dataset
+from evals.scorers import memory_relevance, plan_specificity, question_quality
+from evals.solver import koan_solver
 
 
 @task
