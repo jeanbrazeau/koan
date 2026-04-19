@@ -102,6 +102,14 @@ STEP_1_BLOCKED_TOOLS: frozenset[str] = frozenset({
     "edit",
 })
 
+# Memory query tools -- always allowed for all roles in every phase.
+# A single canonical fast-path is simpler and safer than adding these
+# to every role's ROLE_PERMISSIONS entry (which would diverge over time).
+_UNIVERSAL_MEMORY_TOOLS: frozenset[str] = frozenset({
+    "koan_memory_status",
+    "koan_search",
+})
+
 # -- Orchestrator phase-specific constants ------------------------------------
 
 _ORCHESTRATOR_SCOUT_PHASES: frozenset[str] = frozenset({
@@ -236,6 +244,12 @@ def check_permission(
 
     # Non-bash read tools always allowed for all roles.
     if tool_name in _NON_BASH_READ_TOOLS:
+        return {"allowed": True, "reason": None}
+
+    # Memory query tools -- always allowed for all roles (scouts and executors
+    # need read-only memory access; placing this before the orchestrator branch
+    # avoids duplicating it in _check_orchestrator_permission).
+    if tool_name in _UNIVERSAL_MEMORY_TOOLS:
         return {"allowed": True, "reason": None}
 
     # Orchestrator uses phase-aware permission logic (handles bash phase-gating).

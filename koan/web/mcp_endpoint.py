@@ -505,12 +505,17 @@ async def koan_yield(
     summary: str = "",
     suggestions: list[dict] | None = None,
 ) -> str:
-    """Yield to the user and wait for their reply.
+    """Yield to the user and wait for their reply. ORCHESTRATOR-ONLY.
+
+    This tool is reserved for the persistent orchestrator agent. Scouts and
+    executors are denied by the permission fence -- if you are a subagent,
+    do not call this, return your findings as your final text response
+    instead.
 
     Blocks until the user sends a message; returns it as the tool result.
-    This is the sole human-in-the-loop checkpoint -- call it after finishing
-    an artifact and whenever you need user direction. Call in a loop for
-    multi-turn conversation.
+    For the orchestrator, this is the sole human-in-the-loop checkpoint --
+    call it after finishing an artifact and whenever you need user
+    direction. Call in a loop for multi-turn conversation.
 
     REVIEW FEEDBACK LOOP: if the returned message begins with
     "I've reviewed `<path>`", the user has inspected the artifact you just

@@ -8,6 +8,7 @@ from koan.lib.permissions import (
     ROLE_PERMISSIONS,
     STEP_1_BLOCKED_TOOLS,
     WRITE_TOOLS,
+    _UNIVERSAL_MEMORY_TOOLS,
     check_permission,
 )
 
@@ -177,7 +178,8 @@ def _build_matrix():
     for role in ALL_ROLES:
         if role == "orchestrator":
             continue  # orchestrator uses phase-aware checks, tested separately
-        allowed_set = ROLE_PERMISSIONS[role] | READ_TOOLS
+        # _UNIVERSAL_MEMORY_TOOLS are allowed for all roles via fast-path.
+        allowed_set = ROLE_PERMISSIONS[role] | READ_TOOLS | _UNIVERSAL_MEMORY_TOOLS
         for tool in sorted(ALL_KOAN_TOOLS):
             expected = tool in allowed_set
             cases.append((role, tool, expected))
