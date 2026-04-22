@@ -53,8 +53,8 @@ in the case's `directed_phases`. Phases absent from the list return `None`
 
 Every case file auto-generates an Inspect `@task` named
 `koan_<fixture>_<task>_<case>` with hyphens converted to underscores.
-For example, `fixtures/koan-1/tasks/yolo-flag/cases/full.md` produces
-the task `koan_koan_1_yolo_flag_full`.
+For example, `fixtures/koan-1/tasks/yolo-flag/cases/intake-plan-spec.md`
+produces the task `koan_koan_1_yolo_flag_intake_plan_spec`.
 
 ## Rubric layering
 
@@ -71,6 +71,7 @@ Artifact content in the `artifacts` payload is read from disk at workflow
 completion, not per-phase. Files modified in a later phase will show their
 final content, not the content they had at the end of the phase that created
 them. This is acceptable for the initial scope (intake + plan-spec) because:
+
 - intake produces no artifacts
 - plan-spec produces plan.md, which execute may modify -- but the initial
   eval scope does not run execute

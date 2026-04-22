@@ -184,25 +184,26 @@ def koan_solver(
             directed_phases = state.metadata.get("directed_phases") or None
 
             app_state = AppState()
-            app_state.config = await load_koan_config()
-            app_state.project_dir = project_tmp
-            app_state.open_browser = False
+            app_state.runner_config.config = await load_koan_config()
+            app_state.run.project_dir = project_tmp
+            app_state.server.open_browser = False
             # yolo=True makes koan_yield and koan_ask_question auto-respond,
             # removing all human-in-the-loop gates without needing an SSE loop.
-            app_state.yolo = True
+            app_state.server.yolo = True
             # directed_phases steers koan_yield auto-responses toward the next
             # phase in the list instead of picking from suggestions.
-            app_state.directed_phases = directed_phases
+            app_state.server.directed_phases = directed_phases
+            app_state.init_memory_services()
             app = create_app(app_state)
 
             port = _find_free_port()
-            # AppState.port must match the uvicorn bind port because
+            # AppState.server.port must match the uvicorn bind port because
             # mcp-config.json (which tells the spawned orchestrator CLI how
-            # to reach the driver) is built from app_state.port at spawn
+            # to reach the driver) is built from app_state.server.port at spawn
             # time. A mismatch means the orchestrator cannot register the
             # koan_* tools and spends minutes flailing with curl/lsof before
             # finally discovering the real port on its own.
-            app_state.port = port
+            app_state.server.port = port
             uv_config = uvicorn.Config(
                 app,
                 host="127.0.0.1",
@@ -228,10 +229,10 @@ def koan_solver(
                 # Validate directed_phases after api_start_run so app_state.workflow
                 # is already resolved -- workflow.available_phases is not accessible
                 # at solver construction time.
-                if directed_phases is not None and app_state.workflow is not None:
+                if directed_phases is not None and app_state.run.workflow is not None:
                     _validate_directed_phases(
                         directed_phases,
-                        app_state.workflow.available_phases,
+                        app_state.run.workflow.available_phases,
                     )
                 try:
                     await _wait_for_completion(app_state, timeout=timeout)
@@ -249,7 +250,6 @@ def koan_solver(
                         "phase_summaries": {},
                         "tool_calls_by_phase": {},
                         "artifacts_by_phase": {},
-                        "final_projection": {},
                         "_harvest_error": repr(exc),
                     }
                 state.metadata["harvest"] = harvest

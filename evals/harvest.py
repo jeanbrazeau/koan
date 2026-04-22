@@ -2,9 +2,10 @@
 # Post-hoc extraction of per-phase data from a completed koan run.
 #
 # harvest_run walks ProjectionStore.events chronologically, using phase_started
-# events as phase boundaries and bucketing tool_called / artifact_* events by
-# the active phase. Content is read from disk at workflow completion -- see
-# README for the known limitation on files modified in later phases.
+# events as phase boundaries and bucketing all tool_called events (both koan MCP
+# tools and built-in tools like Read, Grep, Bash) by the active phase. Content
+# is read from disk at workflow completion -- see README for the known limitation
+# on files modified in later phases.
 
 from __future__ import annotations
 
@@ -19,22 +20,10 @@ from koan.state import AppState
 log = logging.getLogger("koan.evals.harvest")
 
 
-# Only koan MCP tool calls are harvested; built-in tool calls (Read, Write,
-# Bash, etc.) are not useful for rubric evaluation and would bloat the payload.
-HARVESTED_KOAN_TOOLS = {
-    "koan_ask_question",
-    "koan_yield",
-    "koan_set_phase",
-    "koan_request_scouts",
-    "koan_memorize",
-    "koan_search",
-}
-
-
 def harvest_run(app_state: AppState) -> dict[str, Any]:
     """Extract per-phase data from app_state after the workflow completes."""
     store = app_state.projection_store
-    run_dir = Path(app_state.run_dir) if app_state.run_dir else None
+    run_dir = Path(app_state.run.run_dir) if app_state.run.run_dir else None
     summaries = (
         store.projection.run.phase_summaries
         if store.projection.run else {}
@@ -47,7 +36,6 @@ def harvest_run(app_state: AppState) -> dict[str, Any]:
         "phase_summaries": dict(summaries),
         "tool_calls_by_phase": tool_calls_by_phase,
         "artifacts_by_phase": artifacts_by_phase,
-        "final_projection": _trim_projection(store.projection),
     }
     _log_harvest(result)
     return result
@@ -104,22 +92,40 @@ def _phase_order(events: list) -> list[str]:
     return seen
 
 
+def _normalize_tool_event(ev) -> dict | None:
+    """Normalize any tool event into {tool, args, ts}. Returns None if not a tool event."""
+    p = ev.payload
+    et = ev.event_type
+    if et == "tool_called":
+        tool = p.get("tool", "")
+        return {"tool": tool, "args": p.get("args", {}), "ts": ev.timestamp} if tool else None
+    if et == "tool_read":
+        return {"tool": "read", "args": {"file": p.get("file", ""), "lines": p.get("lines", "")}, "ts": ev.timestamp}
+    if et == "tool_bash":
+        return {"tool": "bash", "args": {"command": p.get("command", "")}, "ts": ev.timestamp}
+    if et == "tool_grep":
+        return {"tool": "grep", "args": {"pattern": p.get("pattern", "")}, "ts": ev.timestamp}
+    if et == "tool_ls":
+        return {"tool": "ls", "args": {"path": p.get("path", "")}, "ts": ev.timestamp}
+    if et == "tool_write":
+        return {"tool": "write", "args": {"file": p.get("file", "")}, "ts": ev.timestamp}
+    if et == "tool_edit":
+        return {"tool": "edit", "args": {"file": p.get("file", "")}, "ts": ev.timestamp}
+    return None
+
+
 def _bucket_tool_calls(events: list) -> dict[str, list[dict]]:
-    """Walk events; group tool_called for koan_* tools by active phase."""
+    """Walk events; group all tool calls (koan MCP + built-in) by active phase."""
     buckets: dict[str, list[dict]] = {}
     current_phase = ""
     for ev in events:
         if ev.event_type == "phase_started":
             current_phase = ev.payload.get("phase", current_phase)
             buckets.setdefault(current_phase, [])
-        elif ev.event_type == "tool_called":
-            tool = ev.payload.get("tool", "")
-            if tool in HARVESTED_KOAN_TOOLS:
-                buckets.setdefault(current_phase, []).append({
-                    "tool": tool,
-                    "args": ev.payload.get("args", {}),
-                    "ts": ev.timestamp,
-                })
+            continue
+        entry = _normalize_tool_event(ev)
+        if entry is not None:
+            buckets.setdefault(current_phase, []).append(entry)
     return buckets
 
 
@@ -195,8 +201,3 @@ def _read_paths(paths: set[str], run_dir: Path | None) -> dict[str, str]:
         except OSError:
             pass
     return out
-
-
-def _trim_projection(projection) -> dict:
-    """Serialize the projection to a plain dict, dropping no fields for now."""
-    return projection.model_dump()

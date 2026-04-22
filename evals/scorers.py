@@ -28,8 +28,10 @@ from inspect_ai.scorer import (
     Score,
     Scorer,
     accuracy,
+    mean,
     scorer,
     stderr,
+    value_to_float,
 )
 from inspect_ai.solver import TaskState
 
@@ -227,4 +229,41 @@ def workflow_overall() -> Scorer:
             return None
         harvest = state.metadata.get("harvest", {})
         return await _grade(rubric, _payload_workflow(harvest))
+    return score
+
+
+# -- Aggregate scorer ---------------------------------------------------------
+# `overall_pass_rate` reads state.scores populated by the prior scorers in the
+# list (inspect_ai's task runner writes state.scores[name] after each scorer
+# returns, so any scorer that runs LATER can observe earlier results). It
+# returns the fraction of rubric scorers that PASSed for this sample.
+#
+# Placed LAST in the scorer list so it sees the full picture. The per-sample
+# Score value is a float in [0, 1]; the metric `mean()` aggregates across
+# samples. This gives a real headline number (e.g. 0.67 = 6/9 PASS) instead
+# of the first-scorer-only view that made 6/9 runs show up as "Score 0.0".
+
+_to_float = value_to_float()
+
+
+@scorer(metrics=[mean(), stderr()], name="overall_pass_rate")
+def overall_pass_rate() -> Scorer:
+    async def score(state: TaskState, target) -> Score | None:
+        # Exclude this scorer's own future entry; state.scores already has
+        # every prior scorer keyed by name. Ignore any score already named
+        # overall_pass_rate to stay safe under re-scoring.
+        prior = {k: v for k, v in state.scores.items() if k != "overall_pass_rate"}
+        if not prior:
+            return None
+        passed = sum(1 for v in prior.values() if _to_float(v.value) >= 1.0)
+        total = len(prior)
+        ratio = passed / total
+        breakdown = ", ".join(
+            f"{k}={v.answer or v.value}" for k, v in sorted(prior.items())
+        )
+        return Score(
+            value=ratio,
+            answer=f"{passed}/{total} passed",
+            explanation=breakdown,
+        )
     return score
