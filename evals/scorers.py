@@ -167,7 +167,11 @@ class RubricComplianceMetric(BaseMetric):
             criterion=criterion,
             actual_output=actual_output,
         )
-        return await self.model.a_generate_with_schema(prompt, CriterionVerdict)
+        result = await self.model.a_generate_with_schema(prompt, CriterionVerdict)
+        # GeminiModel.a_generate returns (parsed_model, cost) tuple
+        if isinstance(result, tuple):
+            result = result[0]
+        return result
 
     async def a_measure(self, test_case: LLMTestCase, *args, **kwargs) -> float:
         # Reset skipped so a prior skip on another row does not bleed through.
@@ -270,6 +274,8 @@ class CrossPhaseCoherenceMetric(BaseMetric):
             actual_output=test_case.actual_output or "",
         )
         verdict = await self.model.a_generate_with_schema(prompt, OverallVerdict)
+        if isinstance(verdict, tuple):
+            verdict = verdict[0]
         self.score = 1.0 if verdict.passed else 0.0
         self.success = verdict.passed
         self.reason = verdict.reason or ("Passed." if verdict.passed else "Failed.")
