@@ -1036,10 +1036,40 @@ export default function App() {
   }
 
   if (completion) {
+    if (completion.success) {
+      // Auto-navigation timer is running (3s). Keep workflow-mode header so
+      // the phase/step breadcrumb remains visible while the user waits.
+      return (
+        <div className="app-root">
+          <HeaderBar {...header} onSettingsClick={goToSettings} />
+          <div className="workflow-grid"><CompletionView /><ConnectedSidebar /></div>
+          <Notification />
+        </div>
+      )
+    }
+    // Failure: switch to navigation-mode header so nav clicks can clear and
+    // navigate. No auto-navigation — user must take an explicit action.
+    const handleNav = async (k: string) => {
+      await api.clearRun()
+      navigate(PATH_BY_KEY[k] ?? '/')
+    }
+    const handleBack = async () => {
+      await api.clearRun()
+      navigate('/')
+    }
     return (
       <div className="app-root">
-        <HeaderBar {...header} onSettingsClick={goToSettings} />
-        <div className="workflow-grid"><CompletionView /><ConnectedSidebar /></div>
+        <HeaderBar
+          phase="" step="" totalSteps={0} currentStep={0}
+          mode="navigation"
+          navItems={NAV_ITEMS}
+          activeNav=""
+          onNavChange={handleNav}
+        />
+        <div className="workflow-grid">
+          <CompletionView onBackToOverview={handleBack} />
+          <ConnectedSidebar />
+        </div>
         <Notification />
       </div>
     )
