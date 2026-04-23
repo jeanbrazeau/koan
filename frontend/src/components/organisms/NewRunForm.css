@@ -144,6 +144,44 @@
   border-color: var(--color-orange);
 }
 
+.nrf-textarea-wrap {
+  position: relative;
+}
+
+.nrf-attach-btn {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--text-hint);
+  display: flex;
+  align-items: center;
+  opacity: 0.6;
+  transition: opacity var(--duration-fast);
+}
+
+.nrf-attach-btn:hover {
+  opacity: 1;
+}
+
+.nrf-file-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  opacity: 0;
+}
+
+.nrf-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
 /* ---- Configuration ---- */
 .nrf-config-fields {
   display: flex;

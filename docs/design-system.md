@@ -268,6 +268,24 @@ The `pending` state uses a dashed border rather than a solid one to signal "awai
 
 Props: `state: 'pending' | 'approved' | 'rejected'`, `index: number` (always required; rendered only when `state === 'pending'`).
 
+### FileChip
+
+A removable pill showing an attached file's name and size. Used inside any composer surface that supports file attachment. Same visual family as Badge (mono font, pill radius, compact padding) but purpose-built for the dismiss + metadata layout that Badge does not support.
+
+Container: `display: inline-flex`, `align-items: center`, `gap: 4px`, `padding: 2px 6px 2px 8px`, `background: var(--bg-tool-row)`, `border-radius: var(--radius-pill)`, `white-space: nowrap`.
+
+Filename: `--font-mono`, 11px, `--text-subtle`. `overflow: hidden`, `text-overflow: ellipsis`, `max-width: 160px`.
+
+Size label: `--font-mono`, 10px, `--text-hint`. `flex-shrink: 0`. Formatted compact (e.g., "2.1K", "340K", "1.2M").
+
+Dismiss button: `background: none`, `border: none`, `padding: 1px`, `cursor: pointer`, `color: var(--text-hint)`, `display: flex`, `align-items: center`. Contains an 8x8 X SVG (`stroke: currentColor`, `strokeWidth: 2`, `strokeLinecap: round`). Hover: `color: var(--text-subtle)`.
+
+Uploading state: filename replaced by "Uploading...", size label hidden, dismiss button hidden. `opacity: 0.6`.
+
+Error state: `background: var(--bg-danger)`, filename `color: var(--text-danger)`. Dismiss button visible.
+
+Props: `name: string`, `size: string`, `state?: 'ready' | 'uploading' | 'error'` (default `'ready'`), `onRemove?: () => void`.
+
 ### StatCell
 
 Single labeled numeric value. Composition unit for `StatStrip`; not used standalone in product UIs.
@@ -436,36 +454,54 @@ Props: `text: string`, `onDelete?: () => void`.
 
 #### ReviewCommentInput
 
-An inline comment input form that appears below a ReviewBlock when the user clicks the gutter "+" button.
+An inline comment input form that appears below a ReviewBlock when the user clicks the gutter "+" button. Supports file attachment via gutter icon, drag-and-drop, and clipboard paste.
 
 Container: `background: var(--bg-card)`, `border: 1.5px solid --color-orange`, `border-radius: var(--radius-lg)`, `padding: 10px 12px`, `margin: 6px 0 12px 0`. Focus ring appears only when the textarea is focused: `:focus-within` adds `box-shadow: 0 0 0 3px var(--focus-ring)`.
 
-Textarea: `--font-body`, `--type-breadcrumb` (13px), `line-height: 1.5`, `--text-body`. No border, transparent background. `min-height: 44px`, `resize: vertical`. Placeholder: `--text-placeholder`, text "Add a comment on this block...".
+Drag-over state: same overlay treatment as FeedbackInput, scaled to the smaller container.
+
+Textarea wrapper: `position: relative`. Contains the textarea and gutter attach button.
+
+Textarea: `--font-body`, `--type-breadcrumb` (13px), `line-height: 1.5`, `--text-body`. No border, transparent background. `min-height: 44px`, `resize: vertical`, `padding-right: 24px`. Placeholder: `--text-placeholder`, text "Add a comment on this block...".
+
+Gutter attach button: `position: absolute`, `right: 0`, `bottom: 2px`. Paperclip SVG icon (11px, `stroke: var(--text-hint)`). `opacity: 0.5`. Hover: `opacity: 1`.
+
+File chips row: rendered between textarea wrapper and actions row when files are attached. `display: flex`, `flex-wrap: wrap`, `gap: 4px`, `margin-top: 4px`. Contains `FileChip` atoms.
 
 Actions row: `display: flex`, `justify-content: flex-end`, `gap: 8px`, `margin-top: 6px`. Contains Cancel (Button secondary `xs`) and Add comment (Button primary `xs`).
 
 On "Add comment": the input closes, a ReviewComment card appears in its place, and the block's `hasComment` state becomes true (orange dot indicator visible).
 
-Props: `onAdd: (text: string) => void`, `onCancel: () => void`.
+Props: `onAdd: (text: string, attachments?: string[]) => void`, `onCancel: () => void`.
 
 #### FeedbackInput
 
-Text input for sending messages to the orchestrator. Sits at the bottom of the content stream.
+Text input for sending messages to the orchestrator. Sits at the bottom of the content stream. Supports file attachment via gutter icon, drag-and-drop, and clipboard paste.
 
 Container: `--bg-card`, `1.5px solid --border-input`, `--radius-xl` (10px), `var(--padding-input)` (14px 18px). `position: relative` (provides positioning context for CommandPalette).
 
 Focused state (palette open): `border-color: var(--color-orange)`, `box-shadow: 0 0 0 3px var(--focus-ring)`.
 
-Textarea: `--font-body`, `--type-body` (14px), `--text-primary`. Placeholder: `--text-placeholder`. No border, transparent background.
+Drag-over state: `border-color: var(--color-orange)`, `box-shadow: 0 0 0 3px var(--focus-ring)`. An overlay covers the composer area: `background: rgba(255,255,255,0.92)`, centered upload icon (20px, `stroke: var(--color-orange)`) and "Drop to attach" label (`--font-body`, 13px, font-weight 500, `--color-orange`).
 
-Footer: flex row. Left: hint text in `--type-label` (11px), `--text-hint`. Default: "Enter to send · Shift+Enter for newline". Palette open: "↑↓ navigate · Enter select · Esc dismiss". Right: Button primary `sm`.
+Textarea wrapper: `position: relative`. Contains the textarea and a gutter attach button.
+
+Textarea: `--font-body`, `--type-body` (14px), `--text-primary`. Placeholder: `--text-placeholder`. No border, transparent background. `padding-right: 28px` to clear the gutter button.
+
+Gutter attach button: `position: absolute`, `right: 0`, `bottom: 4px`. Paperclip SVG icon (13px, `stroke: var(--text-hint)`). `opacity: 0.6`. Hover: `opacity: 1`. Click opens hidden `<input type="file" multiple>`.
+
+File chips row: rendered between textarea wrapper and footer when `files.length > 0`. `display: flex`, `flex-wrap: wrap`, `gap: 4px`, `margin-top: 6px`. Contains `FileChip` atoms.
+
+Footer: flex row. Left: hint text in `--type-label` (11px), `--text-hint`. Default: "Enter to send -- Shift+Enter for newline". Palette open: "up/down navigate -- Enter select -- Esc dismiss". Right: Button primary `sm`.
+
+**File attachment:** Files are uploaded immediately on drop/paste/select via `POST /api/upload` (multipart/form-data). Each upload returns `{ id, filename, size, content_type }`. FileChip shows uploading state during upload. On send, the payload includes `attachments: string[]` (file IDs) alongside the text.
 
 **`/`-command support:** When the input value starts with `/` and `availableCommands` is provided, the CommandPalette renders above the input. When a `/`-command message is sent, FeedbackInput transforms it before calling `onSend`:
 
-- `/plan-spec write an implementation plan` → `The user wishes to transition to phase \`plan-spec\` with instruction: write an implementation plan`
-- `/plan-spec` (no instruction) → `The user wishes to transition to phase \`plan-spec\`.`
+- `/plan-spec write an implementation plan` -> `The user wishes to transition to phase \`plan-spec\` with instruction: write an implementation plan`
+- `/plan-spec` (no instruction) -> `The user wishes to transition to phase \`plan-spec\`.`
 
-Props: `placeholder?: string`, `onSend?: (text: string) => void`, `disabled?: boolean`, `availableCommands?: PhaseCommand[]`, `onPaletteToggle?: (open: boolean) => void`.
+Props: `placeholder?: string`, `onSend?: (text: string, attachments?: string[]) => void`, `disabled?: boolean`, `availableCommands?: PhaseCommand[]`, `onPaletteToggle?: (open: boolean) => void`.
 
 #### ToolCallRow
 
@@ -669,6 +705,40 @@ stay independently usable.
 
 ### Memory Molecules
 
+#### RelationsCard
+
+Shared molecule for rendering entry relations and citations. Promoted from
+`MemoryDetailPage` (its first consumer) when `MemoryReflectPage` added a
+second consumer (citations). Two consumers is the promotion threshold per
+the design-system rule.
+
+File: `frontend/src/components/molecules/RelationsCard.tsx` + colocated
+`.css`.
+
+Card chrome: `--bg-card`, `0.5px solid --border-card`, `--radius-2xl`,
+`padding: 22px 30px 26px`.
+
+Head row: eyebrow (`--color-teal`, `var(--type-label)`, uppercase,
+font-weight 500). Optional counts pushed right (`margin-left: auto`):
+`--font-mono`, 12px, `--text-muted`, number in `--text-body` weight 500.
+
+**Props:**
+
+- `outgoing: RelationEntry[]` -- entries this record points to (always
+  rendered).
+- `incoming?: RelationEntry[]` -- entries pointing here (default `[]`).
+- `eyebrow?: string` -- card label, default `"Relations"`.
+- `counts?: boolean` -- show count summary in the head row, default `true`.
+- `layout?: 'split' | 'single'` -- `'split'` (default) renders both
+  columns with a `grid-template-columns: 1fr 1fr` grid; `'single'` renders
+  only the outgoing column at full width (used for citations on
+  `MemoryReflectPage`).
+
+**Current consumers:**
+
+1. `MemoryDetailPage` -- relations (split layout, eyebrow "Relations").
+2. `MemoryReflectPage` -- citations (single layout, eyebrow "Citations").
+
 #### MemoryCard
 
 Repeating unit for listing memory entries. Used by `MemorySidebar`, the curation queue, the relations section on `MemoryDetailPage`, and any future memory list. Composes `MemoryTypeIcon`.
@@ -821,17 +891,21 @@ Props: `op: 'add' | 'update' | 'deprecate'`, `type: 'decision' | 'lesson' | 'con
 
 #### OverallFeedback
 
-Label + textarea. Promoted from the `ReviewPanel` footer so `ReviewPanel` and the curation detail pane share one implementation. Controlled -- parent owns the value.
+Label + textarea with file attachment support. Promoted from the `ReviewPanel` footer so `ReviewPanel` and the curation detail pane share one implementation. Controlled -- parent owns the value.
 
 Container: `display: flex`, `flex-direction: column`, `gap: 6px`.
 
 Label: `var(--type-label)` (11px), font-weight 500, `text-transform: uppercase`, `letter-spacing: 0.5px`, `--text-muted`. Default text: "Overall feedback (optional)", overridable via `label` prop.
 
-Textarea: `TextInput` atom in textarea mode (`as="textarea"`, field variant). Default placeholder: "Summarize your overall feedback on this document, or leave empty to submit only inline comments."
+Textarea wrapper: `position: relative`. Contains `TextInput` atom in textarea mode (`as="textarea"`, field variant) with `padding-right: 28px`, and a gutter attach button. Default placeholder: "Summarize your overall feedback on this document, or leave empty to submit only inline comments."
+
+Gutter attach button: same treatment as FeedbackInput (paperclip 13px, `opacity: 0.6`, positioned `right: 12px`, `bottom: 12px` inside the TextInput's border). Drag-and-drop supported on the textarea.
+
+File chips row: rendered below the textarea when files are attached. `display: flex`, `flex-wrap: wrap`, `gap: 4px`, `margin-top: 4px`. Contains `FileChip` atoms.
 
 `OverallFeedback` does not own its state. Both `ReviewPanel` and the curation detail pane need to include this text in submission payloads whose shape is organism-specific, so hoisting the value into the parent is the only honest arrangement. The molecule is pure layout + typography over `TextInput`.
 
-Props: `value: string`, `onChange: (value: string) => void`, `label?: string`, `placeholder?: string`, `disabled?: boolean`.
+Props: `value: string`, `onChange: (value: string) => void`, `attachments?: UploadedFile[]`, `onAttachmentsChange?: (files: UploadedFile[]) => void`, `label?: string`, `placeholder?: string`, `disabled?: boolean`.
 
 ### Settings Molecules
 
@@ -1055,15 +1129,14 @@ Filename: `--font-mono`, 11px, `--text-hint`, `margin-top: 18px`.
 
 Actions footer: `margin-top: 28px`, `padding-top: 20px`, `border-top: 0.5px solid --border-divider-light`. Left: edit meta (`--font-mono`, 12px, `--text-muted`). Right: "Copy link" + "View raw" (Button secondary sm).
 
-**EntryRelationsCard** (local to page): card chrome, `padding: 22px 30px 26px`.
+**RelationsCard** (promoted molecule, imported from
+`../molecules/RelationsCard`): renders the entry's relations in the split
+layout (outgoing + incoming). See the RelationsCard section under Memory
+Molecules for the full spec.
 
-Head row: eyebrow "Relations" (`--color-teal`, `var(--type-label)`, uppercase). Counts pushed right (`margin-left: auto`): `--font-mono`, 12px, `--text-muted`, number in `--text-body` font-weight 500.
-
-Split grid: `grid-template-columns: 1fr 1fr`, `gap: 28px`. Each side: group title with arrow glyph (-> outgoing, <- incoming) in `--color-orange`, label, and annotation pushed right. List of rows: `display: grid`, `grid-template-columns: 28px 1fr auto`, `gap: 10px`, `padding: 10px`, `--radius-md`, hover `--bg-selected`. Icon + body (seq + type + title with 2-line clamp) + age hint (`--font-mono`, 10px, `--text-hint`).
-
-Empty states: "None" (outgoing) / "Not yet referenced by any entry" (incoming), italic, `--text-hint`.
-
-`EntryDetailCard` and `EntryRelationsCard` are local to `MemoryDetailPage` for the same reason the overview's panels are: no second consumer yet. If `EntryDetailCard` gains a consumer (e.g., a historical-revision detail view), it gets promoted then.
+`EntryDetailCard` is still local to `MemoryDetailPage` (no second consumer
+yet). If it gains a consumer (e.g., a historical-revision detail view), it
+gets promoted then.
 
 The dates grid is a first-class structural element -- each memory entry is a living document with a history, and "when was this last touched" is a first-class question. The grid sits between the title and the prose to assert this.
 
@@ -1103,27 +1176,59 @@ Props: `eyebrow?: string`, `subtitle?: string | ReactNode`, `proposals: Proposal
 
 ### MemoryReflectPage
 
-Reflect page with two states: in-progress (streaming retrieval + thinking) and done (briefing + follow-up). Two-column page: main ReflectPane + `MemorySidebar`.
+Reflect page with two states: in-progress (streaming retrieval + thinking)
+and done (briefing + citations). Two-column page: main ReflectPane +
+`MemorySidebar`.
 
-Outer layout: same shell as overview/detail -- `max-width: 1400px`, `margin: 0 auto`, `padding: 26px 24px 40px`, `display: grid`, `grid-template-columns: 1fr 340px`, `gap: 24px`, `align-items: start`.
+Outer layout: same shell as overview/detail -- `max-width: 1400px`,
+`margin: 0 auto`, `padding: 26px 24px 40px`, `display: grid`,
+`grid-template-columns: 1fr 340px`, `gap: 24px`, `align-items: start`.
 
-**ReflectPane** (local to page): card chrome (`--bg-card`, `0.5px solid --border-card`, `--radius-2xl`, `padding: 28px 34px 26px`, `min-height: 600px`) PLUS `border-top: 3px solid var(--color-orange)`. Same "panel-level attention" signal as ElicitationPanel / ReviewPanel / ReflectStarterPanel.
+**ReflectPane** (local to page): card chrome (`--bg-card`,
+`0.5px solid --border-card`, `--radius-2xl`, `padding: 28px 34px 26px`,
+`min-height: 600px`) PLUS `border-top: 3px solid var(--color-orange)`.
+Same "panel-level attention" signal as ElicitationPanel / ReviewPanel /
+ReflectStarterPanel.
 
-Head (both states): eyebrow (`var(--type-label)`, uppercase, `--color-orange`): in-progress shows "Reflection - in progress", done shows "Briefing". Question `<h1>`: `--font-display`, 24px, font-weight 400, `--text-primary`, `line-height: 1.35`, `letter-spacing: -0.3px`.
+**Back-to-memory link** (both states): rendered at the very top of the
+`.rfl` container, above the eyebrow. Uses `Button variant="text" size="sm"`
+navigating to `/memory`. Ensures the user can abandon a slow run without
+hunting for nav.
 
-**In-progress body:** `<ProgressStrip>` below the question. Optional `<ThinkingBlock>` with `children` content. Tool stream: flex column, `gap: 6px`, `margin-top: 14px`, conditionally rendered when tools exist. Each tool renders as `<ToolCallRow tool="search" command={query} status={status} metric={resultCount or "retrieving..."} />`. No follow-up composer during in-progress.
+Head (both states): eyebrow (`var(--type-label)`, uppercase,
+`--color-orange`): in-progress shows "Reflection - in progress", done shows
+"Reflection". Question `<h1>`: `--font-display`, 24px, font-weight 400,
+`--text-primary`, `line-height: 1.35`, `letter-spacing: -0.3px`.
 
-**Done body:** done-meta strip (`margin-top: 10px`, `margin-bottom: 22px`, `padding-bottom: 18px`, `border-bottom: 0.5px solid --border-divider-light`): `<StatStrip size="sm">` (iterations, searches, elapsed, cited). Briefing prose: 15px, `line-height: 1.75`, `--text-body`, `max-width: 720px`. Follow-up section: `margin-top: 28px`, `padding-top: 22px`, `border-top: 0.5px solid --border-divider-light`. Label "Follow up" + `<FeedbackInput>` with `availableCommands={undefined}`.
+**In-progress body:** `<ProgressStrip>` below the question. Ordered
+`entries: ReflectTraceRender[]` stream rendered after the strip: thinking
+entries as `<ThinkingBlock>`, text entries as inline prose
+(`.rfl-text-delta`), search entries as `<ToolCallRow tool="search">`. All
+entries render in arrival order, interleaved as the model produces them.
+No follow-up composer.
 
-Sidebar: `<MemorySidebar>` with all props forwarded. During in-progress, entries matching retrieval get `outline: "retrieving"`. During done, entries cited in the briefing get `outline: "cited"`. Outline state is decided by the caller, not the page.
+**Done body:** done-meta strip (`margin-top: 10px`, `margin-bottom: 22px`,
+`padding-bottom: 18px`, `border-bottom: 0.5px solid --border-divider-light`):
+`<StatStrip size="sm">` (iterations, searches, elapsed, cited). Ordered
+`entries` stream (same `ReflectTraceRender[]`, same rendering). Briefing
+prose: 15px, `line-height: 1.75`, `--text-body`, `max-width: 720px`.
+Citations card: `<RelationsCard eyebrow="Citations" layout="single"
+outgoing={citations} incoming={[]} />` rendered below the briefing
+(`margin-top: 28px`). No follow-up composer.
 
-ReflectPane uses a discriminated union for its state rather than two independent "boolean" flags because the in-progress and done states have genuinely different data shapes. An in-progress run has no iteration count yet; a done briefing has no turn progress. Collapsing into one flat interface with `turn?: number` and `iterations?: number` would leak implementation detail -- consumers could pass a shape that makes no sense (both turn AND iterations). The discriminated union makes the invariants legible at the type boundary.
+Sidebar: `<MemorySidebar>` with all props forwarded. During in-progress,
+entries matching retrieval get `outline: "retrieving"`. During done, entries
+cited in the briefing get `outline: "cited"`. Outline state is decided by
+the caller, not the page.
 
-The ReflectPane reuses the heavy-lift stream molecules (ThinkingBlock, ToolCallRow, ProgressStrip) directly rather than wrapping them. In-progress reflect is visually identical to the main conversation stream's reasoning state -- the same thinking block, the same tool rows, the same progress strip. Reusing the molecules rather than visually reimplementing them keeps the two surfaces tied together: any future change to ThinkingBlock automatically reflects here.
+ReflectPane uses a discriminated union for its state: in-progress and done
+have genuinely different data shapes (no `turn` in done, no `iterations`
+in-progress). The unified `entries: ReflectTraceRender[]` field replaces the
+prior split of `tools: ReflectToolCall[]` + `thinking?: string` so both states
+share the same arrival-ordered rendering.
 
-Follow-ups reuse FeedbackInput with `availableCommands={undefined}`. The main-conversation FeedbackInput gets `/`-command autocomplete; reflect follow-ups are natural-language queries. The molecule's existing `availableCommands` prop already gates this, so no new component work is needed -- just parameterize.
-
-Props: `question: string`, `state: InProgressProps | DoneProps` (discriminated union on `status`), `sidebar: MemorySidebarProps`.
+Props: `question: string`, `state: InProgressProps | DoneProps` (discriminated
+union on `status`), `sidebar: MemorySidebarProps`.
 
 ---
 
@@ -1291,11 +1396,11 @@ duration.
 
 ### Routes
 
-| URL pattern | Page organism | Notes |
-|---|---|---|
-| `/memory` | `MemoryOverviewPage` | Entry list, summary, reflect starter, activity feed |
-| `/memory/:seq` | `MemoryDetailPage` | Single entry body, outgoing/incoming relations |
-| `/memory/reflect` | `MemoryReflectPage` | In-progress or completed reflect session |
+| URL pattern       | Page organism        | Notes                                               |
+| ----------------- | -------------------- | --------------------------------------------------- |
+| `/memory`         | `MemoryOverviewPage` | Entry list, summary, reflect starter, activity feed |
+| `/memory/:seq`    | `MemoryDetailPage`   | Single entry body, outgoing/incoming relations      |
+| `/memory/reflect` | `MemoryReflectPage`  | In-progress or completed reflect session            |
 
 `/memory/reflect` redirects to `/memory` when `projection.reflect` is null
 (no active session). All three routes are mounted by `MemoryRoutes` which is
@@ -1315,13 +1420,13 @@ via `run.activeCurationBatch` and survives a refresh.
 
 ### Zustand state shape
 
-| Field | Type | Purpose |
-|---|---|---|
-| `memory` | `MemoryState` | Project-scoped entry summaries and summary text; persists across workflow boundaries |
-| `reflect` | `ReflectRun \| null` | Project-scoped reflect session; null when no session is active |
-| `run.activeCurationBatch` | `ActiveCurationBatch \| null` | Non-null while orchestrator is blocked in `koan_memory_propose` |
-| `memoryCurationDraft` | `Record<string, {decision?, feedback}>` | Store-only; seeded by `resetMemoryCurationDraft` on batch mount, cleared on batch clear |
-| `memorySidebar` | `{search, filter}` | Shared search/filter state across all three memory browsing pages |
+| Field                     | Type                                    | Purpose                                                                                 |
+| ------------------------- | --------------------------------------- | --------------------------------------------------------------------------------------- |
+| `memory`                  | `MemoryState`                           | Project-scoped entry summaries and summary text; persists across workflow boundaries    |
+| `reflect`                 | `ReflectRun \| null`                    | Project-scoped reflect session; null when no session is active                          |
+| `run.activeCurationBatch` | `ActiveCurationBatch \| null`           | Non-null while orchestrator is blocked in `koan_memory_propose`                         |
+| `memoryCurationDraft`     | `Record<string, {decision?, feedback}>` | Store-only; seeded by `resetMemoryCurationDraft` on batch mount, cleared on batch clear |
+| `memorySidebar`           | `{search, filter}`                      | Shared search/filter state across all three memory browsing pages                       |
 
 ### SSE events consumed
 

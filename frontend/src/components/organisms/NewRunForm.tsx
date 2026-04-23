@@ -7,12 +7,20 @@
 
 import { useState, useEffect, useMemo } from 'react'
 import { useStore } from '../../store/index'
+import { useFileAttachment } from '../../hooks/useFileAttachment'
 import * as api from '../../api/client'
 import { SectionLabel } from '../atoms/SectionLabel'
 import { Button } from '../atoms/Button'
 import { Badge } from '../atoms/Badge'
 import { StatusDot } from '../atoms/StatusDot'
+import { FileChip } from '../atoms/FileChip'
 import './NewRunForm.css'
+
+const PaperclipIcon = () => (
+  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+    <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.49" />
+  </svg>
+)
 
 export function NewRunForm() {
   const [task, setTask] = useState('')
@@ -22,6 +30,7 @@ export function NewRunForm() {
   const [selectedInstallations, setSelectedInstallations] = useState<Record<string, string>>({})
   const [workflow, setWorkflow] = useState<'plan' | 'milestones' | 'curation'>('plan')
   const [projectDir, setProjectDir] = useState('')
+  const attach = useFileAttachment()
 
   const profilesDict = useStore(s => s.settings.profiles)
   const installationsDict = useStore(s => s.settings.installations)
@@ -134,8 +143,22 @@ export function NewRunForm() {
       <div className="nrf-card">
         <SectionLabel>Description</SectionLabel>
         <div className="nrf-helper">What should this run accomplish?</div>
-        <textarea className="nrf-textarea" value={task} onChange={e => setTask(e.target.value)} rows={4}
-          placeholder="Describe what you want to build..." />
+        <div className="nrf-textarea-wrap" {...attach.dragProps}>
+          <textarea className="nrf-textarea" value={task} onChange={e => setTask(e.target.value)} rows={4}
+            onPaste={attach.onPaste}
+            placeholder="Describe what you want to build..." />
+          <button className="nrf-attach-btn" onClick={attach.openPicker} title="Attach files" type="button">
+            <PaperclipIcon />
+          </button>
+          <input ref={attach.inputRef} type="file" multiple className="nrf-file-input" onChange={attach.onInputChange} tabIndex={-1} />
+        </div>
+        {attach.files.length > 0 && (
+          <div className="nrf-chips">
+            {attach.files.map(f => (
+              <FileChip key={f.id} name={f.name} size={f.size} state={f.state} onRemove={() => attach.removeFile(f.id)} />
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Configuration */}

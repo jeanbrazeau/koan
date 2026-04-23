@@ -18,9 +18,9 @@ options that force reactions.
 These override all other instructions in this session.
 
 **R1. Visuals before rationale.** When presenting mockups or reviews,
-tell the user to look at `http://127.0.0.1:5273` and stop. Do not
-explain the design, describe what you built, or compare the directions.
-Wait for the user to react. Explain reasoning only after they respond.
+provide the URLs and stop. Do not explain the design, describe what you
+built, or compare the directions. Wait for the user to react. Explain
+reasoning only after they respond.
 
 Wrong:
 
@@ -30,7 +30,10 @@ Wrong:
 
 Right:
 
-> "Three directions are ready at http://127.0.0.1:5273."
+> "Three directions ready:
+> http://127.0.0.1:5273/?d=a
+> http://127.0.0.1:5273/?d=b
+> http://127.0.0.1:5273/?d=c"
 
 **R2. Gate every phase.** Do not advance until the user says "approved",
 "next", "looks good", or equivalent. Any other response means iterate.
@@ -55,28 +58,41 @@ Separate Vite entrypoint at `frontend/review/`, port 5273. Launch with
 `cd frontend && npm run review` in a background terminal. Vite
 hot-reloads on save.
 
-You control `frontend/review/CurrentReview.tsx`. Create supporting files
-in the same directory (e.g. `DirectionA.tsx`, `ReviewAtoms.tsx`).
+`main.tsx` routes between two modes based on the `?d=` query parameter:
 
-Each viewport frame in the review follows this pattern:
+**Direction mode** (brainstorming) -- create components in
+`frontend/review/directions/` (e.g. `a.tsx`, `b.tsx`, `c.tsx`). Each
+file exports a default React component. Each direction gets its own URL:
+
+```
+http://127.0.0.1:5273/?d=a
+http://127.0.0.1:5273/?d=b
+http://127.0.0.1:5273/?d=c
+```
+
+Sketch new elements with inline styles -- the chrome is real, the new
+content is rough. Each direction component controls its own layout
+(full-page frames, padding, etc.).
+
+**Review mode** (implementation) -- update `CurrentReview.tsx` to show
+real component implementations with various states and edge cases.
+Single URL:
+
+```
+http://127.0.0.1:5273/
+```
+
+Both modes import real koan components from `../src/components/` for
+page chrome (R3). A typical full-page frame:
 
 ```tsx
 const frame = { height: '100vh', display: 'flex', flexDirection: 'column' } as const
-const label = { background: '#1a1a2e', color: '#ccc', padding: '10px 24px', fontSize: 14, fontWeight: 600 } as const
 
-<div style={label}>Direction A: card grid with inline actions</div>
 <div style={frame}>
   <HeaderBar {...headerProps} />
   <div style={{ flex: 1, minHeight: 0 }}>{/* content */}</div>
 </div>
 ```
-
-For full-page reviews, update `main.tsx` to remove its `padding: 24`
-wrapper. Restore padding for atom/molecule batch reviews.
-
-During brainstorming: sketch new elements with inline styles. The chrome
-is real; the new content is rough. During implementation review: import
-the real component implementations only.
 
 ## Design screenshots
 
@@ -152,16 +168,24 @@ Present the selection with reasoning.
 
 ## Phase 2: Brainstorm
 
-Create 3 full-page direction mockups in the review harness (the user
-can request a different number). Each direction makes a genuinely
-different structural or interaction choice. If three mockups look like
-the same idea with different margins, start over.
+Create 3 full-page direction mockups (the user can request a different
+number). Each direction makes a genuinely different structural or
+interaction choice. If three mockups look like the same idea with
+different margins, start over.
 
-Build each as a React component in `frontend/review/`. Import real koan
-components for chrome. Sketch new elements inline. Use realistic data.
+Build each as a separate component in `frontend/review/directions/`
+(e.g. `a.tsx`, `b.tsx`, `c.tsx`). Import real koan components for
+chrome. Sketch new elements inline. Use realistic data.
 
-Start the review server. Tell the user to open
-`http://127.0.0.1:5273`. Say nothing else (R1).
+Start the review server. Provide the direction URLs:
+
+```
+http://127.0.0.1:5273/?d=a
+http://127.0.0.1:5273/?d=b
+http://127.0.0.1:5273/?d=c
+```
+
+Say nothing else (R1).
 
 **Gate:** user picks a direction (or synthesizes from multiple).
 
@@ -169,11 +193,13 @@ Start the review server. Tell the user to open
 
 For each remaining scenario from Phase 1:
 
-1. Build 3 alternatives: 2 faithful interpretations of the established
-   direction, 1 bold/unorthodox option you genuinely think might work
-   better. The bold option is not a strawman.
+1. Build 3 alternatives as separate direction files in
+   `frontend/review/directions/`. 2 faithful interpretations of the
+   established direction, 1 bold/unorthodox option you genuinely think
+   might work better. The bold option is not a strawman.
 2. Full page context with real components (R3).
-3. Present without explanation (R1). Iterate until approved.
+3. Provide the direction URLs. Say nothing else (R1). Iterate until
+   approved.
 
 **Gate:** every scenario is approved.
 
@@ -227,9 +253,10 @@ Build in `frontend/src/components/atoms/`. For each atom:
 - CSS classes use a short namespace prefix
 - Named + default export
 
-Review harness: import the real implementations, show multiple states
-(default, active, disabled, error, edge cases). Batch review is fine.
-Embed in page context (R3).
+Update `CurrentReview.tsx` to import the real implementations and show
+multiple states (default, active, disabled, error, edge cases). Batch
+review is fine. Embed in page context (R3). Review at
+`http://127.0.0.1:5273/`.
 
 After approval: `cd frontend && npx tsc --noEmit`
 

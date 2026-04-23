@@ -1,15 +1,45 @@
-/* ReviewCommentInput -- inline comment form with orange border + focus ring. */
-
 .rci {
+  position: relative;
   background: var(--bg-card);
   border: 1.5px solid var(--color-orange);
   border-radius: var(--radius-lg);
   padding: 10px 12px;
   margin: 6px 0 12px 0;
+  transition: box-shadow var(--duration-fast);
 }
 
 .rci:focus-within {
   box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.rci--dragging {
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+/* ---- Drop overlay ---- */
+.rci-drop-overlay {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-lg);
+  background: rgba(255, 255, 255, 0.92);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  z-index: 10;
+  color: var(--color-orange);
+}
+
+.rci-drop-label {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 500;
+}
+
+/* ---- Textarea wrapper ---- */
+.rci-textarea-wrap {
+  position: relative;
 }
 
 .rci-textarea {
@@ -24,12 +54,51 @@
   color: var(--text-body);
   min-height: 44px;
   padding: 0;
+  padding-right: 24px;
 }
 
 .rci-textarea::placeholder {
   color: var(--text-placeholder);
 }
 
+/* ---- Gutter attach button ---- */
+.rci-attach-btn {
+  position: absolute;
+  right: 0;
+  bottom: 2px;
+  background: none;
+  border: none;
+  padding: 3px;
+  cursor: pointer;
+  color: var(--text-hint);
+  display: flex;
+  align-items: center;
+  opacity: 0.5;
+  transition: opacity var(--duration-fast);
+}
+
+.rci-attach-btn:hover {
+  opacity: 1;
+}
+
+/* ---- Hidden file input ---- */
+.rci-file-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  opacity: 0;
+}
+
+/* ---- File chips row ---- */
+.rci-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+/* ---- Actions row ---- */
 .rci-actions {
   display: flex;
   justify-content: flex-end;

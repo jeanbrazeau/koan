@@ -271,3 +271,19 @@ export async function submitMemoryCuration(batch_id: string, decisions: Curation
     { batch_id, decisions },
   )
 }
+
+// -- File uploads -------------------------------------------------------------
+
+export interface UploadedFile {
+  id: string
+  filename: string
+  size: number
+  content_type: string
+}
+
+export async function uploadFile(file: File): Promise<UploadedFile> {
+  const form = new FormData()
+  form.append('file', file)
+  const res = await fetch('/api/upload', { method: 'POST', body: form })
+  return res.json() as Promise<UploadedFile>
+}

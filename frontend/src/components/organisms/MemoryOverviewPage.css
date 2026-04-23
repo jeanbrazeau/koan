@@ -123,6 +123,48 @@
 
 .mop-reflect-spacer { flex: 1; }
 
+.mop-reflect-textarea-wrap {
+  position: relative;
+}
+
+.mop-reflect-textarea {
+  padding-right: 28px;
+}
+
+.mop-reflect-attach-btn {
+  position: absolute;
+  right: 12px;
+  bottom: 12px;
+  background: none;
+  border: none;
+  padding: 4px;
+  cursor: pointer;
+  color: var(--text-hint);
+  display: flex;
+  align-items: center;
+  opacity: 0.6;
+  transition: opacity var(--duration-fast);
+}
+
+.mop-reflect-attach-btn:hover {
+  opacity: 1;
+}
+
+.mop-reflect-file-input {
+  position: absolute;
+  width: 0;
+  height: 0;
+  overflow: hidden;
+  opacity: 0;
+}
+
+.mop-reflect-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 6px;
+}
+
 .mop-reflect-actions {
   display: flex;
   justify-content: flex-end;
