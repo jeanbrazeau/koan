@@ -44,7 +44,7 @@ Frontmatter schema:
     ---
 
 The body below the closing `---` is the cross-cutting rubric used by the
-`test_workflow_overall` test. It must end with:
+`test_run` test (via `CrossPhaseCoherence`). It must end with:
 `Respond with PASS or FAIL on the last line.`
 
 Phase-scoring semantics: a per-phase test grades only if the phase appears
@@ -58,7 +58,47 @@ the optional task-level rubric addendum. Fixture rubric comes first; task
 addendum is appended. If neither exists for a (phase, section) pair, the scorer
 is skipped for that sample (no score recorded, not a FAIL).
 
-Every per-phase rubric file must end with: `Respond with PASS or FAIL on the last line.`
+## Per-section rubric format
+
+Per-section rubric files (under `rubrics/<phase>/<section>.md`) must list each
+evaluation criterion as exactly one bullet line starting with `- ` or `* `.
+`RubricComplianceMetric` calls the judge once per bullet and averages the
+per-criterion pass/fail verdicts into a pass-rate score (threshold=1.0 by
+default, so all criteria must pass). Prose paragraphs and blank lines are
+ignored by the parser.
+
+**Rules for per-section rubric files:**
+
+- Each criterion must be a single bullet line -- do NOT combine multiple
+  criteria with "and" or list sub-items under one bullet.
+- Do NOT end per-section rubric files with `Respond with PASS or FAIL on
+  the last line.` -- that directive is parsed by GEval but ignored (and
+  potentially misleading) for `RubricComplianceMetric`.
+- Do NOT write a rubric file with only prose and no bullets -- the scorer
+  raises `ValueError` when a file exists but yields zero criteria.
+- Self-contained bullets: do not use "see above" or "the preceding list" in
+  a bullet; each criterion is sent to the judge in isolation.
+
+**Exception:** case-body rubrics under `tasks/<task>/cases/<slug>.md` are
+judged by `CrossPhaseCoherence` (a GEval instance) which uses the full body
+as `criteria=`. These files retain the `Respond with PASS or FAIL on the
+last line.` directive.
+
+## Dimensional metric set
+
+The eval harness produces five metric names per test invocation:
+
+| Metric name          | Type                  | What it measures                                  |
+|----------------------|-----------------------|---------------------------------------------------|
+| `RubricCompliance`   | `RubricComplianceMetric` (custom BaseMetric) | Per-bullet pass-rate for a (phase, section) rubric |
+| `CrossPhaseCoherence`| GEval                 | Cross-phase coherence using the case rubric body  |
+| `Duration`           | Programmatic BaseMetric | Wall-clock seconds for the full run              |
+| `TokenCost`          | Programmatic BaseMetric | Total input + output tokens (orchestrator only)  |
+| `ToolCallCount`      | Programmatic BaseMetric | Total tool calls across all phases               |
+
+`RubricCompliance` and `CrossPhaseCoherence` require a live LLM judge call
+(via `JUDGE_MODEL = GeminiModel("gemini-3-pro-preview")`). The three
+programmatic metrics read from `additional_metadata` and need no judge call.
 
 ## Artifact content limitation
 
@@ -71,13 +111,25 @@ them. This is acceptable for the initial scope (intake + plan-spec) because:
 - plan-spec produces plan.md, which execute may modify -- but the initial
   eval scope does not run execute
 
+## Test invocation
+
+The test module `tests/evals/test_koan.py` defines a single pytest function
+`test_workflow_suite` that invokes `deepeval.evaluate()` over all discovered
+cases and rubric sections in one shot. Run via `pytest tests/evals/` or
+`deepeval test run tests/evals/`. Row-level granularity is preserved on the
+DeepEval dashboard via `LLMTestCase.name` (shaped as
+`<fixture>/<task>/<case>/<phase>/<section>` for rubric rows and
+`<fixture>/<task>/<case>/workflow` for run rows) rather than via pytest test IDs
+-- there is exactly one pytest test ID (`tests/evals/test_koan.py::test_workflow_suite`).
+
 ## Authoring tips
 
-- Keep rubrics tightly scoped. A rubric that checks one thing is more
+- Keep rubrics tightly scoped. A rubric bullet that checks one thing is more
   reliably graded by the judge LLM than one that checks five.
 - Phrase criteria as observable facts ("plan.md is present in all_present")
   rather than subjective judgments ("the plan is good").
-- End every rubric with exactly: `Respond with PASS or FAIL on the last line.`
+- End every case-body rubric with exactly: `Respond with PASS or FAIL on the last line.`
+- Do NOT end per-section rubric files with that directive.
 
 ## Hydrating fixtures
 

@@ -1015,6 +1015,28 @@ def _push_initial_config_events(st: AppState) -> None:
     store.push_event("default_scout_concurrency_changed", build_default_scout_concurrency_changed(st.runner_config.config.scout_concurrency))
 
 
+async def api_eval_harvest(r: Request) -> Response:
+    # Import deferred to keep the eval harness out of the main import chain.
+    # harvest_run() reads from in-process ProjectionStore.events, so it must
+    # run inside the server process -- the HTTP endpoint is the only safe path.
+    from evals.harvest import harvest_run
+    return JSONResponse(harvest_run(_app_state(r)))
+
+
+async def api_run_status(r: Request) -> Response:
+    # Lightweight status endpoint for the eval runner's polling loop.
+    # Returns completion and current phase so the runner can detect workflow
+    # end without streaming SSE or parsing snapshot JSON.
+    st = _app_state(r)
+    run = st.projection_store.projection.run
+    if run is None:
+        return JSONResponse({"completion": None, "phase": ""})
+    return JSONResponse({
+        "completion": run.completion.model_dump() if run.completion else None,
+        "phase": run.phase,
+    })
+
+
 async def api_probe(r: Request) -> Response:
     st = _app_state(r)
     if r.query_params.get("refresh", "") in ("1", "true"):
@@ -1509,6 +1531,8 @@ def create_app(app_state: AppState) -> Starlette:
         Route("/api/memory/curation", api_memory_curation_submit, methods=["POST"]),
         Route("/api/artifacts", api_artifacts_list),
         Route("/api/artifacts/{path:path}", api_artifact_content),
+        Route("/api/eval-harvest", api_eval_harvest, methods=["GET"]),
+        Route("/api/run-status", api_run_status, methods=["GET"]),
         Route("/api/probe", api_probe),
         Route("/api/profiles", api_profiles_list, methods=["GET"]),
         Route("/api/profiles", api_profiles_create, methods=["POST"]),

@@ -9,5 +9,3 @@ Beyond the generic summary shape, the plan-spec summary for this task should als
 
 PASS if the summary names at least 2 of the file paths above AND states the chosen value-sourcing mechanism AND states the API request-shape decision.
 FAIL if the summary is generic ("remove the field, use settings") without naming the specific files and decisions.
-
-Respond with PASS or FAIL on the last line.

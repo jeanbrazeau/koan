@@ -9,5 +9,3 @@ Beyond the generic plan-spec summary shape, the plan for the --yolo task should 
 
 PASS if all four task-specific points are present in the plan-spec summary in addition to the generic categories.
 FAIL if any of the four is absent or left at a level of generality that the executor would need to re-decide.
-
-Respond with PASS or FAIL on the last line.

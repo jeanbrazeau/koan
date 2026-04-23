@@ -9,5 +9,3 @@ A good plan-spec summary should cover:
 
 PASS if the summary addresses all four categories with enough specificity that an engineer could begin implementation without further research.
 FAIL if the summary is vague, omits key decisions, or does not name specific files.
-
-Respond with PASS or FAIL on the last line.

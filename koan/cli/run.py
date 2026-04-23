@@ -95,6 +95,8 @@ def cmd_run(args: argparse.Namespace) -> None:
     app_state.server.initial_prompt = args.prompt
     app_state.server.yolo = args.yolo
     app_state.server.debug = args.debug
+    if args.directed_phases:
+        app_state.server.directed_phases = args.directed_phases
     app_state.run.project_dir = str(project_dir)
     app_state.init_memory_services()
     app = create_app(app_state)

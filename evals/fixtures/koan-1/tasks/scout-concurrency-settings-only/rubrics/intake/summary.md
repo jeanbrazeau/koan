@@ -10,5 +10,3 @@ Beyond the generic summary shape, the intake summary for this task should also c
 
 PASS if at least 3 of the above task-specific points are present in addition to the generic categories.
 FAIL if the summary discusses the change only abstractly without naming the specific files / store keys / API fields above.
-
-Respond with PASS or FAIL on the last line.

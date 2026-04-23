@@ -9,5 +9,3 @@ Beyond the generic plan-spec quality rubric, the plan for this task should:
 
 PASS if the plan names the NewRunForm changes specifically, keeps the Settings UI unchanged, states one clear value-sourcing decision, and does not propose deleting the backend config default.
 FAIL if the plan also proposes removing the control from Settings, omits the NewRunForm file-level change list, or leaves the value-sourcing decision unresolved.
-
-Respond with PASS or FAIL on the last line.

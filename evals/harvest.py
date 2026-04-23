@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -31,11 +32,17 @@ def harvest_run(app_state: AppState) -> dict[str, Any]:
     phase_order = _phase_order(store.events)
     tool_calls_by_phase = _bucket_tool_calls(store.events)
     artifacts_by_phase = _bucket_artifacts(store.events, run_dir)
+    duration_s = _compute_duration_s(store.events)
+    token_cost = _compute_token_cost(store.projection.run)
+    tool_call_count = _compute_tool_call_count(tool_calls_by_phase)
     result = {
         "phase_order": phase_order,
         "phase_summaries": dict(summaries),
         "tool_calls_by_phase": tool_calls_by_phase,
         "artifacts_by_phase": artifacts_by_phase,
+        "duration_s": duration_s,
+        "token_cost": token_cost,
+        "tool_call_count": tool_call_count,
     }
     _log_harvest(result)
     return result
@@ -50,6 +57,14 @@ def _log_harvest(h: dict[str, Any]) -> None:
     """
     phase_order = h["phase_order"]
     log.info("harvest complete: phases=%s", phase_order or "(none)")
+    tc = h.get("token_cost", {})
+    log.info(
+        "harvest programmatic: duration=%.1fs tokens=%d+%d tool_calls=%d",
+        h.get("duration_s", 0.0),
+        tc.get("input_tokens", 0),
+        tc.get("output_tokens", 0),
+        sum(h.get("tool_call_count", {}).values()),
+    )
     for phase in phase_order:
         summary = h["phase_summaries"].get(phase, "")
         tools = h["tool_calls_by_phase"].get(phase, [])
@@ -78,6 +93,63 @@ def _truncate(s: str, n: int) -> str:
     if len(s) <= n:
         return s
     return s[: n - 3] + "..."
+
+
+def _compute_duration_s(events: list) -> float:
+    """Compute elapsed seconds between run_started and workflow_completed events.
+
+    Returns 0.0 when either event is absent -- common during partial harvests
+    or when the workflow has not yet completed.
+    """
+    start_ts: str | None = None
+    end_ts: str | None = None
+    for ev in events:
+        if ev.event_type == "run_started" and start_ts is None:
+            start_ts = ev.timestamp
+        elif ev.event_type == "workflow_completed":
+            end_ts = ev.timestamp
+    if start_ts is None or end_ts is None:
+        return 0.0
+    try:
+        t0 = datetime.fromisoformat(start_ts).timestamp()
+        t1 = datetime.fromisoformat(end_ts).timestamp()
+        return max(0.0, t1 - t0)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def _compute_token_cost(run) -> dict[str, int]:
+    """Sum input/output tokens across all orchestrator agents.
+
+    Scouts and executors are excluded; only the primary orchestrator agent
+    contributes. If the projection has no run (early harvest), returns zeros.
+    """
+    if run is None:
+        return {"input_tokens": 0, "output_tokens": 0}
+    total_in = 0
+    total_out = 0
+    for agent in run.agents.values():
+        if agent.role != "orchestrator":
+            continue
+        conv = agent.conversation
+        total_in += conv.input_tokens
+        total_out += conv.output_tokens
+    return {"input_tokens": total_in, "output_tokens": total_out}
+
+
+def _compute_tool_call_count(tool_calls_by_phase: dict) -> dict[str, int]:
+    """Aggregate per-phase tool call entries into a flat {tool: count} dict.
+
+    Each entry in tool_calls_by_phase is already one call (not a batch),
+    so this is a simple per-tool counter across all phases.
+    """
+    counts: dict[str, int] = {}
+    for entries in tool_calls_by_phase.values():
+        for entry in entries:
+            tool = entry.get("tool", "")
+            if tool:
+                counts[tool] = counts.get(tool, 0) + 1
+    return counts
 
 
 def _phase_order(events: list) -> list[str]:

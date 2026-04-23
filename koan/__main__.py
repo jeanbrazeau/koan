@@ -35,6 +35,8 @@ def main() -> None:
                             help="Pre-fill the task description")
     run_parser.add_argument("--yolo", action="store_true",
                             help="Skip all agent permission prompts (dangerous)")
+    run_parser.add_argument("--directed-phases", nargs="+", default=None,
+                            help="Fixed phase sequence for eval runs (e.g. intake plan-spec done)")
 
     # koan memory
     mem_parser = subs.add_parser("memory", help="Manage project memory",
