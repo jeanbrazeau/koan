@@ -35,6 +35,7 @@ from .interactions import activate_next_interaction
 from ..events import (
     build_questions_answered,
     build_probe_completed,
+    build_run_cleared,
     build_run_started,
     build_steering_queued,
     build_installation_created,
@@ -409,6 +410,35 @@ async def api_start_run(r: Request) -> Response:
     st.run.start_event.set()
 
     return JSONResponse({"ok": True, "run_dir": str(run_dir)})
+
+
+async def api_run_clear(r: Request) -> Response:
+    """Clear the active run projection, resetting the server to the no-run state.
+
+    This is called by the frontend after a workflow completes (on a 3s timer for
+    success; on user action for failure). It is a plain HTTP POST rather than an
+    MCP tool because the orchestrator has already exited by the time it is called.
+
+    Idempotent: returns ok=true even when the run is already None. The fold
+    case also guards this, but checking here avoids emitting a no-op event.
+    """
+    st = _app_state(r)
+
+    if st.projection_store.projection.run is None:
+        return JSONResponse({"ok": True})
+
+    # Drain any lingering interaction state left over from the completed run.
+    # These should be empty post-completion, but guard defensively so a future
+    # code path that clears early does not leave dangling futures or buffers.
+    st.interactions.user_message_buffer.clear()
+    st.interactions.steering_queue.clear()
+    if st.interactions.yield_future is not None and not st.interactions.yield_future.done():
+        st.interactions.yield_future.set_result(False)
+    st.interactions.yield_future = None
+    st.run.workflow_done = False
+
+    st.projection_store.push_event("run_cleared", build_run_cleared())
+    return JSONResponse({"ok": True})
 
 
 async def api_chat(r: Request) -> Response:
@@ -1527,6 +1557,7 @@ def create_app(app_state: AppState) -> Starlette:
     routes = [
         Mount("/mcp", app=mcp_app),
         Route("/api/start-run", api_start_run, methods=["POST"]),
+        Route("/api/run/clear", api_run_clear, methods=["POST"]),
         Route("/api/start-run/preflight", api_start_run_preflight, methods=["GET"]),
         Route("/api/answer", api_answer, methods=["POST"]),
         Route("/api/chat", api_chat, methods=["POST"]),

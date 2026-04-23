@@ -40,6 +40,7 @@ EventType = Literal[
     "agent_step_advanced",
     "agent_exited",
     "workflow_completed",
+    "run_cleared",
     "workflow_selected",
     "scout_queued",
     "agents_cleared",
@@ -708,6 +709,13 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                     "active_curation_batch": None,  # clear any pending curation on completion
                 })
                 return projection.model_copy(update={"run": new_run})
+
+            case "run_cleared":
+                # Idempotent: no-op when the run is already gone. This is an
+                # expected call path (e.g. double-clear), not a bug, so no warning.
+                if projection.run is None:
+                    return projection
+                return projection.model_copy(update={"run": None})
 
             # ── Agent lifecycle ────────────────────────────────────────────
 

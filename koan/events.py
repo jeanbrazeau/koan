@@ -23,6 +23,12 @@ def build_run_started(
     }
 
 
+def build_run_cleared() -> dict:
+    # Empty payload: run_cleared carries no fields. Follows the same convention
+    # as build_agents_cleared, build_memory_curation_cleared, build_reflect_cleared.
+    return {}
+
+
 def build_workflow_selected(workflow: str) -> dict:
     """Build workflow_selected event payload."""
     return {"workflow": workflow}
