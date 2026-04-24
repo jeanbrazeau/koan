@@ -21,8 +21,11 @@ from typing import Any
 
 from ..phases import (
     curation,
+    exec_review as exec_review_phase,
     execute as execute_phase,
     intake,
+    milestone_review,
+    milestone_spec,
     plan_review,
     plan_spec,
 )
@@ -101,6 +104,30 @@ class Workflow:
         """Look up the phase module by phase name."""
         b = self.phases.get(name)
         return b.module if b else None
+
+
+# -- Exec-review guidance (injected as phase_instructions) --------------------
+#
+# Per-workflow guidance for the exec-review phase. The plan workflow routes
+# to curation or plan-spec; the milestones workflow routes to milestone-spec.
+
+_EXEC_REVIEW_PLAN_GUIDANCE = (
+    "## Exec-review context\n"
+    "\n"
+    "Review what the executor accomplished for this plan. After your assessment,\n"
+    "transition to `curation` to capture lessons. If the execution had significant\n"
+    "deviations that require replanning, transition to `plan-spec` instead.\n"
+)
+
+_EXEC_REVIEW_MILESTONES_GUIDANCE = (
+    "## Exec-review context\n"
+    "\n"
+    "Review what the executor accomplished for this milestone. Pay particular\n"
+    "attention to deviations from the plan. After your assessment, transition to\n"
+    "`milestone-spec` to update milestones.md: mark the completed milestone `[done]`,\n"
+    "add an Outcome section with what was actually accomplished, and adjust remaining\n"
+    "milestones based on any deviations.\n"
+)
 
 
 # -- Curation directives (injected as phase_instructions) ---------------------
@@ -268,7 +295,8 @@ PLAN_WORKFLOW = Workflow(
         ),
         "plan-spec": PhaseBinding(
             module=plan_spec,
-            description="Write a technical implementation plan grounded in the codebase",
+            description="Write or update a technical implementation plan grounded in the codebase",
+            guidance="Use `plan.md` as the artifact filename.",
             retrieval_directive=(
                 "Implementation decisions, procedures, and conventions that constrain"
                 " how changes are made in this codebase. Entries about coding patterns,"
@@ -278,6 +306,7 @@ PLAN_WORKFLOW = Workflow(
         "plan-review": PhaseBinding(
             module=plan_review,
             description="Evaluate the plan for completeness, correctness, and risks",
+            guidance="Review `plan.md` -- the plan artifact for this workflow.",
             # Same directive as plan-spec: review evaluates against the same
             # implementation-level knowledge that spec used to write the plan.
             retrieval_directive=(
@@ -298,13 +327,21 @@ PLAN_WORKFLOW = Workflow(
                 "  it directly. Instructions are for context that isn't in the files.\n"
                 "\n"
                 "## After execution\n"
-                "Report the result. If the executor failed or asked questions, relay\n"
-                "the situation to the user and suggest next steps."
+                "Report the result. Transition to `exec-review` to verify what was done."
             ),
             retrieval_directive=(
                 "Procedures, conventions, and past lessons related to the subsystems"
                 " being modified. Executor-facing rules about testing policy, secret"
                 " handling, file placement, and other coding-time constraints."
+            ),
+        ),
+        "exec-review": PhaseBinding(
+            module=exec_review_phase,
+            description="Review execution results and identify deviations from the plan",
+            guidance=_EXEC_REVIEW_PLAN_GUIDANCE,
+            retrieval_directive=(
+                "Past lessons about execution quality, common deviations, and"
+                " post-execution review patterns in this codebase."
             ),
         ),
         "curation": PhaseBinding(
@@ -321,18 +358,49 @@ PLAN_WORKFLOW = Workflow(
         "intake":       ["plan-spec", "execute"],
         "plan-spec":    ["plan-review", "execute"],
         "plan-review":  ["plan-spec", "execute"],
-        "execute":      ["curation", "plan-review"],
+        "execute":      ["exec-review", "curation"],
+        "exec-review":  ["curation", "plan-spec"],
         "curation":     [],
     },
 )
 
 
-# -- Milestones workflow (stub) -----------------------------------------------
-# Runs intake only. Phase boundary reports the workflow is not yet implemented.
+# -- Milestones workflow -------------------------------------------------------
+# intake -> milestone-spec -> [milestone-review] -> plan-spec ->
+# [plan-review] -> execute -> exec-review -> milestone-spec (loop) -> curation
+
+_MILESTONES_PLAN_SPEC_GUIDANCE = (
+    "## Milestone plan-spec context\n"
+    "\n"
+    "Read `milestones.md` to identify the current milestone:\n"
+    "- The current milestone is the one marked `[in-progress]`.\n"
+    "- Write `plan-milestone-N.md` for that milestone (where N is the milestone number).\n"
+    "- The plan should be scoped to just that milestone's work.\n"
+)
+
+_MILESTONES_PLAN_REVIEW_GUIDANCE = (
+    "## Milestone plan-review context\n"
+    "\n"
+    "Review the most recently written `plan-milestone-N.md` artifact.\n"
+    "Check `milestones.md` to identify which milestone is `[in-progress]` and use\n"
+    "its number to determine the correct plan artifact filename.\n"
+)
+
+_MILESTONES_EXECUTE_GUIDANCE = (
+    "## Milestone execute context\n"
+    "\n"
+    "Hand off the current milestone's plan to the executor:\n"
+    "- **artifacts**: `[\"plan-milestone-N.md\", \"milestones.md\"]` (where N is the\n"
+    "  current `[in-progress]` milestone number). Include `milestones.md` for broader\n"
+    "  initiative context.\n"
+    "- **instructions**: Key findings from plan-review and any user clarifications.\n"
+    "\n"
+    "After execution, transition to `exec-review`.\n"
+)
 
 MILESTONES_WORKFLOW = Workflow(
     name="milestones",
-    description="Break work into milestones with phased delivery (coming soon)",
+    description="Break work into milestones and execute each with planning and review",
     phases={
         "intake": PhaseBinding(
             module=intake,
@@ -371,9 +439,86 @@ MILESTONES_WORKFLOW = Workflow(
                 " may touch, team conventions, and deployment invariants."
             ),
         ),
+        "milestone-spec": PhaseBinding(
+            module=milestone_spec,
+            description="Decompose the initiative into ordered milestones, or update after execution",
+            retrieval_directive=(
+                "Architectural decisions and constraints relevant to milestone scope"
+                " and ordering. Entries about subsystem boundaries and delivery sequencing."
+            ),
+        ),
+        "milestone-review": PhaseBinding(
+            module=milestone_review,
+            description="Review the milestone decomposition for scope, ordering, and gaps",
+            guidance=(
+                "## Milestone-review context\n"
+                "\n"
+                "After reviewing, if you found Critical or Major issues, transition to\n"
+                "`milestone-spec` so the decomposition can be revised. If the decomposition\n"
+                "looks sound, transition to `plan-spec` to begin the first milestone.\n"
+            ),
+            retrieval_directive=(
+                "Past lessons about milestone decomposition, scope boundaries, and"
+                " sequencing decisions in similar initiatives."
+            ),
+        ),
+        "plan-spec": PhaseBinding(
+            module=plan_spec,
+            description="Write a technical implementation plan for the current milestone",
+            guidance=_MILESTONES_PLAN_SPEC_GUIDANCE,
+            retrieval_directive=(
+                "Implementation decisions, procedures, and conventions that constrain"
+                " how changes are made in this codebase. Entries about coding patterns,"
+                " module layout rules, and past lessons from similar changes."
+            ),
+        ),
+        "plan-review": PhaseBinding(
+            module=plan_review,
+            description="Evaluate the milestone plan for completeness, correctness, and risks",
+            guidance=_MILESTONES_PLAN_REVIEW_GUIDANCE,
+            retrieval_directive=(
+                "Implementation decisions, procedures, and conventions that constrain"
+                " how changes are made in this codebase. Entries about coding patterns,"
+                " module layout rules, and past lessons from similar changes."
+            ),
+        ),
+        "execute": PhaseBinding(
+            module=execute_phase,
+            description="Hand off the milestone plan to an executor agent for implementation",
+            guidance=_MILESTONES_EXECUTE_GUIDANCE,
+            retrieval_directive=(
+                "Procedures, conventions, and past lessons related to the subsystems"
+                " being modified. Executor-facing rules about testing policy, secret"
+                " handling, file placement, and other coding-time constraints."
+            ),
+        ),
+        "exec-review": PhaseBinding(
+            module=exec_review_phase,
+            description="Review milestone execution results and identify deviations",
+            guidance=_EXEC_REVIEW_MILESTONES_GUIDANCE,
+            retrieval_directive=(
+                "Past lessons about execution quality, common deviations, and"
+                " post-execution review patterns in this codebase."
+            ),
+        ),
+        "curation": PhaseBinding(
+            module=curation,
+            description="Capture lessons, decisions, and context from the completed initiative",
+            guidance=_POSTMORTEM_DIRECTIVE,
+            retrieval_directive="",
+        ),
     },
     initial_phase="intake",
-    transitions={"intake": []},
+    transitions={
+        "intake":           ["milestone-spec"],
+        "milestone-spec":   ["milestone-review", "plan-spec"],
+        "milestone-review": ["milestone-spec", "plan-spec"],
+        "plan-spec":        ["plan-review", "execute"],
+        "plan-review":      ["plan-spec", "execute"],
+        "execute":          ["exec-review", "milestone-spec"],
+        "exec-review":      ["milestone-spec", "plan-spec", "curation"],
+        "curation":         [],
+    },
 )
 
 

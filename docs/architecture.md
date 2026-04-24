@@ -17,6 +17,7 @@ principles, and pitfalls that govern the codebase.
   protocol, projection model, camelCase wire format
 - [Intake Loop](./intake-loop.md) -- two-step intake design, prompt engineering principles
 - [Memory System](./memory-system.md) -- project memory, curation, and the RAG injection wired into phase transitions
+- [Milestones](./milestones.md) -- milestone soundness criteria, sizing heuristics, grounding requirements, cross-milestone learning
 
 ---
 
@@ -258,17 +259,30 @@ A `Workflow` defines the set of phases available for a run, the initial phase,
 and suggested transitions between phases. Two workflows are defined in
 `koan/lib/workflows.py`:
 
-**plan** — intake → plan-spec → plan-review → execute
+**plan** — intake -> plan-spec -> plan-review -> execute -> exec-review -> curation
 
-| Phase         | Role                   | Steps                           | Artifact                  |
-| ------------- | ---------------------- | ------------------------------- | ------------------------- |
-| `intake`      | Requirement gathering  | 3 (Gather → Deepen → Summarize) | Chat summary only         |
-| `plan-spec`   | Technical planning     | 2 (Analyze → Write)             | `plan.md`                 |
-| `plan-review` | Quality review         | 2 (Read → Evaluate)             | Chat report only          |
-| `execute`     | Implementation handoff | 2 (Compose → Request)           | Code changes via executor |
+| Phase         | Role                   | Steps                       | Artifact                  |
+| ------------- | ---------------------- | --------------------------- | ------------------------- |
+| `intake`      | Requirement gathering  | 3 (Gather/Deepen/Summarize) | Chat summary only         |
+| `plan-spec`   | Technical planning     | 2 (Analyze/Write)           | `plan.md`                 |
+| `plan-review` | Quality review         | 2 (Read/Evaluate)           | Chat report only          |
+| `execute`     | Implementation handoff | 2 (Compose/Request)         | Code changes via executor |
+| `exec-review` | Execution review       | 2 (Verify/Assess)           | Chat report only          |
+| `curation`    | Postmortem             | 2 (Inventory/Memorize)      | `.koan/memory/` entries   |
 
-**milestones** — stub workflow; runs intake only, then yields with a single
-"done" suggestion.
+**milestones** — intake -> milestone-spec -> [milestone-review] -> plan-spec ->
+[plan-review] -> execute -> exec-review -> milestone-spec (loop) -> curation
+
+| Phase              | Role                    | Steps                       | Artifact                  |
+| ------------------ | ----------------------- | --------------------------- | ------------------------- |
+| `intake`           | Requirement gathering   | 3 (Gather/Deepen/Summarize) | Chat summary only         |
+| `milestone-spec`   | Milestone decomposition | 2 (Analyze/Write)           | `milestones.md`           |
+| `milestone-review` | Milestone review        | 2 (Read/Evaluate)           | Chat report only          |
+| `plan-spec`        | Milestone planning      | 2 (Analyze/Write)           | `plan-milestone-N.md`     |
+| `plan-review`      | Plan quality review     | 2 (Read/Evaluate)           | Chat report only          |
+| `execute`          | Implementation handoff  | 2 (Compose/Request)         | Code changes via executor |
+| `exec-review`      | Execution review        | 2 (Verify/Assess)           | Chat report only          |
+| `curation`         | Postmortem              | 2 (Inventory/Memorize)      | `.koan/memory/` entries   |
 
 ### Workflow selection
 

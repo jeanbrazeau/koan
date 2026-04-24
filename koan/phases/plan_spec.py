@@ -1,16 +1,16 @@
 # Plan-spec phase -- 2-step workflow.
 #
 #   Step 1 (Analyze)  -- review intake context and codebase; no writes
-#   Step 2 (Write)    -- write plan.md to the run directory
+#   Step 2 (Write)    -- write the plan artifact to the run directory
 #
-# Scope: "plan" -- specific to the plan workflow.
+# Scope: "general" -- reusable by any workflow.
 
 from __future__ import annotations
 
 from . import PhaseContext, StepGuidance
 
 ROLE = "orchestrator"
-SCOPE = "plan"           # specific to the plan workflow
+SCOPE = "general"        # reusable by any workflow
 TOTAL_STEPS = 2
 
 STEP_NAMES: dict[int, str] = {
@@ -33,11 +33,12 @@ PHASE_ROLE_CONTEXT = (
     "\n"
     "## Output\n"
     "\n"
-    "One artifact: **plan.md**, produced via the MCP tool `koan_artifact_propose`."
-    " Do NOT write files directly; the tool writes `plan.md` to the run directory"
+    "One artifact: **the implementation plan**, produced via the MCP tool `koan_artifact_propose`."
+    " The filename is specified by the workflow guidance (default: `plan.md`)."
+    " Do NOT write files directly; the tool writes to the run directory"
     " and blocks until the user has reviewed it.\n"
     "\n"
-    "## plan.md structure\n"
+    "## Plan structure\n"
     "\n"
     "- **Approach summary**: 2-4 sentences on the overall strategy.\n"
     "- **Key decisions**: Numbered list of architectural/design decisions made.\n"
@@ -53,7 +54,7 @@ PHASE_ROLE_CONTEXT = (
     "  You read to understand structure, not to re-verify intake's findings.\n"
     "- MUST NOT write code -- write instructions for an executor that will write code.\n"
     "- MUST NOT invent file paths or function names you have not seen in the codebase.\n"
-    "- MUST use koan_artifact_propose to produce plan.md. Built-in Write and Edit\n"
+    "- MUST use koan_artifact_propose to produce the plan artifact. Built-in Write and Edit\n"
     "  tools are not available in this phase.\n"
 )
 
@@ -63,6 +64,9 @@ PHASE_ROLE_CONTEXT = (
 def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
     if step == 1:
         lines: list[str] = []
+        # phase_instructions at top per established pattern (intake.py, execute.py)
+        if ctx.phase_instructions:
+            lines.extend(["## Workflow guidance", "", ctx.phase_instructions, ""])
         if ctx.memory_injection:
             lines.extend([ctx.memory_injection, ""])
         lines.extend([
@@ -113,8 +117,6 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "- Key decisions and rationale",
             "- Any ambiguities or risks spotted",
         ])
-        if ctx.phase_instructions:
-            lines.extend(["", "## Additional Context from Workflow Orchestrator", "", ctx.phase_instructions])
         return StepGuidance(title=STEP_NAMES[1], instructions=lines)
 
     if step == 2:
@@ -125,7 +127,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "",
                 "```",
                 "koan_artifact_propose(",
-                '    filename="plan.md",',
+                '    filename="...",  # use the filename from workflow guidance (step 1); default: plan.md',
                 '    content="""\\',
                 "# Plan title",
                 "...",
@@ -164,7 +166,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "",
                 "## About the tool",
                 "",
-                "`koan_artifact_propose` writes plan.md to the run directory"
+                "`koan_artifact_propose` writes the plan artifact to the run directory"
                 " immediately and blocks until the user has reviewed it. The"
                 " tool returns the review outcome as a text string. If the user"
                 " approves, proceed normally. If the user requests revisions,"

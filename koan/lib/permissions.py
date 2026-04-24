@@ -127,7 +127,8 @@ _UNIVERSAL_READ_TOOLS: frozenset[str] = frozenset({
 _ORCHESTRATOR_SCOUT_PHASES: frozenset[str] = frozenset({
     "intake", "core-flows", "tech-plan", "ticket-breakdown",
     "cross-artifact-validation",
-    "plan-spec", "plan-review",   # plan workflow phases
+    "plan-spec", "plan-review",           # plan workflow phases
+    "milestone-spec", "milestone-review", # milestones workflow phases
     # Curation: standalone directive may need scouts to gather source
     # material from the codebase. Postmortem directive forbids them
     # in prose.
@@ -150,6 +151,7 @@ _ORCHESTRATOR_MEMORY_TOOLS: frozenset[str] = frozenset({
 
 _ORCHESTRATOR_BASH_PHASES: frozenset[str] = frozenset({
     "execution", "implementation-validation",
+    "exec-review",  # orchestrator may run tests/type-checks to verify executor claims
 })
 
 

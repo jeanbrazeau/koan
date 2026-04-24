@@ -4,14 +4,14 @@
 #   Step 2 (Evaluate)  -- evaluate the plan and report findings via chat
 #
 # Advisory only: findings are reported in chat, not written to a file.
-# Scope: "plan" -- specific to the plan workflow.
+# Scope: "general" -- reusable by any workflow.
 
 from __future__ import annotations
 
 from . import PhaseContext, StepGuidance
 
 ROLE = "orchestrator"
-SCOPE = "plan"           # specific to the plan workflow
+SCOPE = "general"        # reusable by any workflow
 TOTAL_STEPS = 2
 
 STEP_NAMES: dict[int, str] = {
@@ -52,9 +52,9 @@ PHASE_ROLE_CONTEXT = (
     "\n"
     "## Strict rules\n"
     "\n"
-    "- MUST read plan.md before evaluating.\n"
+    "- MUST read the plan artifact before evaluating.\n"
     "- MUST read the codebase files the plan references. Verify every claim.\n"
-    "- MUST NOT modify plan.md.\n"
+    "- MUST NOT modify the plan artifact.\n"
     "- MUST NOT flag issues the executor can trivially resolve.\n"
 )
 
@@ -64,6 +64,9 @@ PHASE_ROLE_CONTEXT = (
 def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
     if step == 1:
         lines: list[str] = []
+        # phase_instructions at top per established pattern (intake.py, execute.py)
+        if ctx.phase_instructions:
+            lines.extend(["## Workflow guidance", "", ctx.phase_instructions, ""])
         if ctx.memory_injection:
             lines.extend([ctx.memory_injection, ""])
         lines.extend([
@@ -102,7 +105,8 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "",
             "1. Review the intake findings in your context for the requirements and",
             "   constraints the plan must satisfy.",
-            f"2. Read `{ctx.run_dir}/plan.md` from start to finish.",
+            "2. Read the plan artifact. The workflow guidance above specifies which file to"
+            " review. If not specified, read `plan.md` in the run directory.",
             "3. For every codebase claim in the plan (file path, function name,",
             "   interface, type), open the actual source file and verify. If the plan",
             "   says 'modify function X in file Y', confirm X exists in Y with the",
@@ -118,8 +122,6 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "",
             "Do NOT write an evaluation yet. Comprehend first.",
         ])
-        if ctx.phase_instructions:
-            lines.extend(["", "## Additional Context from Workflow Orchestrator", "", ctx.phase_instructions])
         return StepGuidance(title=STEP_NAMES[1], instructions=lines)
 
     if step == 2:

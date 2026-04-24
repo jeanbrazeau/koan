@@ -30,8 +30,9 @@ Spoke documents:
 - [docs/phase-trust.md](docs/phase-trust.md) -- phase trust model, verification boundaries, adversarial review
 - [docs/projections.md](docs/projections.md) -- versioned event log, fold function, projection shape, SSE protocol, version-negotiated catch-up
 - [docs/token-streaming.md](docs/token-streaming.md) -- runner stdout parsing, SSE delta path
+- [docs/milestones.md](docs/milestones.md) -- milestone soundness criteria, sizing heuristics, grounding requirements
 
-**Workflow types:** `plan` (intake → plan-spec → plan-review → execute) · `milestones` (stub: intake only)
+**Workflow types:** `plan` (intake -> plan-spec -> plan-review -> execute -> exec-review -> curation) . `milestones` (intake -> milestone-spec -> [milestone-review] -> plan-spec -> [plan-review] -> execute -> exec-review -> milestone-spec loop -> curation)
 
 ---
 
@@ -128,24 +129,24 @@ during brief-generation step 1 (the read step).
 
 **MCP permission fence -- orchestrator tool availability by phase:**
 
-| Tool                                                                              | Available phases                                                                                                 |
-| --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `koan_complete_step`                                                              | All phases                                                                                                       |
-| `koan_set_phase`                                                                  | All phases (blocked mid-story during execution); accepts `"done"` as tombstone                                   |
-| `koan_yield`                                                                      | All phases                                                                                                       |
-| `koan_ask_question`                                                               | All phases                                                                                                       |
-| `koan_request_scouts`                                                             | `intake`, `core-flows`, `tech-plan`, `ticket-breakdown`, `cross-artifact-validation`, `plan-spec`, `plan-review` |
-| `koan_request_executor`                                                           | `execution`, `execute`                                                                                           |
-| `koan_select_story`, `koan_complete_story`, `koan_retry_story`, `koan_skip_story` | `execution` only                                                                                                 |
-| `bash`                                                                            | `execution`, `implementation-validation`                                                                         |
-| `koan_memorize`                                                                   | All phases                                                                                                       |
-| `koan_forget`                                                                     | All phases                                                                                                       |
-| `koan_memory_status`                                                              | All phases                                                                                                       |
-| `koan_search`                                                                     | All phases                                                                                                       |
-| `koan_reflect`                                                                    | All phases (orchestrator only)                                                                                   |
-| `koan_artifact_propose`                                                           | All phases (orchestrator only)                                                                                   |
-| `koan_artifact_list`                                                              | All phases (all roles via universal read-tool path)                                                              |
-| `koan_artifact_view`                                                              | All phases (all roles via universal read-tool path)                                                              |
+| Tool                                                                              | Available phases                                                                                                                                       |
+| --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `koan_complete_step`                                                              | All phases                                                                                                                                             |
+| `koan_set_phase`                                                                  | All phases (blocked mid-story during execution); accepts `"done"` as tombstone                                                                         |
+| `koan_yield`                                                                      | All phases                                                                                                                                             |
+| `koan_ask_question`                                                               | All phases                                                                                                                                             |
+| `koan_request_scouts`                                                             | `intake`, `core-flows`, `tech-plan`, `ticket-breakdown`, `cross-artifact-validation`, `plan-spec`, `plan-review`, `milestone-spec`, `milestone-review` |
+| `koan_request_executor`                                                           | `execution`, `execute`                                                                                                                                 |
+| `koan_select_story`, `koan_complete_story`, `koan_retry_story`, `koan_skip_story` | `execution` only                                                                                                                                       |
+| `bash`                                                                            | `execution`, `implementation-validation`, `exec-review`                                                                                                |
+| `koan_memorize`                                                                   | All phases                                                                                                                                             |
+| `koan_forget`                                                                     | All phases                                                                                                                                             |
+| `koan_memory_status`                                                              | All phases                                                                                                                                             |
+| `koan_search`                                                                     | All phases                                                                                                                                             |
+| `koan_reflect`                                                                    | All phases (orchestrator only)                                                                                                                         |
+| `koan_artifact_propose`                                                           | All phases (orchestrator only)                                                                                                                         |
+| `koan_artifact_list`                                                              | All phases (all roles via universal read-tool path)                                                                                                    |
+| `koan_artifact_view`                                                              | All phases (all roles via universal read-tool path)                                                                                                    |
 
 ## 5. Need-to-Know Prompts
 
