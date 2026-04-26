@@ -42,6 +42,7 @@ export async function startRun(
   profile: string,
   installations?: Record<string, string>,
   workflow?: string,
+  attachments?: string[],
 ): Promise<StartRunResult> {
   const body: Record<string, unknown> = { task, profile }
   if (installations && Object.keys(installations).length > 0) {
@@ -49,6 +50,9 @@ export async function startRun(
   }
   if (workflow) {
     body['workflow'] = workflow
+  }
+  if (attachments && attachments.length > 0) {
+    body['attachments'] = attachments
   }
   return post('/api/start-run', body)
 }
@@ -65,30 +69,26 @@ export async function submitAnswer(answers: unknown[], token: string) {
 
 // -- Chat --------------------------------------------------------------------
 
-export async function sendChatMessage(message: string) {
-  return post<{ ok: boolean; error?: string }>('/api/chat', { message })
+export async function sendChatMessage(message: string, attachments?: string[]) {
+  const body: Record<string, unknown> = { message }
+  if (attachments && attachments.length > 0) {
+    body['attachments'] = attachments
+  }
+  return post<{ ok: boolean; error?: string }>('/api/chat', body)
 }
 
-// -- Artifact review ---------------------------------------------------------
+// -- Artifact comment ---------------------------------------------------------
+// M5 replaced /api/artifact-review with /api/artifact-comment (flat schema).
+// submitArtifactReview and the multi-block payload types are deleted.
 
-export interface ArtifactReviewComment {
-  blockIndex: number
-  text: string
-  blockPreview: string
-}
-
-export interface ArtifactReviewPayload {
-  summary: string
-  comments: ArtifactReviewComment[]
-}
-
-export async function submitArtifactReview(
+export async function submitArtifactComment(
   path: string,
-  payload: ArtifactReviewPayload,
-) {
+  comment: string,
+  attachments: string[] = [],
+): Promise<{ ok: boolean; error?: string }> {
   return post<{ ok: boolean; error?: string }>(
-    '/api/artifact-review',
-    { path, payload },
+    '/api/artifact-comment',
+    { path, comment, attachments },
   )
 }
 
@@ -267,6 +267,7 @@ export interface CurationDecision {
   proposal_id: string
   decision: 'approved' | 'rejected'
   feedback: string
+  attachments?: string[]
 }
 
 export async function submitMemoryCuration(batch_id: string, decisions: CurationDecision[]) {

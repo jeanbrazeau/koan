@@ -37,7 +37,18 @@ export interface TextEntry { type: 'text'; text: string }
 export interface StepEntry { type: 'step'; step: number; stepName: string; totalSteps: number | null }
 export interface UserMessageEntry { type: 'user_message'; content: string; timestampMs: number }
 
-interface BaseToolEntry { callId: string; inFlight: boolean }
+// Mirrors backend AttachmentEntry with Pydantic's to_camel wire format.
+export interface AttachmentEntry {
+  uploadId: string
+  filename: string
+  size: number
+  contentType: string
+  path: string
+}
+
+// Placing attachments on BaseToolEntry means all tool-entry variants inherit
+// it automatically; the fold sets it only when the event carries a manifest.
+interface BaseToolEntry { callId: string; inFlight: boolean; attachments?: AttachmentEntry[] | null }
 export interface ToolWriteEntry   extends BaseToolEntry { type: 'tool_write';   file: string }
 export interface ToolEditEntry    extends BaseToolEntry { type: 'tool_edit';    file: string }
 export interface ToolBashEntry    extends BaseToolEntry { type: 'tool_bash';    command: string }
@@ -239,9 +250,8 @@ export interface ActiveYield {
   suggestions: Suggestion[]
 }
 
-export interface ActiveArtifactReview {
-  path: string
-}
+// ActiveArtifactReview removed in M6 -- koan_artifact_propose deleted in M5;
+// the backend no longer emits artifact_review_started events.
 
 export interface PhaseInfo {
   id: string
@@ -259,7 +269,6 @@ export interface Run {
   completion: CompletionInfo | null
   steering: SteeringMessage[]
   activeYield: ActiveYield | null  // non-null while orchestrator is blocked in koan_yield
-  activeArtifactReview: ActiveArtifactReview | null  // non-null while orchestrator is blocked in koan_artifact_propose
   activeCurationBatch: ActiveCurationBatch | null  // non-null while orchestrator is blocked in koan_memory_propose
 }
 
@@ -293,6 +302,12 @@ interface KoanState {
 
   // Local UI state: currently open artifact review (path or null)
   reviewingArtifact: string | null
+
+  // Timestamp of the last yield resolution (suggestion clicked / chat submitted).
+  // Null until the first yield resolves; all artifacts show as "changed" until then.
+  // Updated client-side on send; not persisted or mirrored in SSE projection.
+  lastTouchpointMs: number | null
+  setLastTouchpointMs: (ms: number) => void
 
   // Store-only curation draft (accept-loss: cleared on memory_curation_cleared).
   // Keyed by proposal id; seeded by resetMemoryCurationDraft on batch mount.
@@ -337,6 +352,7 @@ export const useStore = create<KoanState>()(
       lastCompletion: null,
       chatDraft: '',
       reviewingArtifact: null,
+      lastTouchpointMs: null,
       memoryCurationDraft: {},
       memorySidebar: { search: '', filter: 'all' },
 
@@ -388,6 +404,7 @@ export const useStore = create<KoanState>()(
       setLastCompletion: (c) => set({ lastCompletion: c }, false, 'setLastCompletion'),
       setChatDraft: (text) => set({ chatDraft: text }, false, 'setChatDraft'),
       setReviewingArtifact: (path) => set({ reviewingArtifact: path }, false, 'setReviewingArtifact'),
+      setLastTouchpointMs: (ms) => set({ lastTouchpointMs: ms }, false, 'setLastTouchpointMs'),
     }),
     {
       name: 'koan',

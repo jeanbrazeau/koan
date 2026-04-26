@@ -1,4 +1,5 @@
-import { useFileAttachment, type AttachedFile } from '../../hooks/useFileAttachment'
+import { useEffect } from 'react'
+import { useFileAttachment } from '../../hooks/useFileAttachment'
 import TextInput from '../atoms/TextInput'
 import { FileChip } from '../atoms/FileChip'
 import './OverallFeedback.css'
@@ -6,8 +7,9 @@ import './OverallFeedback.css'
 interface OverallFeedbackProps {
   value: string
   onChange: (value: string) => void
-  attachments?: AttachedFile[]
-  onAttachmentsChange?: (files: AttachedFile[]) => void
+  // Notifies the parent of the current committed file ID list; uncontrolled
+  // internally so parents don't need to mirror uploading/error states.
+  onFileIdsChange?: (ids: string[]) => void
   label?: string
   placeholder?: string
   disabled?: boolean
@@ -22,11 +24,18 @@ const PaperclipIcon = () => (
 export function OverallFeedback({
   value,
   onChange,
+  onFileIdsChange,
   label = 'Overall feedback (optional)',
   placeholder = 'Summarize your overall feedback on this document, or leave empty to submit only inline comments.',
   disabled,
 }: OverallFeedbackProps) {
   const attach = useFileAttachment()
+
+  // Fire the callback whenever the committed file list changes so the parent
+  // can include IDs in its submit payload without owning upload state itself.
+  useEffect(() => {
+    onFileIdsChange?.(attach.fileIds)
+  }, [attach.fileIds, onFileIdsChange])
 
   return (
     <div className="of" {...attach.dragProps}>

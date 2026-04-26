@@ -1,8 +1,6 @@
 import './MemoryOverviewPage.css'
 import type { ReactNode } from 'react'
-import { useFileAttachment } from '../../hooks/useFileAttachment'
 import TextInput from '../atoms/TextInput'
-import { FileChip } from '../atoms/FileChip'
 import Button from '../atoms/Button'
 import StatStrip from '../molecules/StatStrip'
 import ActivityRow from '../molecules/ActivityRow'
@@ -39,14 +37,11 @@ interface ReflectStarterPanelProps {
   placeholder?: string
   value: string
   onChange: (v: string) => void
-  onAsk: (v: string, attachments?: string[]) => void
+  // Attachments are intentionally excluded: /api/memory/reflect does not accept
+  // them (not one of M3's four attachment-accepting surfaces). The paperclip
+  // is removed rather than silently dropping IDs. Track as a future enhancement.
+  onAsk: (v: string) => void
 }
-
-const PaperclipIcon = () => (
-  <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.49" />
-  </svg>
-)
 
 interface MemoryOverviewPageProps {
   counts: Counts
@@ -79,14 +74,13 @@ function SummaryPanel({ subtitle, children }: SummaryPanelProps) {
 function ReflectStarterPanel({ lead, placeholder, value, onChange, onAsk }: ReflectStarterPanelProps) {
   const defaultLead = 'Ask anything about your memory -- what you\'ve decided, what you\'ve learned, and how it all connects.'
   const defaultPlaceholder = 'e.g. What\'s our testing strategy for LLM-driven code?'
-  const attach = useFileAttachment()
   return (
     <div className="mop-reflect">
       <div className="mop-reflect-eyebrow">Reflect</div>
       <p className="mop-reflect-lead">{lead || defaultLead}</p>
       <div className="mop-reflect-spacer" />
       <label className="mop-reflect-sr-only" htmlFor="reflect-input">Reflect question</label>
-      <div className="mop-reflect-textarea-wrap" {...attach.dragProps}>
+      <div className="mop-reflect-textarea-wrap">
         <TextInput
           as="textarea"
           value={value}
@@ -94,27 +88,13 @@ function ReflectStarterPanel({ lead, placeholder, value, onChange, onAsk }: Refl
           placeholder={placeholder || defaultPlaceholder}
           className="mop-reflect-textarea"
         />
-        <button className="mop-reflect-attach-btn" onClick={attach.openPicker} title="Attach files" type="button">
-          <PaperclipIcon />
-        </button>
-        <input ref={attach.inputRef} type="file" multiple className="mop-reflect-file-input" onChange={attach.onInputChange} tabIndex={-1} />
       </div>
-      {attach.files.length > 0 && (
-        <div className="mop-reflect-chips">
-          {attach.files.map(f => (
-            <FileChip key={f.id} name={f.name} size={f.size} state={f.state} onRemove={() => attach.removeFile(f.id)} />
-          ))}
-        </div>
-      )}
       <div className="mop-reflect-actions">
         <Button
           variant="primary"
           size="sm"
           disabled={!value.trim()}
-          onClick={() => {
-            const ids = attach.fileIds.length > 0 ? attach.fileIds : undefined
-            onAsk(value, ids)
-          }}
+          onClick={() => onAsk(value)}
         >
           Ask {'\u2192'}
         </Button>

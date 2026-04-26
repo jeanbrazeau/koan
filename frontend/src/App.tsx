@@ -48,7 +48,7 @@ import { YieldPanel } from './components/molecules/YieldPanel'
 import { StepHeader } from './components/molecules/StepHeader'
 import { CompletionBanner } from './components/molecules/CompletionBanner'
 import { SteeringBar } from './components/molecules/SteeringBar'
-import { ArtifactReviewPin } from './components/molecules/ArtifactReviewPin'
+// ArtifactReviewPin deleted in M6 (koan_artifact_propose removed in M5).
 import { KoanToolCard } from './components/molecules/KoanToolCard'
 
 import { Md } from './components/Md'
@@ -56,7 +56,7 @@ import { Notification } from './components/Notification'
 // SettingsOverlay is no longer rendered — replaced by SettingsPage organism
 // import { SettingsOverlay } from './components/SettingsOverlay'
 import { SettingsPage, type Profile as SPProfile, type Installation as SPInstallation } from './components/organisms/SettingsPage'
-import { ReviewPanel, type ReviewSubmitPayload } from './components/organisms/ReviewPanel'
+import { ReviewPanel } from './components/organisms/ReviewPanel'
 import { SessionsPage } from './components/organisms/SessionsPage'
 import { MemoryRoutes } from './components/organisms/MemoryRoutes'
 import { CurationTakeover } from './components/organisms/CurationTakeover'
@@ -98,6 +98,9 @@ function ConnectedSidebar() {
   const artifacts = useStore(s => s.run?.artifacts ?? {})
   const reviewingArtifact = useStore(s => s.reviewingArtifact)
   const setReviewingArtifact = useStore(s => s.setReviewingArtifact)
+  // lastTouchpointMs is null until the first yield resolves; all artifacts show
+  // as "changed" in that initial state, which is the intended behaviour.
+  const lastTouchpointMs = useStore(s => s.lastTouchpointMs)
   const entries = useMemo(() => {
     const now = Date.now()
     const list = Object.values(artifacts).map(a => {
@@ -107,12 +110,13 @@ function ConnectedSidebar() {
         filename: a.path.split('/').pop() || a.path,
         modifiedAgo: mins < 1 ? 'just now' : mins < 60 ? `modified ${mins}m ago` : `modified ${Math.floor(mins / 60)}h ago`,
         variant: mins < 5 ? ('recent' as const) : ('stable' as const),
+        changed: a.modifiedAt > (lastTouchpointMs ?? 0),
         _ts: a.modifiedAt,
       }
     })
     list.sort((a, b) => b._ts - a._ts)
-    return list.map(({ path, filename, modifiedAgo, variant }) => ({ path, filename, modifiedAgo, variant }))
-  }, [artifacts])
+    return list.map(({ path, filename, modifiedAgo, variant, changed }) => ({ path, filename, modifiedAgo, variant, changed }))
+  }, [artifacts, lastTouchpointMs])
   const handleClick = (path: string) => {
     setReviewingArtifact(reviewingArtifact === path ? null : path)
   }
@@ -394,18 +398,20 @@ function renderEntry(entry: ConversationEntry, i: number) {
     case 'tool_aggregate':
       return renderAggregate(entry, i)
     case 'tool_write':
-      return <ToolCallRow key={i} tool="write" command={entry.file} status={entry.inFlight ? 'running' : 'done'} />
+      return <ToolCallRow key={i} tool="write" command={entry.file} status={entry.inFlight ? 'running' : 'done'} attachments={entry.attachments} />
     case 'tool_edit':
-      return <ToolCallRow key={i} tool="edit" command={entry.file} status={entry.inFlight ? 'running' : 'done'} />
+      return <ToolCallRow key={i} tool="edit" command={entry.file} status={entry.inFlight ? 'running' : 'done'} attachments={entry.attachments} />
     case 'tool_bash':
-      return <ToolCallRow key={i} tool="bash" command={entry.command} status={entry.inFlight ? 'running' : 'done'} />
+      return <ToolCallRow key={i} tool="bash" command={entry.command} status={entry.inFlight ? 'running' : 'done'} attachments={entry.attachments} />
     case 'tool_generic': {
       if (SUPPRESSED_TOOLS.has(entry.toolName)) return null
       const label = KOAN_TOOL_LABELS[entry.toolName] ?? entry.toolName
       const cmd = entry.toolName in KOAN_TOOL_LABELS ? '' : entry.summary
-      return <ToolCallRow key={i} tool={label} command={cmd} status={entry.inFlight ? 'running' : 'done'} />
+      return <ToolCallRow key={i} tool={label} command={cmd} status={entry.inFlight ? 'running' : 'done'} attachments={entry.attachments} />
     }
     case 'tool_koan':
+      // KoanToolCard does not expose attachments -- koan tool calls don't carry
+      // file manifests in the current projection shape.
       return (
         <KoanToolCard
           key={i}
@@ -426,12 +432,21 @@ function renderEntry(entry: ConversationEntry, i: number) {
     case 'phase_boundary':
       return <PhaseMarker key={i} name={entry.phase} description={entry.description || entry.message} />
     case 'yield': {
-      const setChatDraft = useStore.getState().setChatDraft
+      const state = useStore.getState()
+      const setChatDraft = state.setChatDraft
+      // Compute changed artifacts at render time using the imperative store API.
+      // By the time lastTouchpointMs updates (on chat send), this yield entry is
+      // replaced by a user_message entry so stale changedArtifacts are never seen.
+      const ltp = state.lastTouchpointMs
+      const changedArtifacts = Object.values(state.run?.artifacts ?? {})
+        .filter(a => a.modifiedAt > (ltp ?? 0))
+        .map(a => a.path)
       return (
         <YieldPanel
           key={i}
           prompt={entry.prompt || 'What would you like to do next?'}
           suggestions={entry.suggestions}
+          changedArtifacts={changedArtifacts}
           onSelect={s => setChatDraft(s.command ? `/${s.id} ${s.command}` : `/${s.id} `)}
         />
       )
@@ -451,9 +466,8 @@ function ContentStream() {
   const conversation = useStore(s => focusAgentId ? s.run?.agents?.[focusAgentId]?.conversation : undefined)
   const run = useStore(s => s.run)
   const focus = useStore(s => s.run?.focus)
-  const reviewingArtifact = useStore(s => s.reviewingArtifact)
-  const activeArtifactReview = useStore(s => s.run?.activeArtifactReview ?? null)
-  const setReviewingArtifact = useStore(s => s.setReviewingArtifact)
+  // reviewingArtifact used only by ArtifactReviewPin (deleted in M6); kept as
+  // context for the "already reviewing" guard if re-added in a future milestone.
   const scrollRef = useRef<HTMLDivElement>(null)
   const [paletteOpen, setPaletteOpen] = useState(false)
   useAutoScroll(scrollRef)
@@ -486,16 +500,14 @@ function ContentStream() {
         {showFeedback && (
           <>
             <ConnectedSteeringBar />
-            {/* Pin persists even after user closes the ReviewPanel without submitting,
-                so the orchestrator's block is still visible and re-openable. */}
-            {activeArtifactReview && !reviewingArtifact && (
-              <ArtifactReviewPin
-                path={activeArtifactReview.path}
-                onClick={() => setReviewingArtifact(activeArtifactReview.path)}
-              />
-            )}
+            {/* ArtifactReviewPin removed in M6 -- koan_artifact_propose deleted in M5. */}
             <FeedbackInput
-              onSend={msg => api.sendChatMessage(msg)}
+              onSend={(msg, attachments) => {
+                // Mark yield resolution so sidebar and yield panel reflect the new
+                // "changed since last touchpoint" baseline going forward.
+                useStore.getState().setLastTouchpointMs(Date.now())
+                return api.sendChatMessage(msg, attachments)
+              }}
               disabled={!!run?.completion}
               availableCommands={run?.activeYield ? run.availablePhases : undefined}
               onPaletteToggle={setPaletteOpen}
@@ -520,6 +532,9 @@ function ElicitationView() {
   const [currentIdx, setCurrentIdx] = useState(0)
   const [answers, setAnswers] = useState<Record<number, string | string[] | null>>({})
   const [otherTexts, setOtherTexts] = useState<Record<number, string>>({})
+  // Per-question attachment IDs; collected as the user pages through questions
+  // and folded into the final answer list on submit per M3 wire shape.
+  const [attachmentsByIdx, setAttachmentsByIdx] = useState<Record<number, string[]>>({})
   const [submitError, setSubmitError] = useState<string | null>(null)
 
   if (!focus || focus.type !== 'question') return null
@@ -584,9 +599,20 @@ function ElicitationView() {
     })
   }
 
-  const handleSubmit = async () => {
+  const handleSubmit = async (attachments?: string[]) => {
+    // Record attachments for the current question before advancing or submitting.
+    if (attachments && attachments.length > 0) {
+      setAttachmentsByIdx(prev => ({ ...prev, [currentIdx]: attachments }))
+    }
     if (currentIdx < total - 1) { setCurrentIdx(i => i + 1); return }
-    const final = resolveAnswers()
+    // Wrap each resolved answer as {answer, attachments?} per M3 wire shape.
+    // Use the just-received attachments for the final question rather than
+    // the stale state entry (state update is async).
+    const final = resolveAnswers().map((ans, i) => {
+      const a = i === currentIdx ? attachments : attachmentsByIdx[i]
+      if (a && a.length > 0) return { answer: ans, attachments: a }
+      return { answer: ans }
+    })
     const res = await api.submitAnswer(final, token)
     if (!res.ok) setSubmitError(res.message ?? 'Failed to submit answers')
   }
@@ -846,12 +872,10 @@ function ReviewView() {
 
   if (!path) return null
 
-  // Submit to the dedicated artifact-review endpoint. The backend renders
-  // the review string and resolves the koan_artifact_propose future,
-  // keeping the tool-return contract server-side.
-  const handleSubmit = (payload: ReviewSubmitPayload) => {
-    console.log('[review] submitting to artifact-review endpoint:', payload)
-    api.submitArtifactReview(path, payload)
+  // Submit to /api/artifact-comment (M5 endpoint). Flat schema: path + comment
+  // + attachments. The old /api/artifact-review and multi-block payload are gone.
+  const handleSubmit = (comment: string, attachments: string[]) => {
+    api.submitArtifactComment(path, comment, attachments)
     setReviewing(null)
   }
 
@@ -879,7 +903,6 @@ export default function App() {
   const run = useStore(s => s.run)
   const connected = useStore(s => s.connected)
   const reviewingArtifact = useStore(s => s.reviewingArtifact)
-  const activeArtifactReview = useStore(s => s.run?.activeArtifactReview ?? null)
   const completion = run?.completion ?? null
   const header = useHeaderData()
   const location = useLocation()
@@ -893,13 +916,9 @@ export default function App() {
     : location.pathname === '/settings' ? 'settings'
     : 'new-run'
 
-  // Auto-open: fires when the server signals a review is needed via
-  // koan_artifact_propose. The server tells us exactly which artifact to review
-  // -- no heuristic needed. Replacing the old yield-triggered / newest-.md logic.
-  useEffect(() => {
-    if (activeArtifactReview === null) return
-    useStore.getState().setReviewingArtifact(activeArtifactReview.path)
-  }, [activeArtifactReview])
+  // Auto-open effect removed in M6 -- koan_artifact_propose (and the
+  // activeArtifactReview field it drove) was deleted in M5. Artifacts are
+  // now opened on demand by the user clicking them in the sidebar.
 
   // Snapshot run.completion into lastCompletion on the null->non-null rising
   // edge only. The ref guards against re-snapshotting on every re-render or

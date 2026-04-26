@@ -64,6 +64,9 @@ interface MemoryCurationPageProps {
   onReject: (id: string) => void
   onChangeDecision: (id: string) => void
   onFeedbackChange: (id: string, v: string) => void
+  // Called whenever a per-decision OverallFeedback attachment list changes;
+  // the caller (CurationTakeover) owns the map to include in buildDecisions().
+  onProposalFileIdsChange?: (id: string, ids: string[]) => void
   onCancel: () => void
   onSubmit: () => void
 }
@@ -175,6 +178,7 @@ function ProposalDetailPane({
   onReject,
   onChangeDecision,
   onFeedbackChange,
+  onFileIdsChange,
 }: {
   proposal: Proposal
   position: { index: number; total: number }
@@ -182,6 +186,7 @@ function ProposalDetailPane({
   onReject: () => void
   onChangeDecision: () => void
   onFeedbackChange: (v: string) => void
+  onFileIdsChange?: (ids: string[]) => void
 }) {
   const paneRef = useRef<HTMLDivElement>(null)
   useEffect(() => {
@@ -223,6 +228,7 @@ function ProposalDetailPane({
           placeholder="Leave empty to just approve/reject. Write feedback to revise (if rejecting) or annotate (if approving)."
           value={proposal.feedback}
           onChange={onFeedbackChange}
+          onFileIdsChange={onFileIdsChange}
         />
       </div>
       <div className="pdp-actions">
@@ -247,6 +253,7 @@ export function MemoryCurationPage({
   onReject,
   onChangeDecision,
   onFeedbackChange,
+  onProposalFileIdsChange,
   onCancel,
   onSubmit,
 }: MemoryCurationPageProps) {
@@ -277,6 +284,7 @@ export function MemoryCurationPage({
           onReject={() => onReject(selected.id)}
           onChangeDecision={() => onChangeDecision(selected.id)}
           onFeedbackChange={v => onFeedbackChange(selected.id, v)}
+          onFileIdsChange={onProposalFileIdsChange ? ids => onProposalFileIdsChange(selected.id, ids) : undefined}
         />
       )}
     </div>

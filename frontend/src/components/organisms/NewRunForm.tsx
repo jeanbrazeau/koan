@@ -93,8 +93,14 @@ export function NewRunForm() {
     if (!installationsReady) { setError('Please select an installation for each required runner type'); return }
     setError(null); setLoading(true)
     try {
-      const result = await api.startRun(trimmed, profile, selectedInstallations, workflow)
-      if (!result.ok) setError(result.message ?? 'Failed to start run')
+      const attachmentIds = attach.fileIds.length > 0 ? attach.fileIds : undefined
+      const result = await api.startRun(trimmed, profile, selectedInstallations, workflow, attachmentIds)
+      if (!result.ok) {
+        setError(result.message ?? 'Failed to start run')
+      } else {
+        // Clear chips so they don't re-display on the next run attempt.
+        attach.clearFiles()
+      }
     } catch { setError('Network error') }
     finally { setLoading(false) }
   }

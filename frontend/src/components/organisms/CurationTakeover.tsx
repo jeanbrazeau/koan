@@ -63,6 +63,9 @@ export function CurationTakeover() {
   const resetDraft = useStore(s => s.resetMemoryCurationDraft)
   const [selectedIndex, setSelectedIndex] = useState(0)
   const [submitting, setSubmitting] = useState(false)
+  // Per-proposal attachment IDs, keyed by proposal_id. Owned here rather than
+  // inside MemoryCurationPage so buildDecisions() can access the full map.
+  const [decisionFileIds, setDecisionFileIds] = useState<Record<string, string[]>>({})
 
   // Seed the draft when the batch mounts or changes.
   useEffect(() => {
@@ -77,11 +80,14 @@ export function CurationTakeover() {
   const buildDecisions = (): api.CurationDecision[] =>
     batch.proposals.map(p => {
       const d = draft[p.id] ?? {}
-      return {
+      const ids = decisionFileIds[p.id] ?? []
+      const entry: api.CurationDecision = {
         proposal_id: p.id,
         decision: d.decision ?? 'rejected',
         feedback: d.feedback ?? '',
       }
+      if (ids.length > 0) entry.attachments = ids
+      return entry
     })
 
   const handleSubmit = async () => {
@@ -113,6 +119,7 @@ export function CurationTakeover() {
       onReject={id => setDecision(id, 'rejected')}
       onChangeDecision={id => setDecision(id, undefined)}
       onFeedbackChange={(id, v) => setFeedback(id, v)}
+      onProposalFileIdsChange={(id, ids) => setDecisionFileIds(prev => ({ ...prev, [id]: ids }))}
       onSubmit={handleSubmit}
       onCancel={handleCancel}
     />
