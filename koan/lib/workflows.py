@@ -49,6 +49,12 @@ class PhaseBinding:
     # here (not in the phase module) so the same module can be reused across
     # workflows with different retrieval intent.
     retrieval_directive: str = ""
+    # Recommended next phase for auto-advance. None means the phase yields
+    # with multi-option suggestions for user direction; a phase name means
+    # the phase auto-advances via koan_set_phase. Treat as guidance: the
+    # orchestrator may call koan_yield instead when findings warrant.
+    # Same module can have different next_phase across workflows.
+    next_phase: str | None = None
 
 
 @dataclass(frozen=True)
@@ -119,14 +125,29 @@ _EXEC_REVIEW_PLAN_GUIDANCE = (
     "deviations that require replanning, transition to `plan-spec` instead.\n"
 )
 
+# M4: exec-review now owns both the plan artifact rewrite-or-loopback AND the
+# milestones.md UPDATE. milestone-spec UPDATE mode is retired; routine post-execution
+# bookkeeping happens here. milestone-spec is only entered for RE-DECOMPOSE.
 _EXEC_REVIEW_MILESTONES_GUIDANCE = (
     "## Exec-review context\n"
     "\n"
-    "Review what the executor accomplished for this milestone. Pay particular\n"
-    "attention to deviations from the plan. After your assessment, transition to\n"
-    "`milestone-spec` to update milestones.md: mark the completed milestone `[done]`,\n"
-    "add an Outcome section with what was actually accomplished, and adjust remaining\n"
-    "milestones based on any deviations.\n"
+    "Review what the executor accomplished for this milestone. After classifying\n"
+    "the outcome, apply two artifact updates in step 2:\n"
+    "\n"
+    "1. **Plan artifact rewrite-or-loop-back**: classify each deviation finding\n"
+    "   as internal vs new-files-needed; rewrite plan-milestone-N.md in place\n"
+    "   for internal findings; recommend loop-back to plan-spec for new-files.\n"
+    "\n"
+    "2. **milestones.md UPDATE**: mark the completed milestone `[done]`, append\n"
+    "   the four-subsection Outcome (Integration points / Patterns / Constraints\n"
+    "   / Deviations), advance the next `[pending]` milestone to `[in-progress]`,\n"
+    "   and adjust remaining milestone sketches if execution surfaced new\n"
+    "   constraints. Preserve all prior `[done]` Outcome sections intact.\n"
+    "\n"
+    "After both updates: yield. The orchestrator picks `plan-spec` to begin the\n"
+    "next milestone, `curation` if all milestones are done or skipped, or\n"
+    "`milestone-spec` for a manual RE-DECOMPOSE if the milestone graph itself\n"
+    "needs to change.\n"
 )
 
 
@@ -292,6 +313,7 @@ PLAN_WORKFLOW = Workflow(
                 " how this codebase is organized. Entries about subsystems the task"
                 " may touch, team conventions, and deployment invariants."
             ),
+            next_phase="plan-spec",
         ),
         "plan-spec": PhaseBinding(
             module=plan_spec,
@@ -302,6 +324,7 @@ PLAN_WORKFLOW = Workflow(
                 " how changes are made in this codebase. Entries about coding patterns,"
                 " module layout rules, and past lessons from similar changes."
             ),
+            next_phase="plan-review",
         ),
         "plan-review": PhaseBinding(
             module=plan_review,
@@ -314,14 +337,20 @@ PLAN_WORKFLOW = Workflow(
                 " how changes are made in this codebase. Entries about coding patterns,"
                 " module layout rules, and past lessons from similar changes."
             ),
+            # None: review outcome requires user direction -- loop back to plan-spec
+            # or proceed to execute; cannot auto-advance.
+            next_phase=None,
         ),
         "execute": PhaseBinding(
             module=execute_phase,
             description="Hand off the plan to an executor agent for implementation",
+            # brief.md listed first so it is the highest-priority context for the
+            # executor; plan.md is the implementation plan that follows from it.
             guidance=(
                 "## What to hand off\n"
                 "Call `koan_request_executor` with:\n"
-                "- **artifacts**: `[\"plan.md\"]` -- the implementation plan.\n"
+                "- **artifacts**: `[\"brief.md\", \"plan.md\"]` -- brief.md provides initiative\n"
+                "  context (scope, decisions, constraints); plan.md is the implementation plan.\n"
                 "- **instructions**: Key decisions from plan-review, user clarifications,\n"
                 "  or constraints. Do NOT repeat plan.md contents -- the executor reads\n"
                 "  it directly. Instructions are for context that isn't in the files.\n"
@@ -334,6 +363,7 @@ PLAN_WORKFLOW = Workflow(
                 " being modified. Executor-facing rules about testing policy, secret"
                 " handling, file placement, and other coding-time constraints."
             ),
+            next_phase="exec-review",
         ),
         "exec-review": PhaseBinding(
             module=exec_review_phase,
@@ -343,6 +373,9 @@ PLAN_WORKFLOW = Workflow(
                 "Past lessons about execution quality, common deviations, and"
                 " post-execution review patterns in this codebase."
             ),
+            # None: review outcome requires user direction -- proceed to curation
+            # or loop back to plan-spec for replanning.
+            next_phase=None,
         ),
         "curation": PhaseBinding(
             module=curation,
@@ -351,6 +384,7 @@ PLAN_WORKFLOW = Workflow(
             # Curation already calls koan_memory_status which surfaces the full
             # entry listing. Mechanical injection would be redundant and noisy.
             retrieval_directive="",
+            next_phase=None,  # terminal phase -- workflow ends here
         ),
     },
     initial_phase="intake",
@@ -376,6 +410,15 @@ _MILESTONES_PLAN_SPEC_GUIDANCE = (
     "- The current milestone is the one marked `[in-progress]`.\n"
     "- Write `plan-milestone-N.md` for that milestone (where N is the milestone number).\n"
     "- The plan should be scoped to just that milestone's work.\n"
+    "\n"
+    "## Cross-milestone learning\n"
+    "\n"
+    "When planning milestone N > 1: before reading codebase files, read the Outcome\n"
+    "sections of all completed milestones in milestones.md. These describe what was\n"
+    "actually built, including integration points, patterns, and constraints\n"
+    "established by prior milestones that this plan must respect. If the Outcome\n"
+    "sections reference specific files or interfaces you will extend, read those\n"
+    "files in the codebase directly -- the code is the source of truth, not the plan.\n"
 )
 
 _MILESTONES_PLAN_REVIEW_GUIDANCE = (
@@ -390,9 +433,10 @@ _MILESTONES_EXECUTE_GUIDANCE = (
     "## Milestone execute context\n"
     "\n"
     "Hand off the current milestone's plan to the executor:\n"
-    "- **artifacts**: `[\"plan-milestone-N.md\", \"milestones.md\"]` (where N is the\n"
-    "  current `[in-progress]` milestone number). Include `milestones.md` for broader\n"
-    "  initiative context.\n"
+    "- **artifacts**: `[\"brief.md\", \"plan-milestone-N.md\", \"milestones.md\"]` (where N is\n"
+    "  the current `[in-progress]` milestone number). brief.md is the frozen initiative\n"
+    "  context; plan-milestone-N.md is the milestone-specific plan; milestones.md gives\n"
+    "  the broader initiative context with prior milestone Outcomes.\n"
     "- **instructions**: Key findings from plan-review and any user clarifications.\n"
     "\n"
     "After execution, transition to `exec-review`.\n"
@@ -405,6 +449,7 @@ MILESTONES_WORKFLOW = Workflow(
         "intake": PhaseBinding(
             module=intake,
             description="Explore the codebase and align on requirements through Q&A",
+            next_phase="milestone-spec",
             guidance=(
                 "## Scope\n"
                 "This is a **milestones** workflow -- a broad initiative spanning\n"
@@ -441,11 +486,29 @@ MILESTONES_WORKFLOW = Workflow(
         ),
         "milestone-spec": PhaseBinding(
             module=milestone_spec,
-            description="Decompose the initiative into ordered milestones, or update after execution",
+            # M4: description updated to drop "update after execution" -- that is now exec-review's job.
+            description="Decompose the initiative into ordered milestones, or re-decompose after a major deviation",
+            guidance=(
+                "## Milestone-spec context\n"
+                "\n"
+                "If milestones.md does not exist, you are in CREATE mode: decompose the\n"
+                "initiative into milestones grounded in code structure.\n"
+                "\n"
+                "If milestones.md exists, you are in RE-DECOMPOSE mode: the user has\n"
+                "explicitly redirected here, typically after exec-review surfaced a major\n"
+                "deviation that requires changing the milestone graph itself. Revise\n"
+                "[pending] / [in-progress] milestone sketches; preserve all [done]\n"
+                "milestones and their Outcome sections intact. Routine post-execution\n"
+                "UPDATE work is owned by exec-review.\n"
+            ),
             retrieval_directive=(
                 "Architectural decisions and constraints relevant to milestone scope"
                 " and ordering. Entries about subsystem boundaries and delivery sequencing."
             ),
+            # CREATE-mode default: advance to plan-spec after decomposition.
+            # Orchestrator may yield to milestone-review instead when a fresh
+            # decomposition benefits from human review before planning begins.
+            next_phase="plan-spec",
         ),
         "milestone-review": PhaseBinding(
             module=milestone_review,
@@ -461,6 +524,9 @@ MILESTONES_WORKFLOW = Workflow(
                 "Past lessons about milestone decomposition, scope boundaries, and"
                 " sequencing decisions in similar initiatives."
             ),
+            # None: review outcome determines next step (milestone-spec for revision
+            # or plan-spec to proceed); user direction is required.
+            next_phase=None,
         ),
         "plan-spec": PhaseBinding(
             module=plan_spec,
@@ -471,6 +537,7 @@ MILESTONES_WORKFLOW = Workflow(
                 " how changes are made in this codebase. Entries about coding patterns,"
                 " module layout rules, and past lessons from similar changes."
             ),
+            next_phase="plan-review",
         ),
         "plan-review": PhaseBinding(
             module=plan_review,
@@ -481,6 +548,9 @@ MILESTONES_WORKFLOW = Workflow(
                 " how changes are made in this codebase. Entries about coding patterns,"
                 " module layout rules, and past lessons from similar changes."
             ),
+            # None: review outcome requires user direction -- loop back to plan-spec
+            # or proceed to execute.
+            next_phase=None,
         ),
         "execute": PhaseBinding(
             module=execute_phase,
@@ -491,6 +561,7 @@ MILESTONES_WORKFLOW = Workflow(
                 " being modified. Executor-facing rules about testing policy, secret"
                 " handling, file placement, and other coding-time constraints."
             ),
+            next_phase="exec-review",
         ),
         "exec-review": PhaseBinding(
             module=exec_review_phase,
@@ -500,12 +571,16 @@ MILESTONES_WORKFLOW = Workflow(
                 "Past lessons about execution quality, common deviations, and"
                 " post-execution review patterns in this codebase."
             ),
+            # None: review outcome requires user direction -- milestone-spec loop
+            # or plan-spec for replanning; cannot auto-advance.
+            next_phase=None,
         ),
         "curation": PhaseBinding(
             module=curation,
             description="Capture lessons, decisions, and context from the completed initiative",
             guidance=_POSTMORTEM_DIRECTIVE,
             retrieval_directive="",
+            next_phase=None,  # terminal phase -- workflow ends here
         ),
     },
     initial_phase="intake",
@@ -516,7 +591,9 @@ MILESTONES_WORKFLOW = Workflow(
         "plan-spec":        ["plan-review", "execute"],
         "plan-review":      ["plan-spec", "execute"],
         "execute":          ["exec-review", "milestone-spec"],
-        "exec-review":      ["milestone-spec", "plan-spec", "curation"],
+        # M4: reordered so the natural next-milestone path (plan-spec) comes first,
+        # then curation (all done), then milestone-spec (manual RE-DECOMPOSE override).
+        "exec-review":      ["plan-spec", "curation", "milestone-spec"],
         "curation":         [],
     },
 )

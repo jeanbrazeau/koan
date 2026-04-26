@@ -77,19 +77,30 @@ Three reinforcement mechanisms make this robust across model capability levels:
 
 #### Phase boundaries and koan_yield
 
-When a phase's final step completes, `koan_complete_step` returns a **non-blocking**
-response (`format_phase_complete`) that tells the orchestrator to summarize its
-work and call `koan_yield`. The orchestrator then generates a summary and calls
-`koan_yield` with structured suggestions.
+Each phase module's final step carries an `invoke_after` footer rendered by
+`terminal_invoke(ctx.next_phase, ctx.suggested_phases)` (in
+`koan/phases/format_step.py`). The footer tells the orchestrator to either:
 
-`koan_yield` is the **generic conversation primitive** — it blocks the
+- **Auto-advance**: call `koan_set_phase("next-phase")` directly when
+  `PhaseBinding.next_phase` is bound (no user input needed).
+- **Full yield**: call `koan_yield(suggestions=[...])` when `next_phase` is
+  `None`, giving the user direction over what phase runs next.
+
+The directive lands at the recency position (end of step text) via
+`format_step()`, so the LLM sees it with the same weight as the former
+`DEFAULT_INVOKE` footer. See `docs/guided-transitions.md` for per-workflow
+transition tables, override discipline, and the trampoline removal history.
+
+`koan_yield` is the **generic conversation primitive** -- it blocks the
 orchestrator process until the user sends a message, then returns that message
 as the tool result. The orchestrator can call `koan_yield` repeatedly for
 multi-turn conversation before committing a phase transition.
 
 ```
 koan_complete_step (last step)
-  -> returns: "Phase complete. Summarize and call koan_yield."
+  -- invoke_after: "call koan_set_phase("plan-review")" (auto-advance example)
+     | LLM summarizes and calls koan_set_phase("plan-review") directly
+  -- or invoke_after: "call koan_yield(...)" (full-yield example)
      | LLM writes summary, constructs suggestions
      | LLM calls koan_yield(suggestions=[{id, label, command}, ...])
 Tool blocks until user sends message
@@ -101,7 +112,7 @@ Tool returns:  user message text
      | LLM calls koan_set_phase("plan-spec")   -- or "done" to end the workflow
 ```
 
-`koan_yield` is phase-agnostic — it knows nothing about workflow structure.
+`koan_yield` is phase-agnostic -- it knows nothing about workflow structure.
 Suggestions are constructed by the orchestrator at each yield point; the UI
 renders them as clickable pills that pre-fill the chat input.
 

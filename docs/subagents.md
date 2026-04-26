@@ -171,10 +171,17 @@ koan_complete_step arrives via MCP:
   step == 0       -> step=1, prepend SYSTEM_PROMPT, return format_step(step_guidance(1))  [boot/phase transition]
   otherwise       -> validate_step_completion(step)                       [pre-condition check]
                   -> next_step = get_next_step(step)                      [pure: decides where to go]
-  next_step is None -> return format_phase_complete(phase, suggested, descriptions) [non-blocking; orchestrator then calls koan_yield]
+  next_step is None -> defensive fallback message [nudges orchestrator to follow invoke_after directive from prior step]
   next_step < prev  -> on_loop_back(prev, next_step)                     [side effects of loop]
   next_step != None -> step=next_step, return format_step(step_guidance(next_step)) + any buffered user messages  [advance]
 ```
+
+The actual phase-boundary directive lives in each phase's last-step
+`step_guidance()` return value, in the `invoke_after` field. The helper
+`terminal_invoke(ctx.next_phase, ctx.suggested_phases)` renders either an
+auto-advance directive (`koan_set_phase`) or a full-yield directive (`koan_yield`)
+depending on whether `PhaseBinding.next_phase` is bound. See
+`docs/guided-transitions.md` for the per-workflow transition tables.
 
 ### System prompt vs task content
 
