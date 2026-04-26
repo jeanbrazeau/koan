@@ -34,7 +34,6 @@ from evals.scorers import (
     _payload_artifacts,
     _payload_overall,
     _payload_questions,
-    _payload_summary,
     _payload_workflow,
     build_criterion_metric,
     build_cross_phase_metric,
@@ -44,9 +43,8 @@ from tests.evals.conftest import CASES, HYPERPARAMETERS, _get_harvest
 
 log = logging.getLogger("koan.evals.test_koan")
 
-SECTIONS = ("summary", "questions", "artifacts", "overall")
+SECTIONS = ("questions", "artifacts", "overall")
 _PAYLOAD_FNS = {
-    "summary":   _payload_summary,
     "questions": _payload_questions,
     "artifacts": _payload_artifacts,
     "overall":   _payload_overall,

@@ -25,10 +25,6 @@ def harvest_run(app_state: AppState) -> dict[str, Any]:
     """Extract per-phase data from app_state after the workflow completes."""
     store = app_state.projection_store
     run_dir = Path(app_state.run.run_dir) if app_state.run.run_dir else None
-    summaries = (
-        store.projection.run.phase_summaries
-        if store.projection.run else {}
-    )
     phase_order = _phase_order(store.events)
     tool_calls_by_phase = _bucket_tool_calls(store.events)
     artifacts_by_phase = _bucket_artifacts(store.events, run_dir)
@@ -37,7 +33,6 @@ def harvest_run(app_state: AppState) -> dict[str, Any]:
     tool_call_count = _compute_tool_call_count(tool_calls_by_phase)
     result = {
         "phase_order": phase_order,
-        "phase_summaries": dict(summaries),
         "tool_calls_by_phase": tool_calls_by_phase,
         "artifacts_by_phase": artifacts_by_phase,
         "duration_s": duration_s,
@@ -66,20 +61,17 @@ def _log_harvest(h: dict[str, Any]) -> None:
         sum(h.get("tool_call_count", {}).values()),
     )
     for phase in phase_order:
-        summary = h["phase_summaries"].get(phase, "")
         tools = h["tool_calls_by_phase"].get(phase, [])
         arts = h["artifacts_by_phase"].get(phase, {})
         created = arts.get("created", {})
         modified = arts.get("modified", {})
         questions = [t for t in tools if t["tool"] == "koan_ask_question"]
         log.info(
-            "phase=%s summary_chars=%d tool_calls=%d questions=%d "
+            "phase=%s tool_calls=%d questions=%d "
             "artifacts_created=%d artifacts_modified=%d",
-            phase, len(summary), len(tools), len(questions),
+            phase, len(tools), len(questions),
             len(created), len(modified),
         )
-        if summary:
-            log.info("phase=%s summary: %s", phase, _truncate(summary, 800))
         for t in tools:
             args = _truncate(json.dumps(t.get("args", {}), default=str), 300)
             log.info("phase=%s tool=%s args=%s", phase, t.get("tool"), args)

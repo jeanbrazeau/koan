@@ -11,7 +11,7 @@
 #   DURATION_METRIC              -- shared singleton
 #   TOKEN_COST_METRIC            -- shared singleton
 #   TOOL_CALL_COUNT_METRIC       -- shared singleton
-#   _payload_summary / _payload_questions / _payload_artifacts /
+#   _payload_questions / _payload_artifacts /
 #   _payload_overall / _payload_workflow -- payload selection helpers
 #
 # Rubric criteria (bullet strings) and cross-phase rubric bodies live in
@@ -239,13 +239,6 @@ TOOL_CALL_COUNT_METRIC = ToolCallCountMetric()
 
 # -- Payload selection ---------------------------------------------------------
 
-def _payload_summary(harvest: dict, phase: str) -> str:
-    summary = harvest.get("phase_summaries", {}).get(phase)
-    if not summary:
-        return "(no summary captured for this phase)"
-    return summary
-
-
 def _payload_questions(harvest: dict, phase: str) -> str:
     calls = harvest.get("tool_calls_by_phase", {}).get(phase, [])
     asks = [c for c in calls if c["tool"] == "koan_ask_question"]
@@ -276,7 +269,6 @@ def _payload_artifacts(harvest: dict, phase: str) -> str:
 
 def _payload_overall(harvest: dict, phase: str) -> str:
     return (
-        f"## summary\n{_payload_summary(harvest, phase)}\n\n"
         f"## questions\n{_payload_questions(harvest, phase)}\n\n"
         f"## artifacts\n{_payload_artifacts(harvest, phase)}\n\n"
         f"## all_tool_calls\n"
@@ -288,15 +280,16 @@ def _payload_overall(harvest: dict, phase: str) -> str:
 
 
 def _payload_workflow(harvest: dict) -> str:
-    summaries = harvest.get("phase_summaries", {})
     tools = harvest.get("tool_calls_by_phase", {})
-    order = harvest.get("phase_order") or sorted(summaries.keys())
-    tail = [p for p in summaries.keys() if p not in order]
+    # Fall back to artifacts_by_phase.keys() when phase_order is absent --
+    # a phase that produced artifacts is the best available ordering signal.
+    artifacts_by_phase = harvest.get("artifacts_by_phase", {})
+    order = harvest.get("phase_order") or sorted(artifacts_by_phase.keys())
+    tail = [p for p in artifacts_by_phase.keys() if p not in order]
     blocks = []
     for phase in list(order) + tail:
         blocks.append(
             f"# phase: {phase}\n\n"
-            f"## summary\n{summaries.get(phase, '')}\n\n"
             f"## tool_calls\n{json.dumps(tools.get(phase, []), indent=2)}\n\n"
             f"## artifacts\n{_payload_artifacts(harvest, phase)}"
         )

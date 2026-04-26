@@ -17,13 +17,6 @@ from __future__ import annotations
 # Key: (fixture_id, phase, section) -- phase uses canonical koan form (dash-sep).
 
 FIXTURE_RUBRICS: dict[tuple[str, str, str], list[str]] = {
-    ("koan-1", "intake", "summary"): [
-        "The task scope: a concise statement of what is being built or changed and which user-facing or internal surfaces are affected.",
-        "Findings relevant for planning: specific existing code patterns, constraints, or integration points the planner will need.",
-        "Decisions made during intake: explicit answers to ambiguities that surfaced in the questions phase.",
-        "Newly discovered context and rationale: facts about the codebase or the problem that were not obvious from the task description.",
-        "Architecture or component points: the files or modules the implementation will likely touch, named specifically.",
-    ],
     ("koan-1", "intake", "questions"): [
         "The orchestrator raised at least one question that flags a contradiction, inaccuracy, or mistake in the task description by cross-referencing the claim against the actual codebase.",
         "The orchestrator raised at least one question that probes the expected behavior of an API or system surface the task touches, when the task description does not specify.",
@@ -37,12 +30,6 @@ FIXTURE_RUBRICS: dict[tuple[str, str, str], list[str]] = {
         "Scout discipline: the orchestrator launched scouts only when the task genuinely required broad codebase investigation; for a trivial self-contained change, no scouts were spawned.",
         "Memory usage: the orchestrator called at least one of `koan_reflect` or `koan_search` during intake.",
         "Codebase grounding: the orchestrator opened the files the task description references and verified claims against what it read, rather than taking the task description at face value.",
-    ],
-    ("koan-1", "plan-spec", "summary"): [
-        "Approach: a clear description of the overall strategy for the implementation.",
-        "Key decisions: the architectural or design choices made, each with a one-line rationale.",
-        "Files to touch: specific file paths from the actual codebase that will be modified, not generic module names.",
-        "Ordering: the sequence in which changes will be applied, with any dependencies between steps called out.",
     ],
     ("koan-1", "plan-spec", "questions"): [
         "The orchestrator asked no questions during plan-spec, or asked only targeted clarifications that were strictly necessary to resolve a concrete implementation ambiguity not resolvable by reading the codebase.",
@@ -66,14 +53,6 @@ FIXTURE_RUBRICS: dict[tuple[str, str, str], list[str]] = {
 
 TASK_RUBRIC_ADDENDUMS: dict[tuple[str, str, str, str], list[str]] = {
     # add-logs / intake
-    ("koan-1", "add-logs", "intake", "summary"): [
-        "Identified the logging imbalance: the memory subsystem (`koan/memory/`) accounts for roughly half of all logging calls, while the phase modules (`koan/phases/*.py`) have zero logging, and the rest of the system (driver, subagent, web server) has sparse coverage.",
-        "Identified the existing logging infrastructure: centralized setup in `koan/logger.py` with `get_logger()`, dual handlers (console + file to `{run_dir}/koan.log`), plain-text format with timestamp/name/level/message.",
-        "Documented which subsystems need logging and why -- at minimum the phase modules, but ideally also the driver's phase-transition path, subagent lifecycle, and permission checks.",
-        "Made a decision about frontend scope (in or out) based on user clarification, and stated that decision explicitly.",
-        "Noted that the existing logging is unstructured (format strings, no JSON or structured fields) and stated whether that pattern should be continued or changed.",
-        "Identified that the goal is after-the-fact debuggability -- being able to reconstruct what happened during a run from log output alone, which is critical for LLM-driven workflows where failures are non-deterministic.",
-    ],
     ("koan-1", "add-logs", "intake", "questions"): [
         'Asked whether frontend logging is in scope or only backend (the project has both a Python backend and a TypeScript/React frontend -- the task says "application" without specifying which side).',
         "Identified the logging gap between the memory subsystem (heavily logged) and the rest of the system (sparsely logged), and asked whether the goal is to bring the rest up to the memory subsystem's level of coverage.",
@@ -88,14 +67,6 @@ TASK_RUBRIC_ADDENDUMS: dict[tuple[str, str, str, str], list[str]] = {
         "Did not prematurely narrow scope to a single subsystem before understanding the full picture.",
     ],
     # add-logs / plan-spec
-    ("koan-1", "add-logs", "plan-spec", "summary"): [
-        "Which subsystems will receive new logging and in what priority order -- at minimum the phase modules (`koan/phases/*.py`) should be listed, since they currently have zero logging despite being the core orchestration layer.",
-        'Specific file paths for each subsystem targeted (not "add logging to phases" but naming actual files like `koan/phases/intake.py`, `koan/phases/plan_spec.py`, `koan/driver.py`, etc.).',
-        "What events to log within each subsystem -- for phases: step transitions, guidance delivery, phase boundaries; for the driver: orchestrator spawn, phase commits, run completion; for subagents: spawn, registration, exit.",
-        "Whether to extend the existing `get_logger()` pattern from `koan/logger.py` to all new logging sites, maintaining the `koan.<scope>` namespace convention.",
-        "Log level assignment strategy: what constitutes debug (verbose tracing) vs info (operational milestones) vs warning (recoverable issues) for this codebase.",
-        "Frontend logging plan if frontend was determined to be in scope during intake -- what to log in the TypeScript/React layer and through what mechanism.",
-    ],
     ("koan-1", "add-logs", "plan-spec", "overall"): [
         "Cover multiple subsystems -- a plan that only adds logging to one module (e.g., only the driver, or only phases) fails to reflect the broad survey expected from intake.",
         "Preserve the existing logging infrastructure by extending `koan/logger.py` and `get_logger()`, not introducing a competing framework or reinventing the handler setup.",
@@ -103,13 +74,6 @@ TASK_RUBRIC_ADDENDUMS: dict[tuple[str, str, str, str], list[str]] = {
         "Stay scoped to adding logs without proposing broader refactors (e.g., restructuring phase modules, changing the driver loop, adding observability infrastructure) unless directly required for logging.",
     ],
     # scout-concurrency-settings-only / intake
-    ("koan-1", "scout-concurrency-settings-only", "intake", "summary"): [
-        "The specific frontend surfaces that currently expose scout concurrency: `frontend/src/components/organisms/NewRunForm.tsx` (the per-run field being removed) and the Settings UI (`SettingsOverlay.tsx` / `SettingsPage.tsx`) where it continues to live.",
-        "The settings store key that persists the default value (`defaultScoutConcurrency` on the Zustand settings slice) and the fact that the new-run flow should read from it after the per-run field is removed.",
-        "The chosen fate of the `scoutConcurrency` parameter in the `api.startRun` signature (dropped, kept-optional, or kept-required) and the reasoning.",
-        "The chosen fate of the `scout_concurrency` field in the `/api/start-run` request body, and how the backend (`koan/config.py`, start-run handler) continues to obtain the value.",
-        "Whether any UI copy around scout concurrency in Settings needs updating (e.g. to clarify that this is now the only place it's configured).",
-    ],
     ("koan-1", "scout-concurrency-settings-only", "intake", "questions"): [
         "Asked what the new-run flow should use as the scout-concurrency value once the input is gone (settings store default vs. a hardcoded constant vs. reading from the backend config).",
         "Asked whether the `scoutConcurrency` parameter in the `api.startRun` signature should be dropped, kept optional, or kept required for backward compatibility with callers.",
@@ -118,12 +82,6 @@ TASK_RUBRIC_ADDENDUMS: dict[tuple[str, str, str, str], list[str]] = {
         "Asked whether per-run overrides should remain possible via some other mechanism (e.g. a dev-only URL param, a CLI flag) or whether they are being fully eliminated.",
     ],
     # scout-concurrency-settings-only / plan-spec
-    ("koan-1", "scout-concurrency-settings-only", "plan-spec", "summary"): [
-        "The specific files that will change, named explicitly: at minimum `frontend/src/components/organisms/NewRunForm.tsx` (field + state removed) and `frontend/src/api/client.ts` (the `scoutConcurrency` parameter handling in `startRun`), plus any upstream caller in `App.tsx` that stops piping the value through.",
-        "The mechanism by which the new-run flow will obtain the scout concurrency value after the input is gone (e.g. reading `defaultScoutConcurrency` from the Zustand settings store inside `startRun`, or reading it in the component and passing it as before).",
-        "The chosen fate of the `/api/start-run` request body -- either it still carries `scout_concurrency` (derived server-side or sent from the settings store) or it stops carrying it (and the backend derives it from config).",
-        "Any tests or stories that need to be updated (e.g. a stub scout-concurrency field in NewRunForm stories).",
-    ],
     ("koan-1", "scout-concurrency-settings-only", "plan-spec", "overall"): [
         "Specify the removal of the scout-concurrency control from `frontend/src/components/organisms/NewRunForm.tsx` (the `nrf-field` block, the `scoutConcurrency` local state, and its use in the `handleStart` / `api.startRun` call site).",
         "Preserve the existing Settings UI (`SettingsOverlay.tsx` / `SettingsPage.tsx`) -- the plan should NOT also remove the control from Settings.",
@@ -131,13 +89,6 @@ TASK_RUBRIC_ADDENDUMS: dict[tuple[str, str, str, str], list[str]] = {
         "Leave the backend `koan/config.py` default (`scout_concurrency: int = 8`) intact as the fallback source of truth when no explicit override is provided.",
     ],
     # yolo-flag / intake
-    ("koan-1", "yolo-flag", "intake", "summary"): [
-        "The existing --yolo usage in the codex and gemini runner paths (`koan/web/app.py` `_YOLO_ARGS`), and the fact that this is unrelated to the user-interaction auto-answering behavior being asked for.",
-        'The chosen return-value semantics for `koan_yield` (recommended-progression hint) and `koan_ask_question` (recommended answer or "use your best judgement") in yolo mode.',
-        "The chosen UI-event treatment (skip / auto_answered flag / emit-and-resolve-immediately) and rationale.",
-        "The corrected framing of the original task description: --yolo is not a no-op globally; it currently has no effect on koan's own interaction gates.",
-        "The broader use case (eval automation / unsupervised runs) as the reason the auto-answering behavior is wanted.",
-    ],
     ("koan-1", "yolo-flag", "intake", "questions"): [
         'Flagged the inaccuracy in the task description\'s claim "--yolo is currently a no-op": --yolo is already used in the codex and gemini runner paths as an "accept everything" permission mode; the accurate framing is that --yolo currently has no effect on koan\'s own user-interaction gates (`koan_yield`, `koan_ask_question`).',
         "Asked what `koan_yield` should return in yolo mode (recommended behavior: the recommended-progression hint from the yield's suggestions list).",
@@ -149,12 +100,6 @@ TASK_RUBRIC_ADDENDUMS: dict[tuple[str, str, str, str], list[str]] = {
         "The orchestrator demonstrated understanding that --yolo is the switch that removes the human from the loop and is intended for automated / eval use, and that adding auto-answering behavior to --yolo is what makes unattended eval runs possible.",
     ],
     # yolo-flag / plan-spec
-    ("koan-1", "yolo-flag", "plan-spec", "summary"): [
-        "How `koan_yield` responds under yolo (recommended-progression hint from the yield's suggestions list).",
-        'How `koan_ask_question` responds under yolo (recommended answer if present, else free-form "use your best judgement").',
-        "Whether and how UI events are emitted for auto-answered interactions (skip / `auto_answered` flag / emit normally and resolve immediately).",
-        "The file or files touched to implement the auto-answering logic, named specifically.",
-    ],
     ("koan-1", "yolo-flag", "plan-spec", "overall"): [
         "Stay scoped to the interaction-gate auto-answering behavior without proposing broader refactors of the runner subsystem, the permission fence, or unrelated CLI surface.",
         'Not contradict the existing --yolo usage -- the plan does not break or regress the existing codex / gemini "accept everything" behavior controlled by `_YOLO_ARGS` in `koan/web/app.py`.',
@@ -176,8 +121,7 @@ This rubric evaluates cross-phase quality, not per-phase quality.
 Check the following:
 
 - Intake findings are reflected in the plan. The plan.md approach should be traceable to the questions and discoveries from intake -- the decisions made during intake should visibly shape the plan.
-- Phase summaries form a coherent chain. The intake summary's conclusions should be consistent with the plan-spec summary's approach. No contradiction between summaries.
-- At minimum, both intake and plan-spec phases were observed and produced summaries. A workflow that skipped either phase fails this rubric.
+- At minimum, both intake and plan-spec phases were observed. A workflow that skipped either phase fails this rubric.
 - No hallucinated pivots. The plan does not introduce a completely different approach than what intake suggested, without an explicit rationale.
 
 ## Task-specific additions (add-logs)
@@ -191,7 +135,7 @@ Beyond the generic cross-phase coherence checks, the plan for the "add logs" tas
 
 If intake decided a specific behavior for any of these and plan-spec contradicts it without rationale, that is a hallucinated pivot and fails this rubric.
 
-PASS if all four generic criteria are met across the observed phases AND the plan's approach is traceable to the intake decisions on the four add-logs-specific points above.
+PASS if all three generic criteria are met across the observed phases AND the plan's approach is traceable to the intake decisions on the four add-logs-specific points above.
 FAIL if any criterion is violated, or if fewer than two phases are present, or if plan-spec silently diverges from an intake decision.
 
 Respond with PASS or FAIL on the last line.""",
@@ -204,8 +148,7 @@ This rubric evaluates cross-phase quality, not per-phase quality.
 Check the following:
 
 - Intake findings are reflected in the plan. The plan.md approach should be traceable to the questions and discoveries from intake -- the decisions made during intake should visibly shape the plan.
-- Phase summaries form a coherent chain. The intake summary's conclusions should be consistent with the plan-spec summary's approach. No contradiction between summaries.
-- At minimum, both intake and plan-spec phases were observed and produced summaries. A workflow that skipped either phase fails this rubric.
+- At minimum, both intake and plan-spec phases were observed. A workflow that skipped either phase fails this rubric.
 - No hallucinated pivots. The plan does not introduce a completely different approach than what intake suggested, without an explicit rationale.
 
 ## Task-specific additions (scout-concurrency-settings-only)
@@ -218,7 +161,7 @@ Beyond the generic cross-phase coherence checks, the plan for this task should v
 
 If intake decided a specific behavior for any of these and plan-spec contradicts it without rationale, that is a hallucinated pivot and fails this rubric.
 
-PASS if all four generic criteria are met across the observed phases AND the plan's approach is traceable to the intake decisions on the three points above.
+PASS if all three generic criteria are met across the observed phases AND the plan's approach is traceable to the intake decisions on the three points above.
 FAIL if any criterion is violated, or if fewer than two phases are present, or if plan-spec silently diverges from an intake decision.
 
 Respond with PASS or FAIL on the last line.""",
@@ -231,8 +174,7 @@ This rubric evaluates cross-phase quality, not per-phase quality.
 Check the following:
 
 - Intake findings are reflected in the plan. The plan.md approach should be traceable to the questions and discoveries from intake -- the decisions made during intake should visibly shape the plan.
-- Phase summaries form a coherent chain. The intake summary's conclusions should be consistent with the plan-spec summary's approach. No contradiction between summaries.
-- At minimum, both intake and plan-spec phases were observed and produced summaries. A workflow that skipped either phase fails this rubric.
+- At minimum, both intake and plan-spec phases were observed. A workflow that skipped either phase fails this rubric.
 - No hallucinated pivots. The plan does not introduce a completely different approach than what intake suggested, without an explicit rationale.
 
 ## Task-specific additions (yolo-flag)
@@ -245,7 +187,7 @@ Beyond the generic cross-phase coherence checks, the plan for the --yolo task sh
 
 If intake decided a specific behavior for any of these and plan-spec contradicts it without rationale, that is a hallucinated pivot and fails this rubric.
 
-PASS if all four generic criteria are met across the observed phases AND the plan's approach is traceable to the intake decisions on the three yolo-specific points above.
+PASS if all three generic criteria are met across the observed phases AND the plan's approach is traceable to the intake decisions on the three yolo-specific points above.
 FAIL if any criterion is violated, or if fewer than two phases are present, or if plan-spec silently diverges from an intake decision.
 
 Respond with PASS or FAIL on the last line.""",

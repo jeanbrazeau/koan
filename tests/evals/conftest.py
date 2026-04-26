@@ -62,10 +62,9 @@ def _get_harvest(case: Case, cache: dict) -> dict:
             log.info("[%s] === HARVEST EXCEPTION ===", cid, exc_info=True)
             raise
         log.info(
-            "[%s] === HARVEST DONE === phases=%s summaries=%d",
+            "[%s] === HARVEST DONE === phases=%s",
             cid,
             h.get("phase_order", []),
-            len(h.get("phase_summaries", {})),
         )
         cache[key] = h
         _dump_harvest(case, h)

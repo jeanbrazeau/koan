@@ -154,10 +154,9 @@ async def run_koan(case: Case, timeout: int = DEFAULT_TIMEOUT) -> dict:
         async with httpx.AsyncClient(timeout=30.0) as client:
             harvest = await _fetch_harvest(client, base_url)
         log.info(
-            "[%s] harvest: phases=%s summaries=%d duration=%.1fs",
+            "[%s] harvest: phases=%s duration=%.1fs",
             case_id,
             harvest.get("phase_order", []),
-            len(harvest.get("phase_summaries", {})),
             harvest.get("duration_s", 0.0),
         )
         return harvest
