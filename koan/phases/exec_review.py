@@ -1,14 +1,16 @@
 # Exec-review phase -- 2-step workflow.
 #
 #   Step 1 (Verify)  -- read plan and run verification commands; no writes
-#   Step 2 (Assess)  -- classify outcome and report findings via chat
+#   Step 2 (Assess)  -- classify outcome; apply rewrite-or-loopback against
+#                       the plan artifact; apply milestones.md UPDATE when
+#                       the workflow guidance instructs it (milestones only)
 #
-# Advisory only: findings are reported in chat, not written to a file.
 # Scope: "general" -- reusable by any workflow.
 
 from __future__ import annotations
 
 from . import PhaseContext, StepGuidance
+from .format_step import terminal_invoke
 
 ROLE = "orchestrator"
 SCOPE = "general"        # reusable by any workflow
@@ -28,7 +30,15 @@ PHASE_ROLE_CONTEXT = (
     "\n"
     "## Your role\n"
     "\n"
-    "You are a reviewer. You do NOT write code or modify the implementation.\n"
+    # M4: exec-review gains two artifact-write responsibilities in addition to
+    # outcome classification; the "do NOT modify" rule is narrowed to code/implementation.
+    "You are a reviewer. You verify the executor's work, classify the outcome,\n"
+    "and apply rewrite-or-loop-back semantics to the plan artifact. In the\n"
+    "milestones workflow, you also apply the milestones.md UPDATE: mark the\n"
+    "completed milestone [done], append the four-subsection Outcome, advance the\n"
+    "next [pending] milestone, and adjust remaining milestones based on deviations.\n"
+    "You do NOT write code or modify the executor's implementation; you only\n"
+    "modify the plan artifact and milestones.md (when applicable).\n"
     "\n"
     "## Evaluation dimensions\n"
     "\n"
@@ -41,8 +51,10 @@ PHASE_ROLE_CONTEXT = (
     "\n"
     "- MUST read the executor's deviation report from the conversation context.\n"
     "- MUST run at least one verification command (build, tests, type check) if applicable.\n"
-    "- MUST NOT write code or modify files.\n"
+    "- MUST NOT write code or modify the executor's implementation.\n"
     "- MUST classify the outcome (Clean / Minor deviations / Significant deviations / Incomplete).\n"
+    "- MUST classify each plan deviation as internal or new-files-needed (rewrite-or-loop-back).\n"
+    "- MUST apply milestones.md UPDATE when the workflow guidance instructs it.\n"
 )
 
 
@@ -56,7 +68,24 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             lines.extend(["## Workflow guidance", "", ctx.phase_instructions, ""])
         if ctx.memory_injection:
             lines.extend([ctx.memory_injection, ""])
+        # brief.md gives exec-review the original scope/decisions; the executor may
+        # have diverged from the milestone plan in ways that still satisfy the initiative.
         lines.extend([
+            "## Read initiative context",
+            "",
+            "Read `brief.md` from the run directory before verifying executor output.",
+            "It contains the frozen initiative scope, decisions, and constraints from",
+            "intake. Use it to assess whether the implementation respects every stated",
+            "decision and constraint, not just the milestone-specific plan.",
+            "",
+            # M4: milestones.md read directive inserted here so exec-review has the
+            # current milestone state in context before writing the UPDATE in step 2.
+            "## Read milestone state (milestones workflow only)",
+            "",
+            "If the workflow guidance above instructs you to update milestones.md, read",
+            "`milestones.md` from the run directory now. You will need its current state",
+            "to apply the UPDATE in step 2.",
+            "",
             "Verify what the executor accomplished. Do NOT make any code changes in this step.",
             "",
             "## What to verify",
@@ -100,10 +129,68 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "4. **Incomplete**: anything the plan specified that was not done",
                 "5. **Verification results**: build/test outcomes",
                 "",
-                "The workflow guidance above specifies what to do after this assessment.",
+                # M4: rewrite-or-loopback block for the plan artifact; clean executions
+                # skip this step entirely since there are no deviation findings to classify.
+                "## Rewrite-or-loop-back of the plan artifact",
                 "",
-                "Call `koan_complete_step` when your assessment is delivered in chat.",
+                "After classifying the outcome (Clean / Minor / Significant / Incomplete):",
+                "",
+                "For each deviation finding, classify it as one of:",
+                "",
+                "- **Internal**: the producer (plan-spec) could have caught this from the",
+                "  files it already loaded (the plan artifact + `brief.md`). The plan was",
+                "  flawed in a way visible from its own scope.",
+                "- **New-files-needed**: catching this would have required new analysis the",
+                "  plan didn't do.",
+                "",
+                "## What to do with the classification",
+                "",
+                "- **All findings internal -> rewrite in place**. Issue",
+                '  `koan_artifact_write(filename="<plan_artifact>", content=<corrected_plan>)`',
+                "  for the plan artifact. Use the workflow's plan filename (plan.md or",
+                "  plan-milestone-N.md). The corrected plan reflects what the executor",
+                "  should have done; downstream phases (next milestone) read it for context.",
+                "- **Any finding new-files-needed -> recommend loop-back to plan-spec**.",
+                "  Yield with `plan-spec` recommended for re-planning.",
+                "- **Clean execution / no deviations**: skip the rewrite-or-loop-back step.",
+                "  The plan artifact stands as-is.",
+                "",
+                # M4: milestones.md UPDATE block; plan-workflow exec-review skips this
+                # entirely (no milestones.md exists in plan workflow runs).
+                "## Apply milestones.md UPDATE (milestones workflow only)",
+                "",
+                "If the workflow guidance above instructs you to update `milestones.md`,",
+                "apply the UPDATE in this step via `koan_artifact_write`:",
+                "",
+                "1. Mark the completed milestone `[done]`.",
+                "2. Append an `### Outcome` section with the four-subsection structure:",
+                "   - **Integration points created** -- new interfaces, extension seams,",
+                "     modules subsequent milestones can depend on, named with file paths",
+                "     and identifiers.",
+                "   - **Patterns established** -- naming, file placement, error handling,",
+                "     and test conventions this milestone committed to.",
+                "   - **Constraints discovered** -- things harder/different than the sketch",
+                "     anticipated; explicit facts that change what future milestones",
+                "     can assume.",
+                "   - **Deviations from plan** -- what the executor did differently and why,",
+                "     sourced from your own deviation classification above.",
+                "3. Advance the next `[pending]` milestone to `[in-progress]`.",
+                "4. Adjust remaining milestone sketches if the deviations require it.",
+                "5. Preserve all prior `[done]` Outcome sections intact.",
+                "",
+                'Issue `koan_artifact_write(filename="milestones.md", content=<updated>,',
+                'status="In-Progress")` for the UPDATE. (Status remains In-Progress until',
+                "the last milestone -- the orchestrator may set status=\"Final\" via a",
+                "manual override after curation if desired.)",
+                "",
+                "For the plan workflow, `milestones.md` does not exist -- skip this UPDATE",
+                "block entirely.",
+                "",
+                "The workflow guidance above specifies what to do after this assessment.",
             ],
+            # terminal_invoke replaces the trailing koan_complete_step instruction.
+            # next_phase=None: exec-review outcome requires user direction.
+            invoke_after=terminal_invoke(ctx.next_phase, ctx.suggested_phases),
         )
 
     return StepGuidance(title=f"Step {step}", instructions=[f"Execute step {step}."])

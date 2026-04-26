@@ -1,14 +1,17 @@
 # Plan-review phase -- 2-step workflow.
 #
 #   Step 1 (Read)      -- review intake context and plan.md; no writes
-#   Step 2 (Evaluate)  -- evaluate the plan and report findings via chat
+#   Step 2 (Evaluate)  -- classify findings; rewrite internal ones in place
+#                         or recommend loop-back for new-files findings
 #
-# Advisory only: findings are reported in chat, not written to a file.
+# Rewrite-or-loop-back: internal findings are fixed via koan_artifact_write;
+# new-files findings surface via koan_yield with plan-spec recommended.
 # Scope: "general" -- reusable by any workflow.
 
 from __future__ import annotations
 
 from . import PhaseContext, StepGuidance
+from .format_step import terminal_invoke
 
 ROLE = "orchestrator"
 SCOPE = "general"        # reusable by any workflow
@@ -37,8 +40,14 @@ PHASE_ROLE_CONTEXT = (
     "Do NOT flag trivial issues the executor can resolve independently (minor typos,\n"
     "missing imports, syntax in snippets). Focus on issues that change the approach.\n"
     "\n"
-    "You are advisory -- you do NOT modify plan.md directly. You report findings\n"
-    "organized by severity.\n"
+    # M4: review phases apply rewrite-or-loopback semantics; prompt discipline
+    # keeps each review phase rewriting only its own producer's artifact.
+    "You apply rewrite-or-loop-back semantics. For each finding, you judge whether\n"
+    "the producer (plan-spec) could have caught it from the files it already\n"
+    "loaded; if yes, you fix the issue in place by issuing `koan_artifact_write`\n"
+    "against the plan artifact. If the finding requires new files the producer\n"
+    "didn't load, you recommend loop-back to plan-spec via the yield. See\n"
+    "`docs/phase-trust.md` for the full doctrine.\n"
     "\n"
     "## Evaluation dimensions\n"
     "\n"
@@ -54,7 +63,9 @@ PHASE_ROLE_CONTEXT = (
     "\n"
     "- MUST read the plan artifact before evaluating.\n"
     "- MUST read the codebase files the plan references. Verify every claim.\n"
-    "- MUST NOT modify the plan artifact.\n"
+    "- MUST classify each finding as internal or new-files-needed.\n"
+    "- MUST issue koan_artifact_write for internal findings (rewrite in place).\n"
+    "- MUST recommend loop-back via koan_yield for new-files findings.\n"
     "- MUST NOT flag issues the executor can trivially resolve.\n"
 )
 
@@ -69,7 +80,16 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             lines.extend(["## Workflow guidance", "", ctx.phase_instructions, ""])
         if ctx.memory_injection:
             lines.extend([ctx.memory_injection, ""])
+        # brief.md gives the reviewer the authoritative requirement set, independent
+        # of conversation history which may be long or noisy by this phase.
         lines.extend([
+            "## Read initiative context",
+            "",
+            "Read `brief.md` from the run directory before verifying the plan's claims.",
+            "It contains the frozen initiative scope, decisions, and constraints from",
+            "intake. The plan must satisfy every requirement listed there; verify",
+            "completeness against brief.md, not just the conversation history.",
+            "",
             "Read and comprehend before evaluating. Do NOT write any files in this step.",
             "",
             "## Consult project memory",
@@ -154,6 +174,42 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "",
                 "Do NOT flag trivial executor-resolvable issues as major findings.",
                 "",
+                # M4: rewrite-or-loopback block; runs after severity classification,
+                # before the yield. Internal findings are fixed in place; new-files
+                # findings surface via the yield so the next plan-spec loads them.
+                "## Rewrite-or-loop-back classification",
+                "",
+                "For each finding, classify it as one of:",
+                "",
+                "- **Internal**: the producer (plan-spec) could have caught this given the",
+                "  files it already loaded (the plan artifact body + `brief.md`). Examples:",
+                "  a step ordering bug, an inconsistency between two parts of the plan, a",
+                "  decision that contradicts brief.md.",
+                "- **New-files-needed**: catching this finding would have required the",
+                "  producer to load files it did not load. Examples: a function-signature",
+                "  claim against a file the plan does not reference; a constraint from",
+                "  a sibling module the plan didn't open.",
+                "",
+                "## What to do with the classification",
+                "",
+                "- **All findings internal -> rewrite in place**. Issue",
+                '  `koan_artifact_write(filename="<plan_artifact>", content=<corrected_plan>)`',
+                "  to replace the plan artifact in place. The corrected plan must address",
+                "  every internal finding. Then yield with `execute` recommended (proceed",
+                "  to executor handoff).",
+                "- **Any finding new-files-needed -> recommend loop-back**. Do NOT call",
+                "  `koan_artifact_write`. Yield with `plan-spec` recommended in the",
+                "  `koan_yield` suggestions so the producer phase re-runs with the new",
+                "  files in scope. Surface the new-files findings prominently so the",
+                "  next plan-spec session knows what to load.",
+                "- **Mixed**: rewrite the internal findings in place AND recommend",
+                "  loop-back via the yield. The producer phase, when it re-runs, will see",
+                "  both the partially-rewritten plan and the new-files findings.",
+                "",
+                "The plan artifact filename comes from the workflow guidance: `plan.md`",
+                "for plan workflow; `plan-milestone-N.md` for milestones workflow (read",
+                "the workflow guidance above to determine N).",
+                "",
                 "## Using koan_ask_question",
                 "",
                 "If the review surfaces ambiguities requiring user input (requirements unclear,"
@@ -161,9 +217,11 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "Only ask questions that affect the evaluation outcome.",
                 "",
                 "## After reporting",
-                "",
-                "Call `koan_complete_step` when your evaluation report is delivered in chat.",
             ],
+            # terminal_invoke replaces the trailing koan_complete_step instruction.
+            # next_phase=None: review findings determine whether to loop back to
+            # plan-spec or proceed; user direction is required.
+            invoke_after=terminal_invoke(ctx.next_phase, ctx.suggested_phases),
         )
 
     return StepGuidance(title=f"Step {step}", instructions=[f"Execute step {step}."])
