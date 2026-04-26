@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from . import PhaseContext, StepGuidance
+from .format_step import terminal_invoke
 
 ROLE = "orchestrator"
 SCOPE = "general"        # reusable by any workflow
@@ -33,10 +34,10 @@ PHASE_ROLE_CONTEXT = (
     "\n"
     "## Output\n"
     "\n"
-    "One artifact: **the implementation plan**, produced via the MCP tool `koan_artifact_propose`."
+    "One artifact: **the implementation plan**, produced via the MCP tool `koan_artifact_write`."
     " The filename is specified by the workflow guidance (default: `plan.md`)."
     " Do NOT write files directly; the tool writes to the run directory"
-    " and blocks until the user has reviewed it.\n"
+    " (non-blocking) and the artifact is immediately visible in the sidebar.\n"
     "\n"
     "## Plan structure\n"
     "\n"
@@ -54,7 +55,7 @@ PHASE_ROLE_CONTEXT = (
     "  You read to understand structure, not to re-verify intake's findings.\n"
     "- MUST NOT write code -- write instructions for an executor that will write code.\n"
     "- MUST NOT invent file paths or function names you have not seen in the codebase.\n"
-    "- MUST use koan_artifact_propose to produce the plan artifact. Built-in Write and Edit\n"
+    "- MUST use koan_artifact_write to produce the plan artifact. Built-in Write and Edit\n"
     "  tools are not available in this phase.\n"
 )
 
@@ -69,7 +70,16 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             lines.extend(["## Workflow guidance", "", ctx.phase_instructions, ""])
         if ctx.memory_injection:
             lines.extend([ctx.memory_injection, ""])
+        # brief.md read precedes memory consultation so plan decisions are grounded
+        # in the frozen initiative scope before any memory lookups shape the approach.
         lines.extend([
+            "## Read initiative context",
+            "",
+            "Read `brief.md` from the run directory before consulting memory or reading",
+            "codebase files. It contains the frozen initiative scope, decisions, and",
+            "constraints from intake. The plan you write must respect every decision and",
+            "constraint listed there.",
+            "",
             "## Consult project memory",
             "",
             "Before reading any codebase file, check what the project already",
@@ -123,15 +133,16 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
         return StepGuidance(
             title=STEP_NAMES[2],
             instructions=[
-                "Compose the full plan and submit it via `koan_artifact_propose`.",
+                "Compose the full plan and submit it via `koan_artifact_write`.",
                 "",
                 "```",
-                "koan_artifact_propose(",
+                "koan_artifact_write(",
                 '    filename="...",  # use the filename from workflow guidance (step 1); default: plan.md',
                 '    content="""\\',
                 "# Plan title",
                 "...",
                 '""",',
+                '    status="Final",',
                 ")",
                 "```",
                 "",
@@ -166,18 +177,17 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "",
                 "## About the tool",
                 "",
-                "`koan_artifact_propose` writes the plan artifact to the run directory"
-                " immediately and blocks until the user has reviewed it. The"
-                " tool returns the review outcome as a text string. If the user"
-                " approves, proceed normally. If the user requests revisions,"
-                " revise and call `koan_artifact_propose` again with the same"
-                " filename (full rewrite).",
+                "`koan_artifact_write` writes the plan artifact to the run directory"
+                " immediately (non-blocking). The artifact is visible in the sidebar."
+                " Full-rewrite semantics: call it with the same filename to update."
+                " `status=\"Final\"` marks a plan-spec artifact as complete.",
                 "",
                 "Do NOT use Write or Edit -- those tools are not available in"
                 " this phase.",
-                "",
-                "Call `koan_complete_step` when the review is accepted.",
             ],
+            # terminal_invoke replaces the trailing koan_complete_step instruction.
+            # auto-advance target (plan-review) is bound per workflow at PhaseBinding.
+            invoke_after=terminal_invoke(ctx.next_phase, ctx.suggested_phases),
         )
 
     return StepGuidance(title=f"Step {step}", instructions=[f"Execute step {step}."])

@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from . import PhaseContext, StepGuidance
+from .format_step import terminal_invoke
 
 ROLE = "intake"
 SCOPE = "general"        # reusable by any workflow
@@ -48,6 +49,12 @@ PHASE_ROLE_CONTEXT = (
     "  belongs to downstream phases.\n"
     "- MUST capture only what was explicitly said. If unclear, mark it as\n"
     "  unresolved.\n"
+    "\n"
+    "## Your output\n"
+    "\n"
+    "Your final output is `brief.md` in the run directory -- a frozen, structured\n"
+    "handoff artifact every downstream phase reads as authoritative initiative\n"
+    "context.\n"
     "\n"
     "## Thinking style\n"
     "\n"
@@ -278,19 +285,75 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
         return StepGuidance(
             title=STEP_NAMES[3],
             instructions=[
-                "Synthesize a concise summary covering:",
+                "Synthesize the seven-section initiative brief and write it to `brief.md`",
+                "in the run directory.",
                 "",
-                "- **Task scope**: What is being built or changed, in the user's framing.",
-                "- **Key codebase findings**: Entry points, current behavior, integration points.",
-                "- **Decisions made**: Every question you asked and the user's answer.",
-                "- **Constraints**: Technical, timeline, or compatibility boundaries.",
-                "- **Open items**: Anything still unresolved (if any).",
+                "## Synthesis target -- the seven sections",
                 "",
-                "Describe what IS, not what SHOULD be done. No recommendations, no",
-                "deliverables, no implementation suggestions.",
+                "1. **Initiative** -- one paragraph restating the user's task in your refined wording.",
+                "2. **Scope** -- two subsections: in-scope and out-of-scope bullets. Out-of-scope",
+                "   matters more because it prevents downstream scope growth.",
+                "3. **Affected subsystems** -- concrete file paths and modules with one-line",
+                "   descriptions, grounded in real code structure (verified during step 2).",
+                "4. **Decisions** -- numbered list. For each decision, state the choice made and",
+                "   the rejected alternatives with rationale. Each decision is a constraint",
+                "   downstream plans must respect.",
+                "5. **Constraints** -- cross-cutting (technical, architectural, operational)",
+                "   boundaries the executor must respect.",
+                "6. **Assumptions** -- explicit list of things you assumed without verifying,",
+                "   so they are falsifiable if execution reveals them wrong.",
+                "7. **Open questions** -- caution zones for downstream phases (questions you",
+                "   surfaced but did not resolve).",
                 "",
-                "Call `koan_complete_step` to finish intake.",
+                "If a section has no content, write `(none)` under its heading. Do NOT omit",
+                "sections -- downstream phases parse the structure.",
+                "",
+                "## Write the artifact",
+                "",
+                "Call:",
+                "",
+                "```",
+                "koan_artifact_write(",
+                '    filename="brief.md",',
+                '    content="""# <Initiative title>',
+                "",
+                "## Initiative",
+                "...",
+                "",
+                "## Scope",
+                "### In scope",
+                "...",
+                "### Out of scope",
+                "...",
+                "",
+                "## Affected subsystems",
+                "...",
+                "",
+                "## Decisions",
+                "...",
+                "",
+                "## Constraints",
+                "...",
+                "",
+                "## Assumptions",
+                "...",
+                "",
+                "## Open questions",
+                "...",
+                '""",',
+                '    status="Final",',
+                ")",
+                "```",
+                "",
+                '`status="Final"` marks the artifact frozen at intake exit. brief.md is the',
+                "authoritative initiative context for every downstream phase; it is NOT",
+                "rewritten. If execution reveals an assumption is wrong, that is recorded in",
+                "the relevant milestone's Outcome (milestones workflow) or as a chat note",
+                "(plan workflow), not by silently rewriting brief.md.",
             ],
+            # terminal_invoke replaces the trailing koan_complete_step instruction;
+            # auto-advance target is bound per workflow at the PhaseBinding level.
+            invoke_after=terminal_invoke(ctx.next_phase, ctx.suggested_phases),
         )
 
     return StepGuidance(title=f"Step {step}", instructions=[f"Execute step {step}."])

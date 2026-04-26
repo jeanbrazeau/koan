@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 from . import PhaseContext, StepGuidance
+from .format_step import terminal_invoke
 
 ROLE = "orchestrator"
 SCOPE = "general"
@@ -344,7 +345,18 @@ def _step_1_inventory(ctx: PhaseContext) -> StepGuidance:
         else "(no user task -- see your directive for where the source lives)"
     )
 
+    # brief.md read is conditional because curation runs both postmortem (inside a
+    # workflow run that has brief.md) and standalone (no brief.md present). The
+    # "if present" phrasing makes a missing brief.md a graceful no-op.
     instructions = _header(1) + [
+        "## Read initiative context (if present)",
+        "",
+        "If `brief.md` exists in the run directory, read it before inventorying memory.",
+        "It contains the frozen initiative scope, decisions, and constraints from",
+        "intake. Postmortem curation runs benefit from this context when classifying",
+        "transcript turns; standalone curation runs typically run outside an",
+        "initiative and brief.md will not exist -- the read is a no-op then.",
+        "",
         "## Step 1: Inventory",
         "",
         "Identify the candidates that step 2 will write. By the end of this",
@@ -708,11 +720,15 @@ def _step_2_memorize(ctx: PhaseContext) -> StepGuidance:
         "2. Report the final counts to the user inline:",
         "   `{added: N, updated: N, deprecated: N, noop: N}`",
         "   plus a one-line note on anything deferred for a future run.",
-        "",
-        "3. Call `koan_complete_step`. The curation phase ends here",
-        "   and the workflow is complete.",
     ]
-    return StepGuidance(title=STEP_NAMES[2], instructions=instructions)
+    # terminal_invoke replaces the trailing koan_complete_step wrap-up instruction.
+    # Curation is always a terminal phase (next_phase=None); the invoke_after
+    # renders the full-yield path so the orchestrator can signal workflow end.
+    return StepGuidance(
+        title=STEP_NAMES[2],
+        instructions=instructions,
+        invoke_after=terminal_invoke(ctx.next_phase, ctx.suggested_phases),
+    )
 
 
 # -- Step dispatch -------------------------------------------------------------

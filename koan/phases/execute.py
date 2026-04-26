@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 from . import PhaseContext, StepGuidance
+from .format_step import terminal_invoke
 
 ROLE = "orchestrator"
 SCOPE = "general"        # reusable by any workflow
@@ -71,8 +72,8 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "",
             "Review the artifacts the executor will need and decide:",
             "- **artifacts**: Which files in the run directory should the executor read?",
-            "  Include the plan (plan.md) and any other files with context not captured",
-            "  in the plan itself.",
+            "  The workflow guidance above specifies the plan artifact filename and any",
+            "  additional context files to include.",
             "- **instructions**: What context from this session is not in the artifact files?",
             "  Include: key findings from plan-review, user clarifications received,",
             "  constraints emphasized by the user. Keep it concise.",
@@ -103,9 +104,10 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "Report the result to the user:",
                 "- If succeeded: summarize what was implemented.",
                 "- If failed: relay the failure and suggest next steps (re-run, plan revision, etc.).",
-                "",
-                "Then call `koan_complete_step` to trigger the phase boundary.",
             ],
+            # terminal_invoke replaces the trailing koan_complete_step instruction.
+            # auto-advance target (exec-review) is bound per workflow at PhaseBinding.
+            invoke_after=terminal_invoke(ctx.next_phase, ctx.suggested_phases),
         )
 
     return StepGuidance(title=f"Step {step}", instructions=[f"Execute step {step}."])
