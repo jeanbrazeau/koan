@@ -48,7 +48,16 @@ export interface AttachmentEntry {
 
 // Placing attachments on BaseToolEntry means all tool-entry variants inherit
 // it automatically; the fold sets it only when the event carries a manifest.
-interface BaseToolEntry { callId: string; inFlight: boolean; attachments?: AttachmentEntry[] | null }
+// toolInput is the server-side aggregate of all received deltas (M1 fold sets
+// it on every tool_input_delta). toolInputDelta is the last-arrived chunk;
+// exposed for future highlight-the-just-changed use but not read by M2 consumers.
+interface BaseToolEntry {
+  callId: string
+  inFlight: boolean
+  attachments?: AttachmentEntry[] | null
+  toolInput?: Record<string, unknown> | null
+  toolInputDelta?: Record<string, unknown> | string | null
+}
 export interface ToolWriteEntry   extends BaseToolEntry { type: 'tool_write';   file: string }
 export interface ToolEditEntry    extends BaseToolEntry { type: 'tool_edit';    file: string }
 export interface ToolBashEntry    extends BaseToolEntry { type: 'tool_bash';    command: string }

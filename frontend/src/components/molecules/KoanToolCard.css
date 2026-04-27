@@ -106,3 +106,45 @@
   0%, 100% { opacity: 0.3; }
   50%      { opacity: 1; }
 }
+
+/* ---- ArtifactWriteCard ---- */
+/* layout values are local; flag for promotion if reused */
+.ktc--artifact-write .ktc-artifact-preview {
+  margin-top: 8px;
+  padding: 10px 12px;
+  background: var(--bg-thinking);
+  border-radius: var(--radius-md);
+  font-family: var(--font-mono);
+  font-size: var(--type-tool-path);
+  color: var(--text-body);
+  max-height: 320px;
+  overflow: auto;
+}
+
+/* ---- YieldCard ---- */
+.ktc--yield .ktc-suggestions {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  list-style: disc;
+}
+.ktc--yield .ktc-suggestion {
+  font-size: var(--type-body);
+  color: var(--text-body);
+}
+
+/* ---- AskQuestionCard ---- */
+.ktc--ask .ktc-questions {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  list-style: decimal;
+}
+.ktc--ask .ktc-question-item {
+  font-size: var(--type-body);
+  color: var(--text-body);
+}
+
+/* ---- FallbackCard ---- */
+/* Muted label distinguishes fallback from first-class renderers */
+.ktc--fallback .ktc-label {
+  color: var(--text-muted);
+}

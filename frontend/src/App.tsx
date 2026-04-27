@@ -1,19 +1,21 @@
 /*
- * EVENT TYPE → MOLECULE MAPPING (final, no gaps)
- * ─────────────────────────────────────────────────
- * thinking             → ThinkingBlock + Md
- * text                 → ProseCard + Md
- * tool_read/write/edit → ToolCallRow
- * tool_bash/grep/ls    → ToolCallRow
- * tool_generic         → ToolCallRow (koan_* orchestration tools suppressed)
- * tool_koan            → KoanToolCard (dispatches by toolName)
- * step                 → StepHeader
- * debug_step_guidance  → StepGuidancePill + Md
- * user_message         → UserBubble + Md
- * phase_boundary       → PhaseMarker
- * yield                → YieldPanel
- * pendingThinking      → ThinkingBlock (always expanded)
- * pendingText          → ProseCard + Md + streaming cursor
+ * EVENT TYPE -> MOLECULE MAPPING (final, no gaps)
+ * -------------------------------------------------
+ * thinking             -> ThinkingBlock + Md
+ * text                 -> ProseCard + Md
+ * tool_write/edit      -> ToolCallRow
+ * tool_bash            -> ToolCallRow
+ * tool_generic         -> ToolCallRow (rare; non-koan custom tools only)
+ * tool_koan            -> KoanToolCard (dispatches by toolName;
+ *                          koan_complete_step and koan_set_phase
+ *                          suppressed inside the card)
+ * step                 -> StepHeader
+ * debug_step_guidance  -> StepGuidancePill + Md
+ * user_message         -> UserBubble + Md
+ * phase_boundary       -> PhaseMarker
+ * yield                -> YieldPanel
+ * pendingThinking      -> ThinkingBlock (always expanded)
+ * pendingText          -> ProseCard + Md + streaming cursor
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -147,23 +149,11 @@ function ConnectedScoutBar() {
 // Content stream
 // ---------------------------------------------------------------------------
 
-// Orchestration tools whose effects are visible through other molecules
-// (StepHeader, PhaseMarker). They should not render as rows.
-const SUPPRESSED_TOOLS = new Set(['koan_complete_step', 'koan_set_phase'])
-
-const KOAN_TOOL_LABELS: Record<string, string> = {
-  koan_request_scouts: 'Dispatching scouts',
-  koan_ask_question: 'Asking question',
-  koan_yield: 'Preparing response',
-  koan_request_executor: 'Starting executor',
-  koan_select_story: 'Selecting story',
-  koan_complete_story: 'Completing story',
-  koan_retry_story: 'Retrying story',
-  koan_skip_story: 'Skipping story',
-  koan_artifact_propose: 'Proposing artifact',
-  koan_artifact_list: 'Listing artifacts',
-  koan_artifact_view: 'Viewing artifact',
-}
+// SUPPRESSED_TOOLS and KOAN_TOOL_LABELS moved into KoanToolCard in M2 of
+// unify-tool-lifecycle: post-M1, every koan MCP tool creates ToolKoanEntry
+// (not ToolGenericEntry), so the old SUPPRESSED_TOOLS check on entry.toolName
+// for tool_generic entries was dead code. Suppression and labels now live
+// co-located with the per-tool dispatch in KoanToolCard.
 
 // ---------------------------------------------------------------------------
 // Aggregate rendering helpers — pure functions, next to renderEntry so the
@@ -403,20 +393,20 @@ function renderEntry(entry: ConversationEntry, i: number) {
       return <ToolCallRow key={i} tool="edit" command={entry.file} status={entry.inFlight ? 'running' : 'done'} attachments={entry.attachments} />
     case 'tool_bash':
       return <ToolCallRow key={i} tool="bash" command={entry.command} status={entry.inFlight ? 'running' : 'done'} attachments={entry.attachments} />
-    case 'tool_generic': {
-      if (SUPPRESSED_TOOLS.has(entry.toolName)) return null
-      const label = KOAN_TOOL_LABELS[entry.toolName] ?? entry.toolName
-      const cmd = entry.toolName in KOAN_TOOL_LABELS ? '' : entry.summary
-      return <ToolCallRow key={i} tool={label} command={cmd} status={entry.inFlight ? 'running' : 'done'} attachments={entry.attachments} />
-    }
+    // tool_generic is reached only by non-koan custom tools post-M1;
+    // koan MCP tools now create ToolKoanEntry via the broadened KOAN_MCP_TOOLS set.
+    case 'tool_generic':
+      return <ToolCallRow key={i} tool={entry.toolName} command={entry.summary} status={entry.inFlight ? 'running' : 'done'} attachments={entry.attachments} />
     case 'tool_koan':
-      // KoanToolCard does not expose attachments -- koan tool calls don't carry
-      // file manifests in the current projection shape.
+      // toolInput is the M1 aggregate field for live partial-args rendering.
+      // Passed alongside args so ReflectCard (which reads args) continues
+      // to work unchanged until M3 refactors ToolKoanEntry split-source.
       return (
         <KoanToolCard
           key={i}
           toolName={entry.toolName}
           args={entry.args}
+          toolInput={entry.toolInput ?? null}
           result={entry.result}
           inFlight={entry.inFlight}
         />
