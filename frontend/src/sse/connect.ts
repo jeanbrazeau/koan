@@ -21,6 +21,7 @@ export function connectSSE(store: KoanStore): EventSource {
   // -- Snapshot: replace entire store state atomically ----------------------
   es.addEventListener('snapshot', (e) => {
     const { version, state } = JSON.parse((e as MessageEvent).data)
+    console.debug('[sse] snapshot', { version, keys: Object.keys(state) })
     storeState = state
     store.setState(
       { lastVersion: version, ...state },
@@ -31,18 +32,21 @@ export function connectSSE(store: KoanStore): EventSource {
 
   // -- Patch: apply RFC 6902 JSON Patch to store state ----------------------
   es.addEventListener('patch', (e) => {
+    let version: number | undefined
+    let patch: unknown
     try {
-      const { version, patch } = JSON.parse((e as MessageEvent).data)
+      ({ version, patch } = JSON.parse((e as MessageEvent).data))
+      console.debug('[sse] patch', { version, patch })
       // mutate:false returns a new document object — avoids mutating state
       // that Zustand may still reference for the current render cycle.
-      storeState = applyPatch(storeState, patch, false, false).newDocument
+      storeState = applyPatch(storeState, patch as never, false, false).newDocument
       store.setState(
-        { lastVersion: version, ...storeState },
+        { lastVersion: version!, ...storeState },
         false,
         { type: 'sse/patch', version, ops: patch },
       )
     } catch (err) {
-      console.error('Patch failed, reconnecting for fresh snapshot:', err)
+      console.error('[sse] patch failed', { version, patch, err, storeState })
       es.close()
       store.setState({ lastVersion: 0 }, false, 'sse/reset')
       // App.tsx onerror handler schedules the reconnect

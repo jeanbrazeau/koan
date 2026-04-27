@@ -69,10 +69,12 @@ export function CurationTakeover() {
 
   // Seed the draft when the batch mounts or changes.
   useEffect(() => {
+    console.debug('[curation] batch effect', { batchId: batch?.batchId, hasBatch: !!batch })
     resetDraft(batch)
     setSelectedIndex(0)
   }, [batch?.batchId])
 
+  console.debug('[curation] render', { hasBatch: !!batch, batchId: batch?.batchId, submitting })
   if (!batch) return null
 
   const proposals = batch.proposals.map(p => mapProposal(p, draft[p.id] ?? { feedback: '' }))
