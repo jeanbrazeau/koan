@@ -33,9 +33,13 @@ export function OverallFeedback({
 
   // Fire the callback whenever the committed file list changes so the parent
   // can include IDs in its submit payload without owning upload state itself.
+  // onFileIdsChange is intentionally excluded from deps: re-notifying with the
+  // same fileIds when only the callback identity flipped is semantic noise and
+  // (with an inline arrow at the parent) drives an infinite render loop.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => {
     onFileIdsChange?.(attach.fileIds)
-  }, [attach.fileIds, onFileIdsChange])
+  }, [attach.fileIds])
 
   return (
     <div className="of" {...attach.dragProps}>

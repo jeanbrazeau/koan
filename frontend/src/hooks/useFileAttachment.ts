@@ -1,4 +1,4 @@
-import { useState, useRef, useCallback, type DragEvent } from 'react'
+import { useState, useRef, useCallback, useMemo, type DragEvent } from 'react'
 import { uploadFile, type UploadedFile } from '../api/client'
 
 type FileChipState = 'ready' | 'uploading' | 'error'
@@ -119,7 +119,12 @@ export function useFileAttachment() {
     }
   }, [addFiles])
 
-  const fileIds = files.filter(f => f.state === 'ready').map(f => f.id)
+  // Memoized so consumers depending on fileIds in effect dep arrays don't
+  // re-fire on every render. Identity is stable until files change.
+  const fileIds = useMemo(
+    () => files.filter(f => f.state === 'ready').map(f => f.id),
+    [files],
+  )
 
   const dragProps = { onDragEnter, onDragLeave, onDragOver, onDrop }
 
