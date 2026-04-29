@@ -456,6 +456,9 @@ function ContentStream() {
   const conversation = useStore(s => focusAgentId ? s.run?.agents?.[focusAgentId]?.conversation : undefined)
   const run = useStore(s => s.run)
   const focus = useStore(s => s.run?.focus)
+  // Read from settings.workflows (static, populated at server startup) rather than
+  // run.availableWorkflows, which was removed in favour of a single source of truth.
+  const workflows = useStore(s => s.settings.workflows)
   // reviewingArtifact used only by ArtifactReviewPin (deleted in M6); kept as
   // context for the "already reviewing" guard if re-added in a future milestone.
   const scrollRef = useRef<HTMLDivElement>(null)
@@ -499,7 +502,20 @@ function ContentStream() {
                 return api.sendChatMessage(msg, attachments)
               }}
               disabled={!!run?.completion}
-              availableCommands={run?.activeYield ? run.availablePhases : undefined}
+              availableCommands={
+                run?.activeYield
+                  ? [
+                      ...run.availablePhases,
+                      // Workflow commands use "workflow:<name>" IDs (colon, not space)
+                      // so the palette's startsWith filter works and no space breaks
+                      // the paletteOpen guard in FeedbackInput.
+                      ...workflows.map(w => ({
+                        id: `workflow:${w.id}`,
+                        description: `Switch to ${w.id} workflow${w.description ? ` -- ${w.description}` : ''}`,
+                      })),
+                    ]
+                  : undefined
+              }
               onPaletteToggle={setPaletteOpen}
             />
           </>

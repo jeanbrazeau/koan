@@ -19,12 +19,34 @@ interface FeedbackInputProps {
   onPaletteToggle?: (open: boolean) => void
 }
 
+/**
+ * Transform a slash-command input into a structured chat message
+ * the orchestrator (an LLM) parses to decide which MCP tool to call.
+ *
+ * - Phase commands (e.g. `/plan-spec instruction`) become
+ *   "The user wishes to transition to phase `plan-spec` ..."
+ * - Workflow commands (e.g. `/workflow:plan instruction`) become
+ *   "The user wishes to switch to workflow `plan` ..."
+ *
+ * Non-slash text passes through unchanged.
+ */
 function transformCommand(text: string): string {
   if (!text.startsWith('/')) return text
   const body = text.slice(1)
   const space = body.indexOf(' ')
   const cmd = space === -1 ? body : body.slice(0, space)
   const instruction = space === -1 ? '' : body.slice(space + 1).trim()
+
+  // Workflow commands have the form "workflow:<name>".
+  const WORKFLOW_PREFIX = 'workflow:'
+  if (cmd.startsWith(WORKFLOW_PREFIX)) {
+    const workflow = cmd.slice(WORKFLOW_PREFIX.length)
+    if (instruction) {
+      return `The user wishes to switch to workflow \`${workflow}\` with instruction: ${instruction}`
+    }
+    return `The user wishes to switch to workflow \`${workflow}\`.`
+  }
+
   if (instruction) {
     return `The user wishes to transition to phase \`${cmd}\` with instruction: ${instruction}`
   }
