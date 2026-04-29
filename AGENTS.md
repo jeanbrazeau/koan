@@ -133,6 +133,7 @@ during brief-generation step 1 (the read step).
 | --------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `koan_complete_step`                                                              | All phases                                                                                                                                             |
 | `koan_set_phase`                                                                  | All phases (blocked mid-story during execution); accepts `"done"` as tombstone                                                                         |
+| `koan_set_workflow`                                                               | All phases (matches `koan_set_phase`); accepts any registered workflow name; always lands at the new workflow's `initial_phase`                        |
 | `koan_yield`                                                                      | All phases                                                                                                                                             |
 | `koan_ask_question`                                                               | All phases                                                                                                                                             |
 | `koan_request_scouts`                                                             | `intake`, `core-flows`, `tech-plan`, `ticket-breakdown`, `cross-artifact-validation`, `plan-spec`, `plan-review`, `milestone-spec`, `milestone-review` |
@@ -165,11 +166,11 @@ executor). See [docs/architecture.md](docs/architecture.md) for the injection co
 The orchestrator has one subagent directory for the entire run. Executor and
 scout subagents each get their own directory per the standard contract:
 
-| File           | Writer                    | Reader                         | Purpose            |
-| -------------- | ------------------------- | ------------------------------ | ------------------ |
-| `task.json`    | Parent (before spawn)     | Parent (at agent registration) | What to do         |
-| `state.json`   | Parent (audit projection) | Available for debugging        | What has been done |
-| `events.jsonl` | Parent (audit log)        | Available for replay           | Full event history |
+| File           | Writer                                                                   | Reader                         | Purpose            |
+| -------------- | ------------------------------------------------------------------------ | ------------------------------ | ------------------ |
+| `task.json`    | Parent (before spawn; orchestrator also appended by `koan_set_workflow`) | Parent (at agent registration) | What to do         |
+| `state.json`   | Parent (audit projection)                                                | Available for debugging        | What has been done |
+| `events.jsonl` | Parent (audit log)                                                       | Available for replay           | Full event history |
 
 The `mcp_url` field in `task.json` tells the child where to connect for tool
 calls. No structured configuration flows through CLI flags. The spawn command
@@ -178,3 +179,9 @@ endpoint.
 
 The `task.json` for every subagent includes `run_dir` — the path to the current
 workflow run directory (`~/.koan/runs/<id>/`).
+
+The orchestrator `task.json` carries `workflow_history` (an append-only list of
+`{name, phase, started_at}` entries) rather than a single `workflow` string. The
+most-recent entry is the active workflow. The list grows by one entry on each
+`koan_set_workflow` call; executor and scout `task.json` files do not carry this
+field.

@@ -29,15 +29,18 @@ are nested naturally rather than flattened into a shared namespace.
 
 Role-specific fields:
 
-| Role           | Additional fields                 |
-| -------------- | --------------------------------- |
-| `orchestrator` | `project_dir`, `task_description` |
-| `scout`        | `question`, `investigator_role`   |
-| `executor`     | `artifacts`, `instructions`       |
+| Role           | Additional fields                                                   |
+| -------------- | ------------------------------------------------------------------- |
+| `orchestrator` | `project_dir`, `task_description`, `workflow_history: list[{name, phase, started_at}]` |
+| `scout`        | `question`, `investigator_role`                                     |
+| `executor`     | `artifacts`, `instructions`                                         |
+
+`workflow_history` is an append-only list; the most-recent entry is the active
+workflow. Executor and scout task.json files do not carry this field.
 
 ### Lifecycle
 
-`task.json` is **write-once, read-once**:
+For **executor and scout** subagents, `task.json` is **write-once, read-once**:
 
 1. Driver creates the subagent directory
 2. Driver writes `task.json` (atomic: tmp + rename)
@@ -46,9 +49,24 @@ Role-specific fields:
 5. Child connects to `mcp_url`, calls `koan_complete_step`
 6. `task.json` is never modified after spawn
 
+For the **orchestrator**, `task.json` is written at spawn and then appended
+on each `koan_set_workflow` call -- see "Workflow history mutation" below.
+
 This makes every subagent directory **self-describing** and **inspectable**
 after the fact. `cat task.json` shows exactly what the subagent was asked
-to do.
+to do (and, for the orchestrator, which workflows it has visited).
+
+### Workflow history mutation
+
+`koan_set_workflow` is the sole writer of subsequent `workflow_history`
+entries in the orchestrator's `task.json`. The contract:
+
+- Writes are always atomic (tmp + rename via `write_task_json`).
+- Each call appends exactly one `WorkflowHistoryEntry` to the list.
+- Readers must tolerate the file growing between reads; the last entry
+  is always the active workflow.
+- Executor and scout `task.json` files are unaffected -- they do not
+  carry the `workflow_history` field.
 
 ### Why not CLI flags
 

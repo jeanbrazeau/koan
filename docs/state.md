@@ -57,7 +57,8 @@ the active workflow type, and the list of story IDs.
 | `plan-review` | Orchestrator reads `landscape.md` and `plan.md`, evaluates quality, reports findings via chat. |
 | `execute` | Orchestrator composes executor instructions and spawns a single executor subagent. |
 
-Phases advance via `koan_set_phase`. Any phase in the active workflow's
+Phases advance via `koan_set_phase`; the active workflow switches via
+`koan_set_workflow` (which also lands at the new workflow's initial phase). Any phase in the active workflow's
 `available_phases` is a valid transition target from any other phase (except
 self-transitions). The suggested transitions in `workflow.suggested_transitions`
 guide the orchestrator's default boundary response but do not restrict the user.

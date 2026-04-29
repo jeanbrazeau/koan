@@ -4,7 +4,7 @@
 #   1. Validates agent_id from query params before reaching fastmcp.
 #   2. Runs check_permission() on every tool call via AgentResolutionMiddleware.
 #   3. Implements koan_complete_step, koan_yield, koan_request_scouts,
-#      koan_ask_question, koan_set_phase, koan_request_executor,
+#      koan_ask_question, koan_set_phase, koan_set_workflow, koan_request_executor,
 #      and story management tools.
 #
 # Phase boundary flow:
@@ -14,6 +14,7 @@
 #   fallback nudges it back to the right path.
 #   -> koan_yield blocks on AppState.interactions.yield_future until POST /api/chat resolves it
 #   -> orchestrator converses, then calls koan_set_phase(phase) or koan_set_phase("done")
+#      (or koan_set_workflow(workflow) for a mid-run workflow switch)
 #
 # koan_yield is phase-agnostic -- it works wherever the orchestrator needs to
 # pause for user input, not only at phase boundaries.
@@ -51,7 +52,8 @@ from ..run_state import (
     load_run_state,
 )
 from ..lib.permissions import check_permission
-from ..lib.workflows import get_suggested_phases, is_valid_transition as wf_is_valid
+from ..lib.task_json import make_workflow_history_entry
+from ..lib.workflows import WORKFLOWS, get_suggested_phases, get_workflow, is_valid_transition as wf_is_valid
 from ..logger import get_logger, truncate_payload
 from ..memory import MEMORY_TYPES, MemoryStore
 from ..memory.timestamps import iso_to_ms as _iso_to_ms
@@ -341,6 +343,7 @@ class Handlers:
     koan_complete_step: Callable[..., Awaitable[str]]
     koan_yield: Callable[..., Awaitable[str]]
     koan_set_phase: Callable[..., Awaitable[str]]
+    koan_set_workflow: Callable[..., Awaitable[str]]
     koan_request_scouts: Callable[..., Awaitable[str]]
     koan_ask_question: Callable[..., Awaitable[str]]
     koan_request_executor: Callable[..., Awaitable[str]]
@@ -1024,6 +1027,146 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
             return result_blocks
         finally:
             end_tool_call(agent, call_id, "koan_set_phase", result_blocks, steer_manifest or None)
+
+    async def koan_set_workflow(ctx: Context, workflow: str) -> list[ContentBlock]:
+        """Switch the active workflow mid-run, preserving the orchestrator
+        process and all run-directory context.
+
+        The orchestrator carries its full conversation context across the
+        switch. The new workflow's initial_phase becomes the active phase;
+        the next koan_complete_step call returns step 1 of that phase. The
+        run directory and all artifacts produced under the previous workflow
+        remain in place; the new workflow's phase_guidance handles
+        cross-workflow context (e.g. an existing brief.md).
+
+        Args:
+            workflow: Target workflow name registered in
+                      koan/lib/workflows.py:WORKFLOWS. The orchestrator
+                      can switch to any registered workflow at any time
+                      (any-to-any). The new workflow's initial_phase is
+                      entered automatically.
+        """
+        agent = await _get_agent(ctx)
+        _check_or_raise(agent, app_state, "koan_set_workflow", {"workflow": workflow})
+
+        call_id = begin_tool_call(agent, "koan_set_workflow", {"workflow": workflow}, workflow)
+        result_blocks: list[ContentBlock] | None = None
+        steer_manifest: list[dict] = []
+        try:
+            current_workflow_obj = app_state.run.workflow
+            current_phase = app_state.run.phase
+
+            # Validate target workflow name is registered.
+            # get_workflow raises ValueError for unknown names; convert to ToolError
+            # with the same invalid_transition shape used by koan_set_phase.
+            try:
+                new_workflow = get_workflow(workflow)
+            except ValueError:
+                raise ToolError(json.dumps({
+                    "error": "unknown_workflow",
+                    "message": (
+                        f"'{workflow}' is not a registered workflow. "
+                        f"Available workflows: {list(WORKFLOWS.keys())}"
+                    ),
+                }))
+
+            new_initial_phase = new_workflow.initial_phase
+            new_module = new_workflow.get_module(new_initial_phase)
+            if new_module is None:
+                raise ToolError(json.dumps({
+                    "error": "internal_error",
+                    "message": (
+                        f"Workflow '{workflow}' has no module for its "
+                        f"initial_phase '{new_initial_phase}'"
+                    ),
+                }))
+
+            log.info(
+                "workflow transition: agent=%s from=%s to=%s entering_phase=%s",
+                agent.agent_id[:8],
+                current_workflow_obj.name if current_workflow_obj else "?",
+                workflow,
+                new_initial_phase,
+            )
+
+            # Swap app_state.run.workflow before emitting projection events so
+            # any fold consumer reading app_state sees the new value.
+            app_state.run.workflow = new_workflow
+            app_state.run.phase = new_initial_phase
+
+            # Append to orchestrator task.json's workflow_history using the same
+            # atomic write helper as all other task.json writers (brief.md constraint).
+            from ..subagent import write_task_json
+            import aiofiles
+            orchestrator_task_path = Path(agent.subagent_dir) / "task.json"
+            async with aiofiles.open(orchestrator_task_path, "r") as f:
+                task_dict = json.loads(await f.read())
+            history = list(task_dict.get("workflow_history", []))
+            history.append(make_workflow_history_entry(workflow, new_initial_phase))
+            task_dict["workflow_history"] = history
+            await write_task_json(agent.subagent_dir, task_dict)
+
+            # Persist phase to run-state.json (mirrors koan_set_phase).
+            run_dir = _resolve_run_dir(agent)
+            if run_dir:
+                run_state = await load_run_state(run_dir)
+                await save_run_state(run_dir, {**run_state, "phase": new_initial_phase})
+
+            # Push artifact diff first so the projection snapshot includes any
+            # pending artifact changes before workflow_selected rebuilds availablePhases.
+            from ..driver import _push_artifact_diff
+            _push_artifact_diff(app_state)
+
+            # Emit projection events in order: workflow_selected rebuilds
+            # Run.available_phases; phase_started then updates Run.phase;
+            # yield_cleared clears any active yield UI state (mirrors koan_set_phase L992).
+            from ..events import build_workflow_selected
+            app_state.projection_store.push_event(
+                "workflow_selected",
+                build_workflow_selected(workflow),
+            )
+            app_state.projection_store.push_event(
+                "phase_started",
+                {"phase": new_initial_phase},
+                agent_id=agent.agent_id,
+            )
+            app_state.projection_store.push_event("yield_cleared", {})
+
+            # Step-advanced visual marker (mirrors koan_set_phase L995-L1001).
+            phase_label = new_initial_phase.replace("-", " ").title()
+            from ..events import build_step_advanced
+            app_state.projection_store.push_event(
+                "agent_step_advanced",
+                build_step_advanced(0, f"-> {workflow}: {phase_label}"),
+                agent_id=agent.agent_id,
+            )
+
+            # Rebuild PhaseContext for the new workflow + initial phase.
+            # Same pattern as koan_set_phase L1010-L1018; do not mutate in place.
+            binding = new_workflow.get_binding(new_initial_phase)
+            phase_guidance = binding.guidance if binding else ""
+            agent.phase_module = new_module
+            agent.step = 0
+            agent.phase_ctx = PhaseContext(
+                run_dir=run_dir or "",
+                subagent_dir=agent.subagent_dir,
+                project_dir=app_state.run.project_dir,
+                additional_dirs=app_state.run.additional_dirs,
+                task_description=app_state.run.task_description,
+                workflow_name=new_workflow.name,
+                phase_instructions=phase_guidance,
+                completed_phase=current_phase,
+            )
+
+            result_blocks = [_text_block(
+                f"Workflow set to '{workflow}'. Now in phase "
+                f"'{new_initial_phase}'. Call koan_complete_step to begin."
+            )]
+            result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
+            _push_tool_attachments(steer_manifest, agent)
+            return result_blocks
+        finally:
+            end_tool_call(agent, call_id, "koan_set_workflow", result_blocks, steer_manifest or None)
 
     async def koan_request_scouts(ctx: Context, questions: list[dict] | None = None) -> list[ContentBlock]:
         agent = await _get_agent(ctx)
@@ -1915,6 +2058,7 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
     mcp.tool(name="koan_complete_step")(koan_complete_step)
     mcp.tool(name="koan_yield")(koan_yield)
     mcp.tool(name="koan_set_phase")(koan_set_phase)
+    mcp.tool(name="koan_set_workflow")(koan_set_workflow)
     mcp.tool(name="koan_request_scouts")(koan_request_scouts)
     mcp.tool(name="koan_ask_question")(koan_ask_question)
     mcp.tool(name="koan_request_executor")(koan_request_executor)
@@ -1936,6 +2080,7 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         koan_complete_step=koan_complete_step,
         koan_yield=koan_yield,
         koan_set_phase=koan_set_phase,
+        koan_set_workflow=koan_set_workflow,
         koan_request_scouts=koan_request_scouts,
         koan_ask_question=koan_ask_question,
         koan_request_executor=koan_request_executor,

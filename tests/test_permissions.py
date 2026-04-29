@@ -173,6 +173,18 @@ class TestOrchestratorPhasePermissions:
             r = check_permission("orchestrator", "koan_set_phase", current_phase=phase)
             assert r["allowed"], f"koan_set_phase should be allowed in phase '{phase}'"
 
+    def test_koan_set_workflow_always_allowed(self):
+        """koan_set_workflow is permitted for orchestrator in every phase."""
+        for phase in ("intake", "brief-generation", "execution", "implementation-validation"):
+            r = check_permission("orchestrator", "koan_set_workflow", current_phase=phase)
+            assert r["allowed"], f"koan_set_workflow should be allowed in phase '{phase}'"
+
+    def test_koan_set_workflow_denied_for_non_orchestrator(self):
+        """koan_set_workflow is orchestrator-only; all other roles are denied."""
+        for role in ("executor", "scout", "intake", "planner"):
+            r = check_permission(role, "koan_set_workflow")
+            assert not r["allowed"], f"koan_set_workflow should be denied for role '{role}'"
+
     def test_koan_complete_step_always_allowed(self):
         for phase in ("intake", "brief-generation", "execution"):
             r = check_permission("orchestrator", "koan_complete_step", current_phase=phase)
@@ -387,3 +399,4 @@ class TestOrchestratorWriteEditDenied:
                       "brief-generation", "implementation-validation", "curation"):
             r = check_permission("orchestrator", "edit", current_phase=phase, current_step=2)
             assert not r["allowed"], f"orchestrator edit should be denied in phase={phase}"
+

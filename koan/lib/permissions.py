@@ -59,6 +59,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         # flow through koan_artifact_write per this task's design.
         "koan_complete_step",
         "koan_set_phase",
+        "koan_set_workflow",
         "koan_yield",
         "koan_ask_question",
         "koan_request_scouts",
@@ -195,8 +196,9 @@ def _check_orchestrator_permission(
         )
         return {"allowed": False, "reason": reason}
 
-    # Always allowed base koan tools
-    if tool_name in ("koan_complete_step", "koan_set_phase", "koan_yield"):
+    # Always allowed base koan tools -- koan_set_workflow mirrors koan_set_phase;
+    # any mid-story guard lives in the handler, not the fence (brief.md decision 7).
+    if tool_name in ("koan_complete_step", "koan_set_phase", "koan_set_workflow", "koan_yield"):
         log.debug(
             "permission allow: role=orchestrator tool=%s phase=%s step=%s",
             tool_name, phase, current_step,

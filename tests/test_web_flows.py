@@ -901,3 +901,100 @@ def test_api_sessions_list_handles_empty_history(tmp_path, client):
     sessions = resp.json()["sessions"]
     assert len(sessions) == 1
     assert sessions[0]["workflow"] == ""
+
+
+# -- koan_set_workflow handler -------------------------------------------------
+
+@pytest.mark.anyio
+async def test_koan_set_workflow_swaps_app_state_and_appends_history(tmp_path):
+    """koan_set_workflow swaps app_state.run.workflow and appends a history entry to task.json."""
+    from fastmcp.exceptions import ToolError
+    from koan.lib.workflows import get_workflow
+    from koan.web.mcp_endpoint import build_mcp_server
+
+    app_state, agent = _make_orchestrator_agent(tmp_path, "test-set-workflow")
+    # Set up the run with the "plan" workflow so the transition makes sense.
+    app_state.run.workflow = get_workflow("plan")
+
+    # Write a task.json with a single workflow_history entry (as driver_main would).
+    (tmp_path / "task.json").write_text(json.dumps({
+        "workflow_history": [{"name": "plan", "phase": "intake", "started_at": 0.0}],
+    }))
+
+    _, handlers = build_mcp_server(app_state)
+    result = await handlers.koan_set_workflow(_FakeCtx(agent), "milestones")
+
+    # app_state should reflect the new workflow.
+    assert app_state.run.workflow.name == "milestones"
+    assert app_state.run.phase == "intake"
+
+    # task.json on disk should have two history entries.
+    import json as _json
+    task_dict = _json.loads((tmp_path / "task.json").read_text())
+    history = task_dict["workflow_history"]
+    assert len(history) == 2
+    assert history[0]["name"] == "plan"
+    assert history[1]["name"] == "milestones"
+    assert history[1]["phase"] == "intake"
+
+    # Return value mentions the new workflow and phase.
+    assert "milestones" in result[0].text
+    assert "intake" in result[0].text
+
+
+@pytest.mark.anyio
+async def test_koan_set_workflow_unknown_workflow_raises(tmp_path):
+    """koan_set_workflow raises ToolError with error=unknown_workflow for an unregistered name."""
+    import json as _json
+    from fastmcp.exceptions import ToolError
+    from koan.web.mcp_endpoint import build_mcp_server
+
+    app_state, agent = _make_orchestrator_agent(tmp_path, "test-set-workflow-bad")
+    (tmp_path / "task.json").write_text(_json.dumps({
+        "workflow_history": [{"name": "plan", "phase": "intake", "started_at": 0.0}],
+    }))
+
+    _, handlers = build_mcp_server(app_state)
+
+    with pytest.raises(ToolError) as exc_info:
+        await handlers.koan_set_workflow(_FakeCtx(agent), "nonexistent")
+    body = json.loads(str(exc_info.value))
+    assert body["error"] == "unknown_workflow"
+
+
+@pytest.mark.anyio
+async def test_koan_set_workflow_emits_projection_events(tmp_path):
+    """koan_set_workflow emits workflow_selected, phase_started, yield_cleared, agent_step_advanced in order."""
+    import json as _json
+    from koan.lib.workflows import get_workflow
+    from koan.web.mcp_endpoint import build_mcp_server
+
+    app_state, agent = _make_orchestrator_agent(tmp_path, "test-set-workflow-events")
+    app_state.run.workflow = get_workflow("plan")
+    (tmp_path / "task.json").write_text(_json.dumps({
+        "workflow_history": [{"name": "plan", "phase": "intake", "started_at": 0.0}],
+    }))
+
+    _, handlers = build_mcp_server(app_state)
+
+    # Record projection events emitted during the call.
+    events_before = len(app_state.projection_store.events)
+    await handlers.koan_set_workflow(_FakeCtx(agent), "milestones")
+    new_events = app_state.projection_store.events[events_before:]
+
+    event_types = [e.event_type for e in new_events]
+    # workflow_selected must come before phase_started (fold order matters).
+    assert "workflow_selected" in event_types
+    assert "phase_started" in event_types
+    assert "yield_cleared" in event_types
+    assert "agent_step_advanced" in event_types
+
+    wf_idx = event_types.index("workflow_selected")
+    ph_idx = event_types.index("phase_started")
+    assert wf_idx < ph_idx, "workflow_selected must precede phase_started"
+
+    # Payload checks.
+    wf_event = new_events[wf_idx]
+    assert wf_event.payload.get("workflow") == "milestones"
+    ph_event = new_events[ph_idx]
+    assert ph_event.payload.get("phase") == "intake"
