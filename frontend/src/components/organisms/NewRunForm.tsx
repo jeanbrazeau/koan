@@ -1,7 +1,8 @@
 /**
  * NewRunForm — standalone form page for starting a new koan run.
- * Reads profiles and installations from the store, manages form state
- * internally, and calls the API to start a run.
+ * Reads profiles, installations, and workflows from the store. Workflows
+ * are sourced from settings.workflows (populated at server startup via the
+ * workflows_listed projection event) rather than hard-coded.
  * Used in: landing page when no run is active.
  */
 
@@ -21,19 +22,32 @@ const PaperclipIcon = () => (
   </svg>
 )
 
+/**
+ * Convert a workflow id (e.g. 'plan', 'milestone-spec') into a Title-cased
+ * display name. Splits on '-' and capitalises each token; keeps the rest
+ * of each token lowercase so ids like 'PLAN' still render as 'Plan'.
+ */
+function labelFromId(id: string): string {
+  return id
+    .split('-')
+    .map(t => t.charAt(0).toUpperCase() + t.slice(1).toLowerCase())
+    .join(' ')
+}
+
 export function NewRunForm() {
   const [task, setTask] = useState('')
   const [profile, setProfile] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [selectedInstallations, setSelectedInstallations] = useState<Record<string, string>>({})
-  const [workflow, setWorkflow] = useState<'plan' | 'milestones' | 'curation'>('plan')
+  const [workflow, setWorkflow] = useState<string>('plan')
   const [projectDir, setProjectDir] = useState('')
   const attach = useFileAttachment()
 
   const profilesDict = useStore(s => s.settings.profiles)
   const installationsDict = useStore(s => s.settings.installations)
   const defaultProfile = useStore(s => s.settings.defaultProfile)
+  const workflows = useStore(s => s.settings.workflows)
   const lastCompletion = useStore(s => s.lastCompletion)
   const setLastCompletion = useStore(s => s.setLastCompletion)
 
@@ -54,6 +68,17 @@ export function NewRunForm() {
       setProfile(def.name)
     }
   }, [profiles, profile, defaultProfile])
+
+  // When the workflows list arrives from the projection, ensure the selected
+  // workflow is still valid. Default to 'plan' if present, otherwise the first
+  // entry. Leave the selection unchanged while the list is empty (not yet arrived).
+  useEffect(() => {
+    if (workflows.length === 0) return
+    const ids = workflows.map(w => w.id)
+    if (!ids.includes(workflow)) {
+      setWorkflow(ids.includes('plan') ? 'plan' : ids[0])
+    }
+  }, [workflows])
 
   const preflight = useMemo(() => {
     const sel = profiles.find(p => p.name === profile)
@@ -134,38 +159,27 @@ export function NewRunForm() {
       {/* Workflow */}
       <div className="nrf-card">
         <SectionLabel>Workflow</SectionLabel>
-        <div className="nrf-wf-grid">
-          <button className={`nrf-wf-option${workflow === 'plan' ? ' nrf-wf-option--selected' : ''}`}
-            onClick={() => setWorkflow('plan')}>
-            <span className={`nrf-wf-radio${workflow === 'plan' ? ' nrf-wf-radio--selected' : ''}`}>
-              {workflow === 'plan' && <span className="nrf-wf-radio-inner" />}
-            </span>
-            <span className="nrf-wf-info">
-              <span className="nrf-wf-name">Plan</span>
-              <span className="nrf-wf-desc">Plan an approach, review it, then execute</span>
-            </span>
-          </button>
-          <button className={`nrf-wf-option${workflow === 'milestones' ? ' nrf-wf-option--selected' : ''}`}
-            onClick={() => setWorkflow('milestones')}>
-            <span className={`nrf-wf-radio${workflow === 'milestones' ? ' nrf-wf-radio--selected' : ''}`}>
-              {workflow === 'milestones' && <span className="nrf-wf-radio-inner" />}
-            </span>
-            <span className="nrf-wf-info">
-              <span className="nrf-wf-name">Milestones</span>
-              <span className="nrf-wf-desc">Break work into milestones with phased delivery</span>
-            </span>
-          </button>
-          <button className={`nrf-wf-option${workflow === 'curation' ? ' nrf-wf-option--selected' : ''}`}
-            onClick={() => setWorkflow('curation')}>
-            <span className={`nrf-wf-radio${workflow === 'curation' ? ' nrf-wf-radio--selected' : ''}`}>
-              {workflow === 'curation' && <span className="nrf-wf-radio-inner" />}
-            </span>
-            <span className="nrf-wf-info">
-              <span className="nrf-wf-name">Memory</span>
-              <span className="nrf-wf-desc">Review, bootstrap, or maintain project knowledge</span>
-            </span>
-          </button>
-        </div>
+        {workflows.length === 0 ? (
+          <div className="nrf-helper">Loading workflows...</div>
+        ) : (
+          <div className="nrf-wf-grid">
+            {workflows.map(w => (
+              <button
+                key={w.id}
+                className={`nrf-wf-option${workflow === w.id ? ' nrf-wf-option--selected' : ''}`}
+                onClick={() => setWorkflow(w.id)}
+              >
+                <span className={`nrf-wf-radio${workflow === w.id ? ' nrf-wf-radio--selected' : ''}`}>
+                  {workflow === w.id && <span className="nrf-wf-radio-inner" />}
+                </span>
+                <span className="nrf-wf-info">
+                  <span className="nrf-wf-name">{labelFromId(w.id)}</span>
+                  <span className="nrf-wf-desc">{w.description}</span>
+                </span>
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Description */}
@@ -237,7 +251,7 @@ export function NewRunForm() {
       {error && <div className="nrf-error">{error}</div>}
 
       <Button variant="primary" onClick={handleStart}
-        disabled={!hasRunners || loading || !installationsReady}>
+        disabled={!hasRunners || loading || !installationsReady || workflows.length === 0}>
         {loading ? 'Starting...' : 'Start Run'}
       </Button>
 
