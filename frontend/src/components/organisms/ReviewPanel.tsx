@@ -6,12 +6,16 @@
  * to /api/artifact-comment; the parent passes onSubmit with the new
  * flat (comment, attachments) signature.
  *
+ * Markdown rendering flows through <Md>, which routes language-mermaid
+ * fences to <MermaidBlock> for inline SVG output. <Md> is the single
+ * react-markdown entry point in the frontend; ReviewPanel does not import
+ * react-markdown directly.
+ *
  * Used in: ReviewView in App.tsx, right content column.
  */
 
 import { useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
+import { Md } from '../Md'
 import './ReviewPanel.css'
 
 // ReviewSubmitPayload removed in M6 -- replaced by flat (comment, attachments) args.
@@ -44,7 +48,7 @@ export function ReviewPanel({ path, content, onSubmit, onClose }: ReviewPanelPro
         <button className="rp-close" onClick={onClose}>Close</button>
       </div>
       <div className="rp-body">
-        <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+        <Md>{content}</Md>
       </div>
       <div className="rp-footer">
         <textarea
