@@ -22,6 +22,7 @@ export interface Settings {
   profiles: Record<string, Profile>
   defaultProfile: string
   defaultScoutConcurrency: number
+  workflows: WorkflowInfo[]   // populated once at startup by workflows_listed; static for the process lifetime
 }
 
 export interface RunConfig {
@@ -267,11 +268,19 @@ export interface PhaseInfo {
   description: string
 }
 
+export interface WorkflowInfo {
+  id: string
+  description: string
+  phases: PhaseInfo[]
+  initialPhase: string
+}
+
 export interface Run {
   config: RunConfig
   phase: string
   workflow: string    // active workflow name
-  availablePhases: PhaseInfo[]  // populated on workflow_selected; drives the / command palette
+  availablePhases: PhaseInfo[]      // populated on workflow_selected; drives the / command palette
+  // availableWorkflows removed: the workflows registry now lives at settings.workflows (populated by the workflows_listed initial event).
   agents: Record<string, Agent>
   focus: Focus | null
   artifacts: Record<string, ArtifactInfo>
@@ -351,6 +360,7 @@ export const useStore = create<KoanState>()(
         profiles: {},
         defaultProfile: 'balanced',
         defaultScoutConcurrency: 8,
+        workflows: [],
       },
       run: null,
       notifications: [],

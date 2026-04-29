@@ -95,6 +95,7 @@ EventType = Literal[
     "profile_removed",
     "default_profile_changed",
     "default_scout_concurrency_changed",
+    "workflows_listed",
     # Memory curation — orchestrator blocked in koan_memory_propose
     "memory_curation_started",
     "memory_curation_cleared",
@@ -402,10 +403,17 @@ class Profile(KoanBaseModel):
     tiers: dict[str, str] = {}             # role → installation alias
 
 class Settings(KoanBaseModel):
+    """Top-level projection settings populated at server startup.
+
+    workflows is static for the process lifetime: it is populated once by the
+    workflows_listed initial event and never updated after that. It is placed
+    here (rather than on Run) so the frontend can read it before any run starts.
+    """
     installations: dict[str, Installation] = {}   # alias → Installation
     profiles: dict[str, Profile] = {}             # name → Profile
     default_profile: str = "balanced"
     default_scout_concurrency: int = 8
+    workflows: list[WorkflowInfo] = []            # populated once by workflows_listed at startup
 
 class RunConfig(KoanBaseModel):
     """Resolved configuration frozen at run start."""
@@ -524,11 +532,28 @@ class PhaseInfo(KoanBaseModel):
     id: str                                # phase key (e.g. "plan-spec")
     description: str                       # one-line description from the workflow
 
+class WorkflowInfo(KoanBaseModel):
+    """A workflow entry used in two contexts:
+    - Settings.workflows: static list populated once at server startup via
+      the workflows_listed initial event; read by NewRunForm for selection
+      and by App.tsx for the /workflow:<name> command palette.
+    - Previously also populated per-run in Run.available_workflows; that
+      field was removed -- the registry now lives exclusively at Settings.workflows.
+
+    phases and initial_phase are present in both contexts.
+    """
+    id: str                       # workflow name (e.g. "plan", "milestones", "curation")
+    description: str              # one-line description from Workflow.description
+    phases: list[PhaseInfo] = []  # ordered list of phases in this workflow
+    initial_phase: str = ""       # first phase the orchestrator enters
+
 class Run(KoanBaseModel):
     config: RunConfig
     phase: str = ""
     workflow: str = ""    # active workflow name
-    available_phases: list[PhaseInfo] = []  # populated on workflow_selected; drives the / command palette
+    available_phases: list[PhaseInfo] = []      # populated on workflow_selected; drives the / command palette
+    # available_workflows removed: the workflows registry now lives at Settings.workflows,
+    # populated once by the workflows_listed initial event.
     agents: dict[str, Agent] = {}          # all agents by ID — queued, running, done, failed
     focus: Focus | None = None             # None before first agent spawns
     artifacts: dict[str, ArtifactInfo] = {}
@@ -705,6 +730,8 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                         PhaseInfo(id=p, description=workflow.phase_descriptions.get(p, ""))
                         for p in workflow.available_phases
                     ]
+                # Workflows registry now lives at Settings.workflows, populated once
+                # by the workflows_listed initial event -- no longer rebuilt here.
                 new_run = projection.run.model_copy(update={
                     "workflow": workflow_name,
                     "available_phases": available_phases,
@@ -1927,6 +1954,20 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                 new_settings = projection.settings.model_copy(update={
                     "default_scout_concurrency": payload.get("value", 8),
                 })
+                return projection.model_copy(update={"settings": new_settings})
+
+            case "workflows_listed":
+                # Build the WorkflowInfo list from the payload. The payload uses
+                # snake_case keys (id, description, phases, initial_phase) so that
+                # WorkflowInfo(**entry) constructs cleanly without alias resolution.
+                raw_workflows = payload.get("workflows", [])
+                new_workflows: list[WorkflowInfo] = []
+                for entry in raw_workflows:
+                    try:
+                        new_workflows.append(WorkflowInfo(**entry))
+                    except Exception:
+                        log.warning("fold workflows_listed: skipping malformed entry %r", entry)
+                new_settings = projection.settings.model_copy(update={"workflows": new_workflows})
                 return projection.model_copy(update={"settings": new_settings})
 
             case "yield_started":

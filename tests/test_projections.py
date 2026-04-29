@@ -33,6 +33,7 @@ from koan.projections import (
     ToolKoanEntry,
     ToolWriteEntry,
     VersionedEvent,
+    WorkflowInfo,
     fold,
 )
 
@@ -130,6 +131,12 @@ class TestFoldRunLifecycle:
         r = fold(p, _e("workflow_selected", {"workflow": "plan"}))
         assert r.run.workflow == "plan"
 
+    def test_workflow_selected_does_not_set_available_workflows(self):
+        """After workflow_selected, Run no longer carries an available_workflows attribute -- the workflows registry now lives at Settings.workflows."""
+        p = _proj_with_run()
+        r = fold(p, _e("workflow_selected", {"workflow": "plan"}))
+        assert not hasattr(r.run, "available_workflows")
+
     def test_workflow_selected_without_run_is_noop(self):
         p = Projection()
         r = fold(p, _e("workflow_selected", {"workflow": "plan"}))
@@ -146,6 +153,56 @@ class TestFoldRunLifecycle:
         p = Projection()
         r = fold(p, _e("run_cleared", {}))
         assert r.run is None
+
+
+# ---------------------------------------------------------------------------
+# fold: workflows_listed (Settings.workflows)
+# ---------------------------------------------------------------------------
+
+_WORKFLOW_ENTRY_A = {
+    "id": "plan",
+    "description": "Plan and execute",
+    "phases": [{"id": "intake", "description": "Gather requirements"}],
+    "initial_phase": "intake",
+}
+_WORKFLOW_ENTRY_B = {
+    "id": "milestones",
+    "description": "Phased delivery",
+    "phases": [{"id": "milestone-spec", "description": "Define milestones"}],
+    "initial_phase": "milestone-spec",
+}
+
+
+class TestFoldWorkflowsListed:
+
+    def test_workflows_listed_populates_settings_workflows(self):
+        """workflows_listed fold sets Settings.workflows from the payload entries."""
+        p = Projection()
+        r = fold(p, _e("workflows_listed", {"workflows": [_WORKFLOW_ENTRY_A, _WORKFLOW_ENTRY_B]}))
+        assert len(r.settings.workflows) == 2
+        assert r.settings.workflows[0].id == "plan"
+        assert r.settings.workflows[0].description == "Plan and execute"
+        assert len(r.settings.workflows[0].phases) == 1
+        assert r.settings.workflows[0].phases[0].id == "intake"
+        assert r.settings.workflows[0].initial_phase == "intake"
+        assert r.settings.workflows[1].id == "milestones"
+
+    def test_workflows_listed_overwrites_previous_list(self):
+        """A second workflows_listed event replaces the first list entirely."""
+        p = Projection()
+        r = fold(p, _e("workflows_listed", {"workflows": [_WORKFLOW_ENTRY_A]}))
+        assert len(r.settings.workflows) == 1
+        r2 = fold(r, _e("workflows_listed", {"workflows": [_WORKFLOW_ENTRY_B]}))
+        assert len(r2.settings.workflows) == 1
+        assert r2.settings.workflows[0].id == "milestones"
+
+    def test_workflows_listed_with_empty_list_clears_field(self):
+        """workflows_listed with an empty list clears Settings.workflows."""
+        p = Projection()
+        r = fold(p, _e("workflows_listed", {"workflows": [_WORKFLOW_ENTRY_A]}))
+        assert len(r.settings.workflows) == 1
+        r2 = fold(r, _e("workflows_listed", {"workflows": []}))
+        assert r2.settings.workflows == []
 
 
 # ---------------------------------------------------------------------------

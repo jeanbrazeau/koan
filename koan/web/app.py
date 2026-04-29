@@ -47,6 +47,7 @@ from ..events import (
     build_profile_removed,
     build_default_profile_changed,
     build_default_scout_concurrency_changed,
+    build_workflows_listed,
     build_reflect_started,
     build_reflect_trace,
     build_reflect_done,
@@ -1232,6 +1233,8 @@ def _push_initial_config_events(st: AppState) -> None:
 
     Called after _refresh_probe_state(broadcast=False) so all state is ready.
     Emits one event per config fact so the snapshot captures complete config.
+    Includes a workflows_listed event at the end that populates Settings.workflows
+    from the WORKFLOWS registry -- static for the process lifetime.
     """
     store = st.projection_store
 
@@ -1264,6 +1267,23 @@ def _push_initial_config_events(st: AppState) -> None:
 
     # Scout concurrency
     store.push_event("default_scout_concurrency_changed", build_default_scout_concurrency_changed(st.runner_config.config.scout_concurrency))
+
+    # Workflows registry: static for the process lifetime, but delivered through
+    # an initial event so the projection field is uniformly populated by the fold
+    # (consistent with profiles, installations, and probe results).
+    from ..lib.workflows import WORKFLOWS as _WORKFLOWS
+    workflows_payload: list[dict] = []
+    for wf in _WORKFLOWS.values():
+        workflows_payload.append({
+            "id": wf.name,
+            "description": wf.description,
+            "phases": [
+                {"id": p, "description": wf.phase_descriptions.get(p, "")}
+                for p in wf.available_phases
+            ],
+            "initial_phase": wf.initial_phase,
+        })
+    store.push_event("workflows_listed", build_workflows_listed(workflows_payload))
 
 
 async def api_eval_harvest(r: Request) -> Response:

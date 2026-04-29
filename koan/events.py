@@ -303,6 +303,20 @@ def build_default_scout_concurrency_changed(value: int) -> dict:
     return {"value": value}
 
 
+def build_workflows_listed(workflows: list[dict]) -> dict:
+    """Build workflows_listed event payload.
+
+    Each entry in workflows is a dict shaped as the WorkflowInfo wire model
+    with snake_case keys: {id, description, phases, initial_phase}. The fold
+    reconstructs WorkflowInfo via WorkflowInfo(**entry).
+
+    Snake_case is used here (not camelCase) because the payload consumer is
+    the Python fold, not the wire -- matching the same convention used by
+    build_profile_created passing read_only straight to Profile(read_only=...).
+    """
+    return {"workflows": workflows}
+
+
 # -- Memory curation event builders -------------------------------------------
 
 def build_memory_curation_started(batch: dict) -> dict:
