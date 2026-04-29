@@ -11,7 +11,7 @@ related:
 
 This lesson was distilled on 2026-04-23 after Leon migrated koan's eval harness from Inspect AI to DeepEval and then debugged why the Confident AI dashboard showed "No verbose logs available" for every row of the koan suite, despite `RubricComplianceMetric(BaseMetric)` and `CrossPhaseCoherenceMetric(BaseMetric)` producing rich per-criterion reason strings.
 
-Symptom chain. The koan judge contract (entry 0074) built per-rubric pass-rate verdicts inside a custom `BaseMetric.a_measure()` that flattened every rubric criterion into a single `self.reason` string. Dashboard rows rendered metric name and pass/fail but no verbose panel content.
+Symptom chain. The koan judge contract built per-rubric pass-rate verdicts inside a custom `BaseMetric.a_measure()` that flattened every rubric criterion into a single `self.reason` string. Dashboard rows rendered metric name and pass/fail but no verbose panel content.
 
 Root cause. Leon intercepted the outbound Confident AI API payload on 2026-04-23 and confirmed the verbose strings are transmitted correctly. Inspecting the dashboard frontend showed a CSS class `disableVerbose` that actively hides verbose content for any metric DeepEval did not author -- i.e., any custom `BaseMetric` subclass. The hide is client-side-only; the data is intact on the backend. There is no backend flag, no opt-in, no workaround in user code.
 

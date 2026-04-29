@@ -3,9 +3,9 @@ title: Eval fixture data model -- fixtures carry state, test cases carry workflo
   rubric
 type: context
 created: '2026-04-19T09:50:06Z'
-modified: '2026-04-22T09:24:10Z'
+modified: '2026-04-27T14:12:59Z'
 related:
-- 0050-eval-benchmark-fixtures-are-manual-git-snapshots-of.md
+- 0076-eval-fixture-snapshots-are-self-referential-git.md
 - 0059-eval-rubric-layout-directory-per-phase-with-fixed.md
 ---
 

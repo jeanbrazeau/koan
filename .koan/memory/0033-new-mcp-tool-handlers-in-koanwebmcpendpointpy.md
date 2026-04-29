@@ -6,7 +6,7 @@ created: '2026-04-16T13:31:07Z'
 modified: '2026-04-24T16:38:52Z'
 ---
 
-When adding any new `@mcp.tool(name="...")` handler to `koan/web/mcp_endpoint.py`, follow the established lifecycle pattern. On 2026-04-16, the plan-review phase caught a deviation in the initial `koan_search` draft that called `end_tool_call` inside both the except block and after the try/except, and placed `_drain_and_append_steering` outside the try block. On 2026-04-24, during the file-attachment initiative (M2), Leon changed every primary-agent tool handler from returning `str` to returning `list[ContentBlock]` so the tool surface could carry mixed text and attachment content blocks. The current structure, verified across the 20 `@mcp.tool` closures in `koan/web/mcp_endpoint.py`:
+When adding any new `@mcp.tool(name="...")` handler to `koan/web/mcp_endpoint.py`, follow the established lifecycle pattern. On 2026-04-16, the plan-review phase caught a deviation in the initial `koan_search` draft that called `end_tool_call` inside both the except block and after the try/except, and placed `_drain_and_append_steering` outside the try block. On 2026-04-24, Leon changed every primary-agent tool handler from returning `str` to returning `list[ContentBlock]` so the tool surface could carry mixed text and attachment content blocks. The current structure:
 
 ```
 result_blocks: list[ContentBlock] | None = None

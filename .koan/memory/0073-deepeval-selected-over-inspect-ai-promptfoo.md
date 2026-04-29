@@ -3,9 +3,7 @@ title: DeepEval selected over Inspect AI, Promptfoo, Braintrust, Langfuse as koa
   eval framework
 type: decision
 created: '2026-04-22T09:16:21Z'
-modified: '2026-04-22T09:16:21Z'
-related:
-- 0048-inspect-ai-uk-aisi-selected-as-koan-eval.md
+modified: '2026-04-27T09:02:09Z'
 ---
 
 This entry documents the framework choice for the koan eval harness under `evals/` in the koan repository. On 2026-04-17, Leon initially selected Inspect AI (UK AISI) over deepeval because deepeval was believed to lack a clean black-box subprocess model. On 2026-04-22, Leon reversed that decision after a deeper framework survey (Inspect AI, DeepEval, Promptfoo, Braintrust, Langfuse, plus Ragas, Patronus, Galileo, Weave, Opik, Phoenix, Helicone, Honeycomb, Traceloop) and selected DeepEval.

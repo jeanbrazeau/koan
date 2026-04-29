@@ -3,10 +3,9 @@ title: 'Pydantic-AI integration traps in koan agent loops: output_type=str accep
   prose as termination; agent.iter() swallows tool-handler exceptions'
 type: lesson
 created: '2026-04-22T09:38:12Z'
-modified: '2026-04-22T09:38:12Z'
+modified: '2026-04-27T09:02:17Z'
 related:
 - 0064-structured-tool-arguments-over-text-parsing.md
-- 0041-per-phase-summary-capture-rides-on-orchestrators.md
 - 0063-koanreflect-synthesis-tool-single-conversation.md
 ---
 
@@ -16,4 +15,4 @@ Trap 1 -- `output_type=str` treats any plain-text model response as a valid agen
 
 Trap 2 -- `agent.iter()` does not propagate exceptions from tool handlers to user code. The old raw google-genai loop in koan used a sentinel `_DoneSignal` exception raised from the `done` tool handler and caught around the loop; the loop exited via the exception path. In pydantic-ai, tool execution happens inside `CallToolsNode` and exceptions from tool handlers are caught internally -- they never reach an `except _DoneSignal:` wrapping `async for node in run`. The fix Leon adopted on 2026-04-22: the `done` tool handler stores its structured result (citations, final briefing text, etc.) on the shared `deps` object as `_DoneResult` and returns normally; the outer loop checks `deps.done_result` after each node and breaks when it is set. Exception-based termination does not work in pydantic-ai; deps-based result handoff does.
 
-Leon stated on 2026-04-22 that with both traps known upfront, building a new pydantic-ai agent loop in koan is roughly a 5-minute edit; without them it takes a ~20-minute investigation because trap 2 only manifests after trap 1 is fixed. The underlying project invariant reaffirmed on the same day: koan accepts structured agent output via tool calls with typed arguments, not via parsing the model's last message. The only current exception is phase-summary capture (entry 0041), which Leon flagged as itself subject to future revision. Related guidance on structured tool arguments lives in entry 0064.
+Leon noted on 2026-04-22 that with both traps known upfront, building a new pydantic-ai agent loop in koan is roughly a 5-minute edit; without them it takes a ~20-minute investigation because trap 2 only manifests after trap 1 is fixed. The underlying project invariant reaffirmed on the same day: koan accepts structured agent output via tool calls with typed arguments, not via parsing the model's last message.
