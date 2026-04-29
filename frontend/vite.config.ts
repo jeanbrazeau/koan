@@ -36,7 +36,7 @@ export default defineConfig({
       // so chunks are forwarded immediately rather than batched. Without this,
       // SSE events arrive in groups after a delay, breaking the real-time feed.
       '/events': {
-        target: 'http://localhost:8000',
+        target: 'http://localhost:1729',
         changeOrigin: true,
         configure: (proxy) => {
           proxy.on('proxyReq', (proxyReq) => {
@@ -49,8 +49,8 @@ export default defineConfig({
           })
         },
       },
-      '/api': { target: 'http://localhost:8000', changeOrigin: true },
-      '/mcp': { target: 'http://localhost:8000', changeOrigin: true },
+      '/api': { target: 'http://localhost:1729', changeOrigin: true },
+      '/mcp': { target: 'http://localhost:1729', changeOrigin: true },
     },
   },
 })
