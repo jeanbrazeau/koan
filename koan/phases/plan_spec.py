@@ -49,6 +49,16 @@ PHASE_ROLE_CONTEXT = (
     "- **Constraints**: Hard boundaries the executor must respect.\n"
     "- **Verification**: How to verify the implementation is correct.\n"
     "\n"
+    "## Documentation discipline\n"
+    "\n"
+    "Every function the plan introduces or modifies must include a docstring (or\n"
+    "the language's idiomatic equivalent -- e.g., a JSDoc block above a TypeScript\n"
+    "function). Format follows the surrounding file convention; you only require\n"
+    "presence, not a specific style. The plan must explicitly instruct the executor\n"
+    "to write or update the docstring for each newly-added or modified function,\n"
+    "and the docstring directive must be visible at the relevant Implementation\n"
+    "step (not only buried in a global rule).\n"
+    "\n"
     "## Strict rules\n"
     "\n"
     "- MUST read codebase files the plan references to write precise instructions.\n"
@@ -57,6 +67,9 @@ PHASE_ROLE_CONTEXT = (
     "- MUST NOT invent file paths or function names you have not seen in the codebase.\n"
     "- MUST use koan_artifact_write to produce the plan artifact. Built-in Write and Edit\n"
     "  tools are not available in this phase.\n"
+    "- MUST instruct the executor to add a docstring to every newly-added or\n"
+    "  modified function. Place the directive at the Implementation step that\n"
+    "  introduces or changes the function, not only as a global rule.\n"
 )
 
 
@@ -120,6 +133,10 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "- **Integration points**: Which existing code will the changes touch?",
             "- **Risks**: Where could things go wrong during execution?",
             "- **Order**: What is the safest sequence of implementation steps?",
+            "- **Documentation needs**: For each function the plan will add or modify,",
+            "  note that the plan must instruct the executor to write or update its",
+            "  docstring. Format follows the surrounding file convention; presence is",
+            "  required, style is not.",
             "",
             "Call `koan_complete_step` with an analysis summary:",
             "- Overall approach (2-3 sentences)",
@@ -163,6 +180,10 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "- **Change**: what to add, modify, or remove -- be specific.",
                 "  Include function signatures, type names, and interface names"
                 " where relevant.",
+                "- **Documentation**: if the step adds a new function or modifies an",
+                "  existing function, the step MUST direct the executor to write or",
+                "  update that function's docstring. Format follows the surrounding",
+                "  file convention; presence is required, style is not.",
                 "",
                 "Order steps so that each step's dependencies are satisfied by"
                 " prior steps.",
