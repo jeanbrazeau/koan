@@ -23,6 +23,7 @@ from ..phases import (
     curation,
     exec_review as exec_review_phase,
     execute as execute_phase,
+    frame,
     intake,
     milestone_review,
     milestone_spec,
@@ -618,11 +619,69 @@ CURATION_WORKFLOW = Workflow(
 )
 
 
+# -- Discovery workflow guidance constants -------------------------------------
+
+_DISCOVERY_FRAME_GUIDANCE = (
+    "## Discovery workflow context\n"
+    "\n"
+    "You are in the standalone `discovery` workflow. This workflow is a single\n"
+    "phase (`frame`) with no other phases and no fixed artifact. Your role is\n"
+    "that of a sounding board: surface tradeoffs, name hidden assumptions, and\n"
+    "help the user think without converging prematurely on a plan or artifact.\n"
+    "\n"
+    "Exit is user-driven. When the user signals they are ready, present three\n"
+    "options:\n"
+    "\n"
+    "1. Promote into another workflow via `koan_set_workflow` (e.g. 'initiative',\n"
+    "   'milestones', 'plan') -- the discovery transcript carries forward.\n"
+    "2. Transition to another phase within the current workflow via `koan_set_phase`\n"
+    "   (the discovery workflow has only `frame`, so this path ends the frame\n"
+    "   session without producing an artifact).\n"
+    "3. End the workflow via `koan_set_phase('done')`.\n"
+    "\n"
+    "There is no curation step at exit from discovery. If the user wants to\n"
+    "capture lessons from this session, they can switch to the `curation` workflow\n"
+    "via `koan_set_workflow('curation')`.\n"
+)
+
+
+# -- Discovery workflow --------------------------------------------------------
+# Single-phase standalone exploration workflow. Structurally identical to
+# CURATION_WORKFLOW in shape (single phase, no transitions).
+
+DISCOVERY_WORKFLOW = Workflow(
+    name="discovery",
+    description=(
+        "Single-phase open-ended exploration. The agent is a sounding board;"
+        " exit is user-driven."
+    ),
+    phases={
+        "frame": PhaseBinding(
+            module=frame,
+            description=(
+                "Open-ended dialogue when the user is not yet sure what they"
+                " want or what shape it should take"
+            ),
+            guidance=_DISCOVERY_FRAME_GUIDANCE,
+            retrieval_directive=(
+                "Past decisions, lessons, and context that may inform open-ended"
+                " exploration of intent. Broad coverage rather than a specific"
+                " subsystem."
+            ),
+            next_phase=None,
+        ),
+    },
+    initial_phase="frame",
+    transitions={"frame": []},
+)
+
+
 # -- Registry -----------------------------------------------------------------
 
 WORKFLOWS: dict[str, Workflow] = {
     "plan": PLAN_WORKFLOW,
     "milestones": MILESTONES_WORKFLOW,
+    "discovery": DISCOVERY_WORKFLOW,
     "curation": CURATION_WORKFLOW,
 }
 
