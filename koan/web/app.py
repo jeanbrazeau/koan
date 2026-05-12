@@ -1165,7 +1165,7 @@ async def _refresh_probe_state(st: AppState, broadcast: bool = True) -> None:
 
     # --yolo: per-runner permission-skipping flags for default installations.
     # Claude is excluded: new default installations receive --permission-mode
-    # acceptEdits unconditionally via _claude_post_build_args at spawn time.
+    # acceptEdits unconditionally via AgentOptions.permission_mode at spawn time.
     _YOLO_ARGS: dict[str, list[str]] = {
         "codex": ["--dangerously-bypass-approvals-and-sandbox"],
         "gemini": ["--yolo"],

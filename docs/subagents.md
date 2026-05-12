@@ -29,11 +29,11 @@ are nested naturally rather than flattened into a shared namespace.
 
 Role-specific fields:
 
-| Role           | Additional fields                                                   |
-| -------------- | ------------------------------------------------------------------- |
+| Role           | Additional fields                                                                      |
+| -------------- | -------------------------------------------------------------------------------------- |
 | `orchestrator` | `project_dir`, `task_description`, `workflow_history: list[{name, phase, started_at}]` |
-| `scout`        | `question`, `investigator_role`                                     |
-| `executor`     | `artifacts`, `instructions`                                         |
+| `scout`        | `question`, `investigator_role`                                                        |
+| `executor`     | `artifacts`, `instructions`                                                            |
 
 `workflow_history` is an append-only list; the most-recent entry is the active
 workflow. Executor and scout task.json files do not carry this field.
@@ -266,19 +266,24 @@ the model drifting toward irrelevant built-in capabilities (plan mode,
 autonomous scheduling, subagent spawning) that compete with koan's step-first
 workflow.
 
-| Role             | Built-in tools                                                                                                               |
-| ---------------- | ---------------------------------------------------------------------------------------------------------------------------- |
-| **orchestrator** | `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, `WebFetch`, `WebSearch`                                                     |
-| **executor**     | `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, `TaskCreate`, `TaskUpdate`, `TaskList`, `TaskGet`, `TaskStop`, `TaskOutput` |
-| **scout**        | `Read`, `Bash`, `Glob`, `Grep`                                                                                               |
+| Role             | Built-in tools                                                           |
+| ---------------- | ------------------------------------------------------------------------ |
+| **orchestrator** | `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, `WebFetch`, `WebSearch` |
+| **executor**     | `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`                          |
+| **scout**        | `Read`, `Bash`, `Glob`, `Grep`                                           |
 
-All agents also receive `--disable-slash-commands` (no skills) and
-`--strict-mcp-config` (only koan's MCP server, no ambient servers).
+The same list is used for both `--tools` and `--allowedTools` to remove the
+model's perceived ambiguity about which visible tools are auto-permitted. The
+MCP-namespace pattern `mcp__koan__*` is appended to `--allowedTools` only.
 
 Notably excluded from all roles: `Agent` (bypasses spawn lifecycle),
+`TodoWrite` (not part of the koan loop),
+`TaskCreate`/`TaskUpdate`/`TaskList`/`TaskGet`/`TaskStop`/`TaskOutput`
+(interactive task list -- unavailable in non-interactive SDK mode),
 `EnterPlanMode`/`ExitPlanMode` (competes with step-first workflow),
-`ScheduleWakeup`/`CronCreate` (autonomous scheduling), `EnterWorktree`
-(breaks directory assumptions).
+`Cron*`/`SendMessage`/`Team*` (autonomous scheduling and agent teams),
+`EnterWorktree` (breaks directory assumptions), `LSP`, `Skill`, `Monitor`,
+`PowerShell`, `NotebookEdit`, `ListMcpResourcesTool`, `ToolSearch`.
 
 ### MCP permission fence
 

@@ -45,26 +45,61 @@ log = get_logger("subagent")
 
 # -- Tool whitelists (Claude Code --tools) -------------------------------------
 #
-# Agents should not have access to tools they are never intended to need.
-# Restricting the tool vocabulary at the CLI level prevents the model from
-# even seeing irrelevant tools (EnterPlanMode, Agent, TaskCreate, etc.),
-# which reduces misbehavior and token waste.  The MCP permission fence
-# remains the authority for koan-specific tools; this whitelist controls
-# only Claude Code built-in tools.
+# Per-role whitelist of Claude Code built-in tool names. Used as both
+# AgentOptions.available_tools and AgentOptions.allowed_tools (the MCP
+# namespace pattern mcp__koan__* is appended to allowed_tools only via
+# _build_claude_tool_lists). The two fields mirror each other by design:
+# koan has no can_use_tool callback, so distinguishing "visible" from
+# "auto-allowed" has no operational meaning here, and a narrow
+# --allowedTools set causes the model to gravitate toward explicitly-
+# permitted tools (e.g. Bash) and avoid Read/Glob/Grep even though those
+# need no permission.
 #
-# These are Claude Code PascalCase tool names.  Other runners (codex, gemini)
-# have their own mechanisms and are not affected by this whitelist.
+# Tool names are the exact strings from
+# https://code.claude.com/docs/en/tools-reference. Other runners
+# (codex, gemini) ignore this dict.
 #
-# CLAUDE_TOOL_WHITELISTS stays in koan/subagent.py for M1 (Plan Decision 9).
-# AgentOptions.available_tools is read from this dict at spawn time. A future
-# milestone may move it into the agent registry once a clear consumer pattern
-# emerges.
+# Notably excluded across all roles: Agent (koan owns subagent spawning),
+# TodoWrite (not requested), Task* interactive family (only meaningful in
+# interactive sessions; koan runs the SDK in non-interactive mode), LSP,
+# Skill, Monitor, Cron*, EnterPlanMode/ExitPlanMode, EnterWorktree/
+# ExitWorktree, PowerShell, SendMessage, Team*, ListMcpResourcesTool,
+# ToolSearch, NotebookEdit.
 
-CLAUDE_TOOL_WHITELISTS: dict[str, str] = {
-    "orchestrator": "Read,Write,Edit,Bash,Glob,Grep,WebFetch,WebSearch",
-    "executor":     "Read,Write,Edit,Bash,Glob,Grep,TaskCreate,TaskUpdate,TaskList,TaskGet,TaskStop,TaskOutput",
-    "scout":        "Read,Bash,Glob,Grep",
+CLAUDE_TOOL_WHITELISTS: dict[str, list[str]] = {
+    "orchestrator": [
+        "Read", "Write", "Edit", "Bash",
+        "Glob", "Grep", "WebFetch", "WebSearch",
+    ],
+    "executor": [
+        "Read", "Write", "Edit", "Bash",
+        "Glob", "Grep",
+    ],
+    "scout": [
+        "Read", "Bash", "Glob", "Grep",
+    ],
 }
+
+
+def _build_claude_tool_lists(role: str) -> tuple[list[str], list[str]]:
+    """Return (available_tools, allowed_tools) for a Claude subagent role.
+
+    Mirrors the per-role list across both fields and appends the
+    constant ``mcp__koan__*`` MCP-namespace pattern to
+    ``allowed_tools`` so koan MCP calls auto-approve. The two
+    returned lists are independent copies; callers may mutate either
+    without affecting the other.
+
+    Roles not present in CLAUDE_TOOL_WHITELISTS return ``([], [])`` --
+    other runners (codex, gemini) construct AgentOptions with empty
+    tool fields and are unaffected.
+    """
+    base = CLAUDE_TOOL_WHITELISTS.get(role)
+    if base is None:
+        return [], []
+    available = list(base)
+    allowed = list(base) + ["mcp__koan__*"]
+    return available, allowed
 
 
 def _now_iso() -> str:
@@ -263,11 +298,18 @@ async def spawn_subagent(
     # Emit phase start to audit log
     await event_log.emit_phase_start(phase_module.TOTAL_STEPS)
 
-    # Construct AgentOptions. CLAUDE_TOOL_WHITELISTS stays in this file (Plan
-    # Decision 9); AgentOptions.available_tools is built from it here.
+    # Construct AgentOptions. Per-role tool lists for Claude are mirrored
+    # across available_tools and allowed_tools so the model has unambiguous
+    # signal about which tools are auto-permitted. Other runners (codex,
+    # gemini) ignore both fields and receive empty lists.
     # In the test-injection else-branch, installation/thinking/model are None;
     # FakeAgent.run() ignores these fields, so dummy values are acceptable.
     from .types import AgentInstallation as _AgentInstallation
+    if installation is not None and installation.runner_type == "claude":
+        available_tools, allowed_tools = _build_claude_tool_lists(role)
+    else:
+        available_tools, allowed_tools = [], []
+
     options = AgentOptions(
         role=role,
         agent_id=agent_id,
@@ -276,17 +318,8 @@ async def spawn_subagent(
         system_prompt=system_prompt,
         boot_prompt=boot_prompt(role),
         mcp_url=mcp_url,
-        available_tools=(
-            CLAUDE_TOOL_WHITELISTS[role].split(",")
-            if role in CLAUDE_TOOL_WHITELISTS else []
-        ),
-        # allowed_tools: claude requires pre-approval for MCP+Bash; others
-        # have no equivalent flag and leave this empty.
-        allowed_tools=(
-            ["mcp__koan__*", "Bash"]
-            if (installation is not None and installation.runner_type == "claude")
-            else []
-        ),
+        available_tools=available_tools,
+        allowed_tools=allowed_tools,
         project_dir=task.get("project_dir", ""),
         run_dir=task.get("run_dir", ""),
         additional_dirs=task.get("additional_dirs", []),

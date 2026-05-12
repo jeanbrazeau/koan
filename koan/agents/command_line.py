@@ -1,8 +1,7 @@
 # CommandLineAgent -- wraps koan.runners.Runner instances behind the Agent Protocol.
 #
-# Covers codex and gemini runner types. Claude uses ClaudeSDKAgent (koan/agents/claude.py)
-# since M2; koan/runners/claude.py is deleted. ClaudeRunner references and the
-# RunnerError translation block are removed.
+# Covers codex and gemini runner types only. Claude uses ClaudeSDKAgent
+# (koan/agents/claude.py); the dead claude branch has been removed.
 #
 # ALL koan.runners imports are lazy (inside functions/methods). This breaks the
 # otherwise circular import chain: codex.py and gemini.py import AgentDiagnostic
@@ -28,53 +27,7 @@ log = get_logger("command_line_agent")
 
 # -- Post-build args helpers ---------------------------------------------------
 # These helpers were previously in koan/subagent.py. They are pure functions
-# that compose runner-specific CLI flags; no I/O, no globals except
-# CLAUDE_TOOL_WHITELISTS from koan.subagent (imported at call time to avoid
-# a circular import).
-
-
-def _claude_post_build_args(
-    role: str,
-    run_dir: str,
-    project_dir: str,
-    additional_dirs: list[str],
-) -> list[str]:
-    """Compose claude-only post-build args: tool whitelist, slash-command disable,
-    strict MCP config, additional directories, and permission mode.
-
-    Returns a list of argv entries to append to a claude command. Pure function --
-    no I/O, no globals beyond the CLAUDE_TOOL_WHITELISTS module constant.
-
-    project_dir is listed before run_dir so the project is searched first.
-    additional_dirs (each --add-dir <PATH> at koan run startup) are emitted
-    after run_dir, in the order the user specified them. Empty strings
-    anywhere in the input are skipped to avoid passing --add-dir "".
-    """
-    # Import here to avoid circular import: subagent.py imports from agents/,
-    # so agents/ must not import from subagent.py at module level.
-    from ..subagent import CLAUDE_TOOL_WHITELISTS
-
-    args: list[str] = []
-    whitelist = CLAUDE_TOOL_WHITELISTS.get(role)
-    if whitelist is not None:
-        args.extend(["--tools", whitelist])
-    # --disable-slash-commands and --strict-mcp-config dropped in M2;
-    # ClaudeSDKAgent owns the Claude path and does not use these CLI flags.
-    # Add project and run directories so the CLI can read/edit files in both
-    # locations without prompting; acceptEdits gates writes at the tool level.
-    if project_dir:
-        args.extend(["--add-dir", project_dir])
-    if run_dir:
-        args.extend(["--add-dir", run_dir])
-    for extra in additional_dirs:
-        if extra:
-            args.extend(["--add-dir", extra])
-    # acceptEdits is safe for all roles: the CLAUDE_TOOL_WHITELISTS already
-    # restrict which roles receive Write/Edit in their tool vocabulary, so
-    # scouts cannot write even though the permission mode is permissive.
-    args.extend(["--permission-mode", "acceptEdits"])
-    args.extend(["--allowedTools", "mcp__koan__*,Bash"])
-    return args
+# that compose runner-specific CLI flags; no I/O, no globals.
 
 
 def _codex_post_build_args(
@@ -198,14 +151,7 @@ class CommandLineAgent:
 
         # Append per-runner post-build args (directory scoping, permission mode).
         runner_name = self._runner.name
-        if runner_name == "claude":
-            cmd.extend(_claude_post_build_args(
-                role=options.role,
-                run_dir=options.run_dir,
-                project_dir=options.project_dir,
-                additional_dirs=options.additional_dirs,
-            ))
-        elif runner_name == "codex":
+        if runner_name == "codex":
             cmd.extend(_codex_post_build_args(
                 run_dir=options.run_dir,
                 project_dir=options.project_dir,

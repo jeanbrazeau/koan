@@ -725,121 +725,74 @@ class TestBinaryNotFoundSpawn:
         assert diag_events[0]["code"] == "binary_not_found"
 
 
-# -- _claude_post_build_args --------------------------------------------------
+# -- _build_claude_tool_lists -------------------------------------------------
 
-class TestClaudePostBuildArgs:
-    """Unit tests for the pure _claude_post_build_args helper.
+class TestBuildClaudeToolLists:
+    """Unit tests for the _build_claude_tool_lists helper.
 
-    The helper composes claude-only argv entries without I/O. Tests exercise
-    the full whitelist/dir/permission_mode combinations directly.
+    The helper returns (available_tools, allowed_tools) for a
+    Claude subagent role, mirroring the per-role list and appending
+    mcp__koan__* to allowed_tools only.
     """
 
-    from koan.subagent import CLAUDE_TOOL_WHITELISTS as _WHITELISTS  # stays in subagent.py per Plan Decision 9
+    def test_orchestrator_lists_match_curation(self):
+        """The orchestrator gets the curated 8-tool list mirrored."""
+        from koan.subagent import _build_claude_tool_lists
+        available, allowed = _build_claude_tool_lists("orchestrator")
+        assert available == [
+            "Read", "Write", "Edit", "Bash",
+            "Glob", "Grep", "WebFetch", "WebSearch",
+        ]
+        # allowed mirrors available + the mcp namespace pattern.
+        assert allowed == available + ["mcp__koan__*"]
 
-    def test_orchestrator_full_args(self):
-        from koan.agents.command_line import _claude_post_build_args
-        from koan.subagent import CLAUDE_TOOL_WHITELISTS
-        args = _claude_post_build_args("orchestrator", "/run", "/proj", [])
-        assert "--tools" in args
-        tools_idx = args.index("--tools")
-        assert args[tools_idx + 1] == CLAUDE_TOOL_WHITELISTS["orchestrator"]
-        # --disable-slash-commands and --strict-mcp-config dropped in M2
-        # with koan/runners/claude.py; ClaudeSDKAgent does not use them.
-        assert "--add-dir" in args
-        # Both dirs present
-        add_dir_indices = [i for i, a in enumerate(args) if a == "--add-dir"]
-        add_dirs = [args[i + 1] for i in add_dir_indices]
-        assert "/proj" in add_dirs
-        assert "/run" in add_dirs
-        assert "--permission-mode" in args
-        pm_idx = args.index("--permission-mode")
-        assert args[pm_idx + 1] == "acceptEdits"
+    def test_executor_no_task_family(self):
+        """The executor list MUST NOT contain interactive Task* tools."""
+        from koan.subagent import _build_claude_tool_lists
+        available, allowed = _build_claude_tool_lists("executor")
+        assert available == ["Read", "Write", "Edit", "Bash", "Glob", "Grep"]
+        for dead in ("TaskCreate", "TaskUpdate", "TaskList",
+                     "TaskGet", "TaskStop", "TaskOutput"):
+            assert dead not in available
+            assert dead not in allowed
+        assert allowed == available + ["mcp__koan__*"]
 
-    def test_executor_gets_executor_whitelist(self):
-        from koan.agents.command_line import _claude_post_build_args
-        from koan.subagent import CLAUDE_TOOL_WHITELISTS
-        args = _claude_post_build_args("executor", "/run", "/proj", [])
-        tools_idx = args.index("--tools")
-        assert args[tools_idx + 1] == CLAUDE_TOOL_WHITELISTS["executor"]
+    def test_scout_minimal_set(self):
+        """The scout gets read+search+bash only."""
+        from koan.subagent import _build_claude_tool_lists
+        available, allowed = _build_claude_tool_lists("scout")
+        assert available == ["Read", "Bash", "Glob", "Grep"]
+        assert "Write" not in available
+        assert "Edit" not in available
+        assert allowed == available + ["mcp__koan__*"]
 
-    def test_scout_gets_scout_whitelist(self):
-        from koan.agents.command_line import _claude_post_build_args
-        from koan.subagent import CLAUDE_TOOL_WHITELISTS
-        args = _claude_post_build_args("scout", "/run", "/proj", [])
-        tools_idx = args.index("--tools")
-        assert args[tools_idx + 1] == CLAUDE_TOOL_WHITELISTS["scout"]
+    def test_unknown_role_returns_empty(self):
+        """Unknown roles return empty lists -- non-Claude runners path."""
+        from koan.subagent import _build_claude_tool_lists
+        available, allowed = _build_claude_tool_lists("bogus")
+        assert available == []
+        assert allowed == []
 
-    def test_unknown_role_omits_tools_flag(self):
-        from koan.agents.command_line import _claude_post_build_args
-        args = _claude_post_build_args("bogus", "/run", "/proj", [])
-        assert "--tools" not in args
+    def test_returned_lists_are_independent_copies(self):
+        """Callers may mutate either list without aliasing."""
+        from koan.subagent import _build_claude_tool_lists
+        available, allowed = _build_claude_tool_lists("orchestrator")
+        available.append("Mutated")
+        # allowed must not have observed the mutation
+        assert "Mutated" not in allowed
+        # Subsequent calls return fresh copies as well.
+        available2, _ = _build_claude_tool_lists("orchestrator")
+        assert "Mutated" not in available2
 
-    def test_empty_run_dir_skipped(self):
-        from koan.agents.command_line import _claude_post_build_args
-        args = _claude_post_build_args("orchestrator", "", "/proj", [])
-        add_dir_indices = [i for i, a in enumerate(args) if a == "--add-dir"]
-        add_dirs = [args[i + 1] for i in add_dir_indices]
-        assert "/proj" in add_dirs
-        assert "" not in add_dirs
-
-    def test_empty_project_dir_skipped(self):
-        from koan.agents.command_line import _claude_post_build_args
-        args = _claude_post_build_args("orchestrator", "/run", "", [])
-        add_dir_indices = [i for i, a in enumerate(args) if a == "--add-dir"]
-        add_dirs = [args[i + 1] for i in add_dir_indices]
-        assert "/run" in add_dirs
-        assert "" not in add_dirs
-
-    def test_both_dirs_empty(self):
-        from koan.agents.command_line import _claude_post_build_args
-        args = _claude_post_build_args("orchestrator", "", "", [])
-        assert "--add-dir" not in args
-
-    def test_permission_mode_always_present(self):
-        from koan.agents.command_line import _claude_post_build_args
-        # Even with empty dirs and unknown role, permission mode is always set.
-        args = _claude_post_build_args("bogus", "", "", [])
-        assert "--permission-mode" in args
-        pm_idx = args.index("--permission-mode")
-        assert args[pm_idx + 1] == "acceptEdits"
-
-    def test_koan_mcp_tools_preapproved(self):
-        from koan.agents.command_line import _claude_post_build_args
-        # Every role must have koan MCP calls pre-approved so the CLI does not
-        # prompt for permission on koan_* tools.
-        for role in ("orchestrator", "executor", "scout", "bogus"):
-            args = _claude_post_build_args(role, "/run", "/proj", [])
-            assert "--allowedTools" in args, role
-            at_idx = args.index("--allowedTools")
-            assert args[at_idx + 1] == "mcp__koan__*,Bash", role
-
-
-    def test_additional_dirs_emitted_after_run_dir(self):
-        from koan.agents.command_line import _claude_post_build_args
-        args = _claude_post_build_args(
-            "orchestrator", "/run", "/proj", ["/extra1", "/extra2"]
-        )
-        add_dir_indices = [i for i, a in enumerate(args) if a == "--add-dir"]
-        add_dirs = [args[i + 1] for i in add_dir_indices]
-        assert add_dirs == ["/proj", "/run", "/extra1", "/extra2"]
-
-    def test_additional_dirs_empty_strings_skipped(self):
-        from koan.agents.command_line import _claude_post_build_args
-        args = _claude_post_build_args(
-            "orchestrator", "/run", "/proj", ["", "/real", ""]
-        )
-        add_dir_indices = [i for i, a in enumerate(args) if a == "--add-dir"]
-        add_dirs = [args[i + 1] for i in add_dir_indices]
-        assert add_dirs == ["/proj", "/run", "/real"]
-        assert "" not in add_dirs
-
-    def test_additional_dirs_default_empty(self):
-        from koan.agents.command_line import _claude_post_build_args
-        # Existing behavior preserved: empty list adds nothing beyond proj/run.
-        args = _claude_post_build_args("orchestrator", "/run", "/proj", [])
-        add_dir_indices = [i for i, a in enumerate(args) if a == "--add-dir"]
-        add_dirs = [args[i + 1] for i in add_dir_indices]
-        assert add_dirs == ["/proj", "/run"]
+    def test_no_role_is_granted_agent_or_todowrite(self):
+        """Cross-role invariant: Agent and TodoWrite must be denied."""
+        from koan.subagent import _build_claude_tool_lists
+        for role in ("orchestrator", "executor", "scout"):
+            available, allowed = _build_claude_tool_lists(role)
+            assert "Agent" not in available
+            assert "Agent" not in allowed
+            assert "TodoWrite" not in available
+            assert "TodoWrite" not in allowed
 
 
 class TestCodexPostBuildArgs:

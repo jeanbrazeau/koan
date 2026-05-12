@@ -124,11 +124,17 @@ during brief-generation step 1 (the read step).
 
 **CLI tool whitelists (per agent type):**
 
-| Role         | Built-in tools                                                                                                               |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------- |
-| orchestrator | `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, `WebFetch`, `WebSearch`                                                     |
-| executor     | `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, `TaskCreate`, `TaskUpdate`, `TaskList`, `TaskGet`, `TaskStop`, `TaskOutput` |
-| scout        | `Read`, `Bash`, `Glob`, `Grep`                                                                                               |
+| Role         | Built-in tools                                                           |
+| ------------ | ------------------------------------------------------------------------ |
+| orchestrator | `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`, `WebFetch`, `WebSearch` |
+| executor     | `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`                          |
+| scout        | `Read`, `Bash`, `Glob`, `Grep`                                           |
+
+The same per-role list is passed as both Claude's `--tools` (visible vocabulary)
+and `--allowedTools` (auto-approved subset); the two fields are kept identical by
+design. The MCP namespace pattern `mcp__koan__*` is additionally appended to
+`--allowedTools` so koan MCP tool calls auto-approve. See
+`_build_claude_tool_lists` in `koan/subagent.py`.
 
 **MCP permission fence -- orchestrator tool availability by phase:**
 
