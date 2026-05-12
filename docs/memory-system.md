@@ -33,11 +33,12 @@ Koan's memory is fundamentally different:
   curation workflow. Every entry is human-reviewed before it enters
   memory.
 
-- **Structured, not atomic.** Each entry is 100–500 tokens of
-  self-contained prose — an architectural decision with rationale
-  and alternatives, not an atomic fact like "user prefers coffee."
-  The grain size is justified by EMem's neo-Davidsonian argument:
-  relational knowledge must stay bundled (Zhou et al., 2025).
+- **Structured, not atomic.** Each entry is a self-contained unit
+  carrying the knowledge its type requires — an architectural
+  decision with rationale and alternatives, not an atomic fact like
+  "user prefers coffee." The grain size is justified by EMem's
+  neo-Davidsonian argument: relational knowledge must stay bundled
+  (Zhou et al., 2025).
 
 - **The producer and consumer are LLMs.** The primary reader of
   memory entries is the intake agent at the start of the next
@@ -93,19 +94,50 @@ A file's presence is its status. If a file exists in `.koan/memory/`,
 it is active knowledge. The `koan_forget` tool deletes the file.
 Git preserves the history of anything removed.
 
+### Title writing
+
+Titles participate in the embedding text
+(`# {title}\ntype: {type}\n\n{body}` in
+`koan/memory/retrieval/index.py`). They are not just labels — they
+are the sharpest single line of the entry and carry embedding signal
+alongside the body.
+
+Titles read as factual headlines that name the specific decision,
+lesson, procedure, or context fact. They name a subsystem and a
+claim in one line, not just the topic.
+
+Good titles:
+
+- "PostgreSQL 16.2 chosen over SQLite for auth service due to
+  concurrent-write load"
+- "AGENTS.md describing functions that do not yet exist creates
+  implicit pressure on executors"
+- "All state file writes use atomic tmp-file + os.rename()"
+
+Bad titles:
+
+- "Memory system" — topic without a claim
+- "PostgreSQL decision" — vague, no claim
+- "Curation phase improvements" — vague, no specifics
+
+No length cap. Titles are as long as the claim requires.
+
 ### Prose body
 
-Everything after the frontmatter is the prose body, written in
-event-style following the writing discipline described below.
+Everything after the frontmatter is the prose body, written
+following the writing discipline described below.
 
-**The first 1–3 sentences must situate the entry in the project.**
-This follows Anthropic's contextual retrieval technique, which
+**The entry must be retrievable without external state.** This
+follows Anthropic's contextual retrieval technique, which
 demonstrated a 35% reduction in retrieval failures when contextual
-information is prepended to chunks before embedding. Because the
-entire file is embedded as a single chunk for retrieval, these
-opening sentences become part of the embedding and improve search
-matching. They are not a separate field — they are the natural
-opening of the prose, written as part of the body.
+information is present in the embedded chunk. Because the entire
+file is embedded as a single chunk for retrieval, the body should
+contain enough specific context — named subsystems, file paths,
+decision names — that the embedding has anchor signal and the entry
+is interpretable standalone. How this is achieved (a situating
+opening, a sharp title, concrete naming throughout the body) is the
+writer's choice. Vague openings without specific entities
+("This system...", "The project...") hurt retrieval.
 
 ### Complete example
 
@@ -118,43 +150,56 @@ modified: 2026-04-10T14:23:00Z
 related: [0002-infrastructure.md]
 ---
 
-This entry documents the choice of primary data store for the
-authentication service in TrapperKeeper, a distributed data firewall.
-
-On 2026-04-10, user decided to migrate the auth service from SQLite
-to PostgreSQL 16.2. Rationale: SQLite could not handle concurrent
-write loads from the new worker pool (>50 connections). Alternatives
-rejected: SQLite WAL mode (single-writer limitation), CockroachDB
-(operational complexity too high for a two-person team). Decision
-surfaced during intake when user described timeout errors under load.
+TrapperKeeper auth service -- user decided to migrate from SQLite to
+PostgreSQL 16.2 on 2026-04-10. Rationale: SQLite could not handle
+concurrent write loads from the new worker pool (>50 connections).
+Alternatives rejected: SQLite WAL mode (single-writer limitation),
+CockroachDB (operational complexity too high for a two-person team).
+Decision surfaced during intake when user described timeout errors
+under load.
 ```
 
 ---
 
 ## Writing discipline
 
-All memories are written as **temporally grounded, absolute facts**.
-This quality discipline is validated by SimpleMem (Liu et al., 2026),
-whose ablation showed that removing temporal normalization and
-coreference resolution reduced Temporal F1 by 56.7%. The EMem paper
-(Zhou et al., 2025, "A Simple Yet Strong Baseline for Long-Term
-Conversational Memory of LLM Agents") grounds this in neo-Davidsonian
-event semantics: treating events as single units with multiple
-arguments outperforms decomposing them into relation triples.
+Memory entries follow a writing discipline organized around what
+content each type must carry. The EMem paper (Zhou et al., 2025,
+"A Simple Yet Strong Baseline for Long-Term Conversational Memory
+of LLM Agents") grounds the structure in neo-Davidsonian event
+semantics: treating events as single units with multiple arguments
+outperforms decomposing them into relation triples. This argument
+applies most forcefully to decisions, where rationale, rejected
+alternatives, and surfacing context must stay bundled to preserve
+the knowledge's coherence.
+
+Temporal context lives in the entry's frontmatter `created` and
+`modified` fields, which `koan/memory/writer.py` populates
+automatically. Prose dates may appear when a specific date is itself
+part of the rationale or anchors a load-bearing fact (e.g., "the
+migration on 2026-04-10 failed because..."), but embedding a date
+in every claim is not required.
 
 ### Rules
 
-1. **Every statement includes a date.** The date the fact became true
-   or was observed. Temporal grounding makes every entry a historical
-   fact that remains true regardless of when it is read.
+1. **Situate for retrieval.** The entry should contain enough
+   specific context — named subsystems, file paths, decision names —
+   that the embedding has anchor signal and the entry is interpretable
+   standalone. A sharp title, concrete entity names in the body, or
+   both achieve this. Vague openings without specific entities
+   ("This system...", "The project...") hurt retrieval.
 
-2. **Attribute claims to their source.** "User stated...", "LLM
-   inferred...", "Post-mortem identified...". Source attribution lives
-   in the prose, not in metadata fields. User-stated facts carry
-   higher trust than LLM-inferred facts.
+2. **Attribute when it affects trust calibration.** User-stated facts
+   carry higher trust than LLM-inferred facts; name the source when
+   the distinction matters. Anonymous attribution ("it was decided")
+   still fails for decisions. Background facts, lessons, and
+   procedures may carry no attribution and should read as standalone
+   knowledge.
 
-3. **No forward-looking language.** Not "we will" but "On [date], user
-   stated the plan was to...".
+3. **No forward-looking language.** Entries record what has happened
+   or what is observed, not plans for the future. Rationale that
+   something "should" or "must" be done belongs inside a past-tense
+   framing of the decision that established the rule.
 
 4. **Name things concretely.** Not "the database" but "PostgreSQL 16.2"
    or "the auth service's primary data store."
@@ -168,10 +213,105 @@ Bad — relative, will become stale:
 
 > We use PostgreSQL for the auth service.
 
-Good — temporally grounded, always true as a historical fact:
+Good — concrete naming, rationale, rejected alternatives, standalone:
 
-> On 2026-04-10, user decided to use PostgreSQL 16.2 for the auth
-> service's data storage, replacing SQLite.
+> The auth service in TrapperKeeper uses PostgreSQL 16.2 as its
+> primary data store. Chosen over SQLite because concurrent write
+> loads from the worker pool (>50 connections) exceeded SQLite's
+> single-writer limit. Alternatives rejected: SQLite WAL mode
+> (single-writer limitation persists), CockroachDB (operational
+> complexity too high for a two-person team). Decision surfaced
+> during intake when user described timeout errors under load.
+
+---
+
+## Per-type writing guidelines
+
+Each memory type has a characteristic content shape. Length follows
+the content the entry must carry; there is no token target. The four
+types are defined in the section below; this section describes how
+each is written.
+
+### Decision
+
+A decision entry must carry: the choice, the rationale (why this
+over alternatives), the rejected alternatives and why they failed,
+and the surfacing context (how the decision came up). These elements
+must stay bundled — splitting rationale and rejected alternatives
+into separate entries destroys the coherence of the knowledge.
+
+Shape: `[Subsystem] -- [actor] decided [choice]. Rationale: [why].
+Alternatives rejected: [list with reasons]. Decision surfaced [when
+and how].`
+
+Example:
+
+> TrapperKeeper auth service -- user decided to migrate from SQLite
+> to PostgreSQL 16.2. Rationale: concurrent write loads from the
+> worker pool (>50 connections) exceeded SQLite's single-writer
+> capacity. Alternatives rejected: SQLite WAL mode (single-writer
+> limitation persists under high connection counts), CockroachDB
+> (operational complexity too high for a two-person team). Decision
+> surfaced during intake when user described timeout errors under
+> load.
+
+### Context
+
+A context entry must carry: the specific stable fact (with concrete
+entity names) and one sentence on why it matters for future agents.
+
+Shape: `[Subsystem / project area] -- [specific fact with concrete
+names]. This matters because [consequence for agents].`
+
+Example:
+
+> TrapperKeeper deployment -- secrets are managed via `.env` files
+> loaded by docker-compose; they must never appear in
+> `docker-compose.yml` or version control. This matters because
+> executors writing docker-compose changes may inadvertently inline
+> secrets if unaware of this constraint.
+
+### Lesson
+
+A lesson entry must carry: what happened (the concrete event), the
+root cause (not symptoms), and the prevention rule or procedure that
+follows.
+
+Shape: `[Subsystem] -- [what happened]. Root cause: [why].
+Prevention: [rule or procedure to prevent recurrence, or "see
+procedure NNNN" if a paired procedure exists].`
+
+Example:
+
+> User-management service deployment -- a feature branch added a
+> `last_seen_at` column to the ORM model but omitted the Alembic
+> migration. Local tests passed because the local test database was
+> SQLite, which auto-creates columns from ORM definitions. Staging
+> deployment failed when PostgreSQL rejected inserts for the missing
+> column. Root cause: test harness used a different database engine
+> than production, hiding schema drift at merge time. Prevention:
+> run all Alembic migrations against an empty PostgreSQL instance in
+> CI before test suites execute.
+
+### Procedure
+
+A procedure entry must carry: the triggering condition, the rule or
+action, and (where useful) the consequence of violating it. This is
+the type closest to a sharp factual rule — trigger condition,
+mechanism, consequence, and (where relevant) the counter-frame
+showing what the wrong approach looks like.
+
+Shape: `[Subsystem] -- when [trigger condition], [action / rule].
+Violating this leads to [consequence].`
+
+Example:
+
+> CI pipeline -- before any database migration lands in a branch,
+> run all pending Alembic migrations against an empty PostgreSQL
+> instance as a CI step. The wrong approach is relying on
+> ORM-level auto-migration or local test databases that diverge
+> from the production engine. Violating this leads to schema drift
+> that passes local tests and fails on staging or production.
 
 ---
 
@@ -484,52 +624,40 @@ framing and rationale that make entries valuable.
 
 ### Entry grain size
 
-Each memory entry is 100–500 tokens: large enough to be
-self-contained, small enough that retrieving 3–5 entries fits within
-a reasonable token budget. This grain size is a deliberate design
-choice supported by three converging arguments.
+An entry is large enough to carry the content its type requires.
+The grain follows the content; there is no token target.
 
-**Empirical evidence on chunk size.** Mem0's benchmark (Table 2)
-shows that for atomic factual queries, small chunks (128–256 tokens)
-outperform large chunks (1024–2048 tokens) by ~32% when retrieving
-a single result. However, this data comes from conversational memory
-where answers are individual facts ("Alice's job is X"). Koan's
-knowledge is structurally different — a decision entry bundles a
-choice with its rationale, rejected alternatives, and surfacing
-context. These elements are not independent facts; they are one
-coherent unit of knowledge.
+**The neo-Davidsonian argument (Zhou et al., EMem 2025).** For
+decisions, this means bundling the choice, rationale, rejected
+alternatives, and surfacing context as one entry. When knowledge is
+relational — when the value lies in connections between elements —
+atomizing it into independent facts destroys the structure that
+makes it useful. If a decision ("chose PostgreSQL over SQLite due to
+concurrency, rejecting CockroachDB for operational complexity") is
+split into three separate atomic facts, a query about CockroachDB
+retrieves the CockroachDB fact but loses the decision context. The
+retriever would need to find all three facts and the LLM would need
+to reassemble them, requiring multi-hop reasoning at query time —
+the operation that degrades performance most across all benchmarks.
 
-**The neo-Davidsonian argument (Zhou et al., EMem 2025).** When
-knowledge is relational — when the value lies in connections between
-elements — atomizing it into independent facts destroys the
-structure that makes it useful. If a decision ("chose PostgreSQL
-over SQLite due to concurrency, rejecting CockroachDB for
-operational complexity") is split into three separate atomic facts,
-a query about CockroachDB retrieves the CockroachDB fact but loses
-the decision context. The retriever would need to find all three
-facts and the LLM would need to reassemble them, requiring
-multi-hop reasoning at query time — the operation that degrades
-performance most across all benchmarks.
+**Per-type grain.** For lessons, procedures, and context entries,
+the grain is the natural size of the knowledge: a lesson carries
+event + root cause + prevention; a procedure carries trigger + rule
 
-**Koan's knowledge is inherently relational.** Koan stores
-architectural decisions with rationale and alternatives, lessons
-with root causes and prevention strategies, procedures with
-conditionals and scope boundaries. These are not atomic preferences
-("user prefers tabs over spaces") — they are structured arguments
-where the rationale, the alternatives, and the context are all
-essential to the entry's value. The grain must be large enough to
-keep the relations intact within each entry, while small enough
-that a few retrieved entries fit the token budget.
+- consequence; a context entry carries the stable fact and why it
+  matters. These are typically tighter than decisions because the
+  structure is simpler.
 
-The grain size is therefore not "as small as possible" but "as
-small as possible while preserving the coherence of each knowledge
-unit." For koan's content type, that is 100–500 tokens per entry.
+The grain must keep the relations within each entry intact. Entries
+that omit rationale, root cause, or triggering conditions lose the
+value that makes them worth retrieving. Retrieving 3–5 entries at
+natural grain size fits within a reasonable context budget for most
+knowledge bases.
 
 ### Indexing
 
 The sync layer watches `.koan/memory/` and indexes each individual
-entry file as a single chunk. Because entries are written to be
-self-contained and are typically 100–500 tokens, most entries can
+entry file as a single chunk. Because entries are written to be self-contained, most entries can
 be embedded whole without further chunking.
 
 For each entry, the sync layer:
