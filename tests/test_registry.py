@@ -23,11 +23,23 @@ def _codex_models() -> list[ModelInfo]:
     ]
 
 def _claude_models() -> list[ModelInfo]:
-    all_modes = frozenset({"disabled", "low", "medium", "high", "xhigh"})
+    # Per-model thinking modes: Opus supports xhigh and max; Sonnet/Haiku do not.
     return [
-        ModelInfo(alias="opus", display_name="Opus", thinking_modes=all_modes, tier_hint="strong"),
-        ModelInfo(alias="sonnet", display_name="Sonnet", thinking_modes=all_modes, tier_hint="standard"),
-        ModelInfo(alias="haiku", display_name="Haiku", thinking_modes=frozenset({"disabled", "low"}), tier_hint="cheap"),
+        ModelInfo(
+            alias="opus", display_name="Opus",
+            thinking_modes=frozenset({"disabled", "low", "medium", "high", "xhigh", "max"}),
+            tier_hint="strong",
+        ),
+        ModelInfo(
+            alias="sonnet", display_name="Sonnet",
+            thinking_modes=frozenset({"disabled", "low", "medium", "high"}),
+            tier_hint="standard",
+        ),
+        ModelInfo(
+            alias="haiku", display_name="Haiku",
+            thinking_modes=frozenset({"disabled", "low"}),
+            tier_hint="cheap",
+        ),
     ]
 
 def _gemini_models() -> list[ModelInfo]:
@@ -213,6 +225,72 @@ class TestResolveInstallation:
         with pytest.raises(AgentError) as exc_info:
             reg.resolve_installation("claude", config)
         assert exc_info.value.diagnostic.code == "no_installation"
+
+
+# -- resolve_agent_config: role-effort wiring and clamping --------------------
+
+class TestResolveAgentConfigThinking:
+    """Pins the claude/gemini thinking mode resolution split introduced in M3."""
+
+    def _make_config(self, inst, profile):
+        return KoanConfig(
+            agent_installations=[inst],
+            profiles=[profile],
+            active_profile=profile.name,
+        )
+
+    def test_resolve_agent_config_claude_uses_role_effort(self, tmp_path):
+        """Claude ignores ProfileTier.thinking and derives effort from ROLE_EFFORT[role].
+
+        Opus advertises max; orchestrator maps to max in ROLE_EFFORT, so no clamping
+        occurs and the returned thinking mode is max regardless of the profile's thinking.
+        """
+        binary = tmp_path / "claude"
+        binary.touch()
+        inst = AgentInstallation(alias="claude", runner_type="claude", binary=str(binary))
+        profile = Profile(name="test", tiers={
+            "strong": ProfileTier(runner_type="claude", model="opus[1m]", thinking="low"),
+        })
+        config = self._make_config(inst, profile)
+        reg = AgentRegistry()
+        _, _, thinking = reg.resolve_agent_config(role="orchestrator", config=config)
+        # ROLE_EFFORT["orchestrator"] == "max"; Opus advertises max; no clamp.
+        assert thinking == "max"
+
+    def test_resolve_agent_config_claude_clamps_on_sonnet(self, tmp_path):
+        """Sonnet does not advertise max; orchestrator's max request is clamped to high.
+
+        The clamp is deterministic and observable (log line emitted). ProfileTier.thinking
+        is not consulted; clamping is driven solely by ROLE_EFFORT and per-model thinking_modes.
+        """
+        binary = tmp_path / "claude"
+        binary.touch()
+        inst = AgentInstallation(alias="claude", runner_type="claude", binary=str(binary))
+        profile = Profile(name="test", tiers={
+            "strong": ProfileTier(runner_type="claude", model="sonnet", thinking="low"),
+        })
+        config = self._make_config(inst, profile)
+        reg = AgentRegistry()
+        _, _, thinking = reg.resolve_agent_config(role="orchestrator", config=config)
+        # ROLE_EFFORT["orchestrator"] == "max"; Sonnet max supported is "high"; clamped.
+        assert thinking == "high"
+
+    def test_resolve_agent_config_gemini_uses_profile_thinking(self, tmp_path):
+        """Gemini reads ProfileTier.thinking unchanged; ROLE_EFFORT is not consulted.
+
+        This confirms that the claude-side decoupling does not affect the gemini path.
+        """
+        binary = tmp_path / "gemini"
+        binary.touch()
+        inst = AgentInstallation(alias="gemini", runner_type="gemini", binary=str(binary))
+        profile = Profile(name="test", tiers={
+            "strong": ProfileTier(runner_type="gemini", model="gemini-pro", thinking="low"),
+        })
+        config = self._make_config(inst, profile)
+        reg = AgentRegistry()
+        _, _, thinking = reg.resolve_agent_config(role="orchestrator", config=config)
+        # ProfileTier.thinking="low"; gemini does not consult ROLE_EFFORT.
+        assert thinking == "low"
 
 
 # -- save_koan_config write lock -----------------------------------------------

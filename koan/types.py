@@ -48,7 +48,7 @@ StoryStatus = Literal[
 
 DEFAULT_MAX_RETRIES = 2
 
-ThinkingMode = Literal["disabled", "low", "medium", "high", "xhigh"]
+ThinkingMode = Literal["disabled", "low", "medium", "high", "xhigh", "max"]
 
 
 @dataclass
@@ -89,4 +89,17 @@ ROLE_MODEL_TIER: dict[SubagentRole, ModelTier] = {
     "orchestrator": "strong",
     "planner": "strong",
     "executor": "standard",
+}
+
+# Role-keyed effort assignment for the Claude branch of resolve_agent_config.
+# Gemini and codex continue to read ProfileTier.thinking; only Claude consults this table.
+# Every SubagentRole member has an explicit entry so that adding a new role without
+# an effort decision fails fast (KeyError) rather than silently using a default.
+# A future "reviewer" role should map to "max" when added to SubagentRole.
+ROLE_EFFORT: dict[SubagentRole, ThinkingMode] = {
+    "intake": "max",
+    "scout": "medium",
+    "orchestrator": "max",
+    "planner": "max",
+    "executor": "medium",
 }

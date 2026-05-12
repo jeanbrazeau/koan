@@ -28,15 +28,6 @@ if TYPE_CHECKING:
 log = get_logger("claude_sdk_agent")
 
 
-# Map internal thinking mode names to SDK effort values.
-# xhigh -> max is the opus-only extended-thinking alias (preserved from ClaudeRunner).
-_EFFORT_MAP: dict[str, str] = {
-    "low": "low",
-    "medium": "medium",
-    "high": "high",
-    "xhigh": "max",
-}
-
 # Canonical tool name mappings for Claude's tool vocabulary.
 # Migrated verbatim from koan/runners/claude.py.
 _TOOL_NAME_MAP: dict[str, str] = {
@@ -313,6 +304,15 @@ class ClaudeSDKAgent:
         run() call time so it is tied to this specific invocation rather than
         the Agent instance, which could in principle be reused.
 
+        Thinking configuration: when options.thinking is non-disabled, the SDK
+        call passes thinking={"type": "adaptive", "display": "summarized"} and
+        effort=options.thinking (the ThinkingMode value is passed directly since
+        koan's literal now matches the SDK's effort literal one-for-one). When
+        options.thinking is "disabled" or None, thinking={"type": "disabled"} is
+        passed and effort is omitted. The "display": "summarized" field requests
+        Anthropic-summarized thinking text (maximized visibility); it is silently
+        ignored on non-Opus models where raw thinking text already surfaces.
+
         SDK errors are mapped to AgentError per the diagnostic mapping table
         in tech-plan.md: CLINotFoundError->binary_not_found,
         CLIConnectionError->sdk_connect_failed, ProcessError->agent_process_failed,
@@ -399,11 +399,18 @@ class ClaudeSDKAgent:
                 }
             }
 
-        # Map AgentOptions.thinking to the SDK effort field.
-        # When thinking is 'disabled' or None, omit effort entirely (None means
-        # the SDK default, not the string "none"). Other values map directly.
-        thinking = options.thinking
-        effort = _EFFORT_MAP.get(thinking) if thinking and thinking != "disabled" else None
+        # Build the SDK thinking config from options.thinking.
+        # koan's ThinkingMode literal now matches the SDK's effort literal
+        # one-for-one for non-disabled values, so no mapping dict is needed.
+        # "display": "summarized" requests Anthropic-summarized text on Opus;
+        # it is silently ignored on other models (raw thinking text surfaces regardless).
+        thinking_mode = options.thinking
+        if thinking_mode is None or thinking_mode == "disabled":
+            thinking_cfg: dict = {"type": "disabled"}
+            effort_val: str | None = None
+        else:
+            thinking_cfg = {"type": "adaptive", "display": "summarized"}
+            effort_val = thinking_mode
 
         stderr_callback = self._stderr_lines.append
 
@@ -436,7 +443,8 @@ class ClaudeSDKAgent:
             hooks={"PostToolUse": [HookMatcher(matcher=None, hooks=[post_tool_use_hook])]},
             include_partial_messages=True,
             cli_path=options.installation.binary if options.installation else None,
-            effort=effort,
+            thinking=thinking_cfg,
+            effort=effort_val,
             stderr=stderr_callback,
         )
 
@@ -616,23 +624,33 @@ class ClaudeSDKAgent:
         The model list is static; no SDK call is needed. The installation
         parameter is accepted for Protocol conformance but not used. The alias
         'opus[1m]' is preserved verbatim -- registry profiles and tests reference it.
+
+        Per-model thinking_modes reflect actual SDK support. Opus advertises the
+        full vocabulary including 'xhigh' (Opus-4.7-specific) and 'max'. Sonnet
+        and Haiku advertise only up to 'high' -- 'xhigh' falls back to 'high'
+        in the SDK, but koan's resolver (resolve_agent_config / _claude_clamp)
+        clamps explicitly via _best_supported_thinking rather than relying on the
+        SDK's silent fallback, so these models must not advertise xhigh or max.
         """
         return [
             ModelInfo(
                 alias="opus[1m]",
                 display_name="Opus",
-                thinking_modes=frozenset({"disabled", "low", "medium", "high", "xhigh"}),
+                # xhigh is Opus-4.7-specific; max is the highest effort level.
+                thinking_modes=frozenset({"disabled", "low", "medium", "high", "xhigh", "max"}),
                 tier_hint="strong",
             ),
             ModelInfo(
                 alias="sonnet",
                 display_name="Sonnet",
+                # Sonnet does not support xhigh or max; resolver clamps explicitly.
                 thinking_modes=frozenset({"disabled", "low", "medium", "high"}),
                 tier_hint="standard",
             ),
             ModelInfo(
                 alias="haiku",
                 display_name="Haiku",
+                # Haiku does not support xhigh or max; resolver clamps explicitly.
                 thinking_modes=frozenset({"disabled", "low", "medium", "high"}),
                 tier_hint="cheap",
             ),

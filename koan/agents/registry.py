@@ -8,9 +8,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from ..logger import get_logger
 from ..probe import ProbeResult
 from ..types import (
     BUILTIN_PROFILE_NAMES,
+    ROLE_EFFORT,
     ROLE_MODEL_TIER,
     AgentInstallation,
     ModelInfo,
@@ -26,6 +28,8 @@ if TYPE_CHECKING:
     from ..config import KoanConfig
     from ..state import AppState
     from ..types import SubagentRole
+
+log = get_logger("agent_registry")
 
 
 # -- Built-in profile definitions ----------------------------------------------
@@ -52,7 +56,7 @@ _TIER_DEFAULT_THINKING: dict[ModelTier, ThinkingMode] = {
     "cheap": "disabled",
 }
 
-_THINKING_RANK: list[ThinkingMode] = ["disabled", "low", "medium", "high", "xhigh"]
+_THINKING_RANK: list[ThinkingMode] = ["disabled", "low", "medium", "high", "xhigh", "max"]
 
 
 def _best_supported_thinking(
@@ -208,6 +212,12 @@ class AgentRegistry:
 
         Reads the active profile from config, selects the tier for role, and
         resolves the installation. Raises AgentError on any resolution failure.
+
+        Thinking mode resolution branches on runner_type:
+        - claude: reads ROLE_EFFORT[role] and clamps via _claude_clamp against the
+          resolved model's advertised thinking_modes. ProfileTier.thinking is not
+          consulted for claude; effort is role-keyed.
+        - gemini/codex: returns ProfileTier.thinking unchanged, as before.
         """
         tier = ROLE_MODEL_TIER.get(role, "standard")
 
@@ -245,7 +255,52 @@ class AgentRegistry:
         installation = self.resolve_installation(
             profile_tier.runner_type, config, run_installations,
         )
-        return installation, profile_tier.model, profile_tier.thinking
+
+        # Branch on runner_type: claude derives effort from ROLE_EFFORT[role] and
+        # clamps against per-model thinking_modes. Gemini and codex keep reading
+        # ProfileTier.thinking so their existing thinking configuration is unchanged.
+        if profile_tier.runner_type == "claude":
+            requested = ROLE_EFFORT[role]
+            thinking = self._claude_clamp(installation, profile_tier.model, role, requested)
+        else:
+            thinking = profile_tier.thinking
+        return installation, profile_tier.model, thinking
+
+    def _claude_clamp(
+        self,
+        installation: AgentInstallation,
+        model_alias: str,
+        role: SubagentRole,
+        requested: ThinkingMode,
+    ) -> ThinkingMode:
+        """Clamp the requested ThinkingMode to the highest mode the model advertises.
+
+        Lazy-imports ClaudeSDKAgent to avoid the circular import cycle that arises
+        when koan/agents/registry.py is evaluated during koan/agents/__init__.py
+        initialization (same discipline as get_agent).
+
+        Calls ClaudeSDKAgent.list_models(installation) to get per-model thinking_modes,
+        finds the ModelInfo for model_alias, and delegates to _best_supported_thinking.
+        Emits an INFO log when an actual clamp occurs (requested != clamped) so the
+        downgrade is observable.
+
+        If model_alias is not found in the advertised list (defensive path), returns
+        requested unchanged rather than raising. Brief decision 8 mandates explicit
+        clamping over silent SDK downgrade.
+        """
+        from .claude import ClaudeSDKAgent  # lazy -- avoids circular import at module load
+        models = ClaudeSDKAgent.list_models(installation)
+        model_info = next((m for m in models if m.alias == model_alias), None)
+        if model_info is None:
+            # Model alias not advertised; return requested unchanged (defensive path).
+            return requested
+        clamped = _best_supported_thinking(model_info.thinking_modes, requested)
+        if clamped != requested:
+            log.info(
+                "claude effort clamped | role=%s model=%s requested=%s clamped=%s",
+                role, model_alias, requested, clamped,
+            )
+        return clamped
 
 
 # -- Built-in profile computation ----------------------------------------------

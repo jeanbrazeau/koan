@@ -198,11 +198,13 @@ class TestGeminiRunnerThinkingMode:
         idx = cmd.index("--thinking-mode")
         assert cmd[idx + 1] == "high"
 
-    def test_xhigh_raises_agent_error(self, tmp_path):
+    @pytest.mark.parametrize("mode", ["xhigh", "max"])
+    def test_unsupported_thinking_mode_for_gemini(self, tmp_path, mode):
+        """Gemini rejects both xhigh and max; neither is in its supported set."""
         runner = GeminiRunner(subagent_dir=str(tmp_path))
         with pytest.raises(AgentError) as exc_info:
             runner.build_command(
-                "p", "http://x/mcp", _install("gemini"), "gemini-pro", "xhigh",
+                "p", "http://x/mcp", _install("gemini"), "gemini-pro", mode,
             )
         assert exc_info.value.diagnostic.code == "unsupported_thinking_mode"
 

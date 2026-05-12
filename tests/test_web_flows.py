@@ -26,11 +26,13 @@ def _make_probe_results() -> list[ProbeResult]:
         ProbeResult(
             runner_type="claude", available=True, binary_path="/fake/bin/claude", version="1.0",
             models=[
+                # Opus advertises the full vocabulary including xhigh and max.
                 ModelInfo(alias="opus", display_name="Opus",
-                         thinking_modes=frozenset({"disabled", "low", "medium", "high", "xhigh"}),
+                         thinking_modes=frozenset({"disabled", "low", "medium", "high", "xhigh", "max"}),
                          tier_hint="strong"),
+                # Sonnet does not support xhigh or max; resolver clamps explicitly.
                 ModelInfo(alias="sonnet", display_name="Sonnet",
-                         thinking_modes=frozenset({"disabled", "low", "medium", "high", "xhigh"}),
+                         thinking_modes=frozenset({"disabled", "low", "medium", "high"}),
                          tier_hint="standard"),
             ],
         ),

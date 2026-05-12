@@ -105,16 +105,26 @@ Field descriptions (source: `koan/agents/base.py` docstring):
 - `model` -- model alias resolved by the registry (e.g. `"sonnet"`,
   `"gpt-5"`). `None` defers to the agent's default.
 - `thinking` -- thinking mode (`disabled` / `low` / `medium` / `high` /
-  `xhigh`). `None` defers to the agent's default.
+  `xhigh` / `max`). `None` defers to the agent's default. For Claude agents,
+  this field is populated by `resolve_agent_config` via the `ROLE_EFFORT` table
+  in `koan/types.py` rather than by `ProfileTier.thinking`; the resolved value
+  is clamped by `_claude_clamp` against the model's advertised `thinking_modes`
+  before being stored here. `xhigh` is Opus-4.7-specific; `max` is the highest
+  effort level. Opus advertises the full set `{disabled, low, medium, high,
+xhigh, max}`; Sonnet and Haiku advertise `{disabled, low, medium, high}`.
+  Gemini and codex read `ProfileTier.thinking` unchanged and do not consult
+  `ROLE_EFFORT`.
 - `system_prompt` -- role-specific system prompt.
 - `boot_prompt` -- one-sentence boot directive (step-first protocol).
 - `mcp_url` -- full HTTP MCP URL including `?agent_id=` query string.
-- `available_tools` -- role-curated tool whitelist passed as Claude's `--tools`
-  flag. Restricts which tools are visible to the model. Deliberately separate
-  from `allowed_tools`.
-- `allowed_tools` -- auto-approved subset passed as Claude's `--allowedTools`
-  flag. Restricts which tools run without interactive approval. Deliberately
-  separate from `available_tools`.
+- `available_tools` -- per-role list of canonical Claude built-in tool names,
+  passed as Claude's `--tools` flag. Built by `_build_claude_tool_lists(role)`
+  in `koan/subagent.py`.
+- `allowed_tools` -- the same per-role list as `available_tools` with
+  `mcp__koan__*` appended, passed as Claude's `--allowedTools` flag. The two
+  fields mirror each other by design: koan has no `can_use_tool` callback, so
+  a narrow `--allowedTools` set would cause the model to gravitate toward
+  explicitly-permitted tools and avoid others unnecessarily.
 - `project_dir` -- project root directory; mounted as `--add-dir` for Claude.
 - `run_dir` -- koan run directory; mounted as `--add-dir` for Claude.
 - `additional_dirs` -- extra directories requested at run start.
