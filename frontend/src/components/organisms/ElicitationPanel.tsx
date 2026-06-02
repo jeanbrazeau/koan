@@ -2,10 +2,13 @@
  * ElicitationPanel — two-panel context/decision layout.
  * Supports single-select (radio), multi-select (checkbox), and free-text modes.
  * Supports multi-question pagination with Previous/Next.
+ * Ctrl/Cmd+Return inside any textarea (the free-text field or an "other"
+ * option field) submits the current answer and advances to the next question,
+ * or finalizes if this is the last question.
  * Used in: elicitation interactions during workflow.
  */
 
-import type { ReactNode } from 'react'
+import type { KeyboardEvent, ReactNode } from 'react'
 import { useFileAttachment } from '../../hooks/useFileAttachment'
 import { SectionLabel } from '../atoms/SectionLabel'
 import { Button } from '../atoms/Button'
@@ -85,6 +88,29 @@ export function ElicitationPanel({
     onSubmit(ids)
   }
 
+  /**
+   * Delegated keyboard handler for the decision panel.
+   *
+   * Fires Ctrl/Cmd+Return only when the event originates from a <textarea>
+   * (the free-text field or an "other" option field), satisfying the
+   * "text fields only" scope. Plain Enter is left untouched so the textarea
+   * can insert newlines. preventDefault() suppresses the newline that the
+   * submitting keystroke would otherwise add before the panel advances.
+   *
+   * Delegation keeps RadioOption and CheckboxOption purely presentational --
+   * no submit-chord prop is threaded into the molecule contracts.
+   */
+  const handleDecisionKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
+    if (
+      e.key === 'Enter' &&
+      (e.ctrlKey || e.metaKey) &&
+      (e.target as HTMLElement).tagName === 'TEXTAREA'
+    ) {
+      e.preventDefault()
+      handleSubmit()
+    }
+  }
+
   const renderOptions = () => {
     if (mode === 'free-text') {
       return (
@@ -162,7 +188,7 @@ export function ElicitationPanel({
             <div className="ep-panel-body">{context}</div>
           </div>
         )}
-        <div className="ep-panel ep-panel--decision">
+        <div className="ep-panel ep-panel--decision" onKeyDown={handleDecisionKeyDown}>
           <SectionLabel color="orange">Decision</SectionLabel>
           <div className="ep-question">{question}</div>
           {mode === 'multi-select' && (
