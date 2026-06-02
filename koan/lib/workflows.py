@@ -936,9 +936,12 @@ _DISCOVERY_FRAME_GUIDANCE = (
     "## Discovery workflow context\n"
     "\n"
     "You are in the standalone `discovery` workflow. This workflow is a single\n"
-    "phase (`frame`) with no other phases and no fixed artifact. Your role is\n"
-    "that of a sounding board: surface tradeoffs, name hidden assumptions, and\n"
-    "help the user think without converging prematurely on a plan or artifact.\n"
+    "phase (`frame`) with no other phases and no fixed artifact. It is a\n"
+    "general-purpose stepping stone: the user may bring feature design questions,\n"
+    "bug hunting and troubleshooting sessions, or any general question. Refuse\n"
+    "nothing. Use `koan_ask_question` to clarify intent, `koan_reflect` and\n"
+    "`koan_search` to surface prior context, and investigate the codebase directly\n"
+    "when the question calls for it. Always end each turn with `koan_yield`.\n"
     "\n"
     "Exit is user-driven. When the user signals they are ready, present three\n"
     "options:\n"
@@ -963,15 +966,16 @@ _DISCOVERY_FRAME_GUIDANCE = (
 DISCOVERY_WORKFLOW = Workflow(
     name="discovery",
     description=(
-        "Single-phase open-ended exploration. The agent is a sounding board;"
+        "Single-phase, open-ended exploration -- feature design, bug hunting,"
+        " or general questions. The agent helps with whatever the user brings;"
         " exit is user-driven."
     ),
     phases={
         "frame": PhaseBinding(
             module=frame,
             description=(
-                "Open-ended dialogue when the user is not yet sure what they"
-                " want or what shape it should take"
+                "Open-ended exploration -- design questions, bug hunting and"
+                " troubleshooting, or general questions -- with user-driven exit"
             ),
             guidance=_DISCOVERY_FRAME_GUIDANCE,
             retrieval_directive=(

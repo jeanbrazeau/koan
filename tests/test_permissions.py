@@ -168,6 +168,16 @@ class TestOrchestratorPhasePermissions:
         r = check_permission("orchestrator", "bash", current_phase="intake")
         assert not r["allowed"]
 
+    def test_koan_request_scouts_frame_allowed(self):
+        """koan_request_scouts must be allowed for orchestrator in the frame phase."""
+        r = check_permission("orchestrator", "koan_request_scouts", current_phase="frame")
+        assert r["allowed"]
+
+    def test_bash_frame_allowed(self):
+        """bash must be allowed for orchestrator in the frame phase for troubleshooting."""
+        r = check_permission("orchestrator", "bash", current_phase="frame")
+        assert r["allowed"]
+
     def test_koan_set_phase_always_allowed(self):
         for phase in ("intake", "brief-generation", "execution", "implementation-validation"):
             r = check_permission("orchestrator", "koan_set_phase", current_phase=phase)

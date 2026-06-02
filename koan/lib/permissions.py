@@ -131,9 +131,7 @@ _ORCHESTRATOR_SCOUT_PHASES: frozenset[str] = frozenset({
     # "tech-plan-spec" and "tech-plan-review" replace the legacy bare "tech-plan"
     # entry. tech-plan-review is explicitly authorized for codebase verification of
     # integration claims (unlike plan-review, which defers mechanical accuracy to
-    # the executor). frame is intentionally absent: scout dispatch in frame is
-    # denied at the fence layer because the phase's purpose is exploration of
-    # intent, not codebase investigation.
+    # the executor).
     "tech-plan-spec", "tech-plan-review",
     "ticket-breakdown", "cross-artifact-validation",
     "plan-spec", "plan-review",           # plan workflow phases
@@ -142,6 +140,10 @@ _ORCHESTRATOR_SCOUT_PHASES: frozenset[str] = frozenset({
     # material from the codebase. Postmortem directive forbids them
     # in prose.
     "curation",
+    # frame is included: the discovery/frame phase is a general-purpose stepping
+    # stone that explicitly supports bug hunting and troubleshooting, which require
+    # codebase investigation (direct reads, scouts, repro).
+    "frame",
 })
 
 _ORCHESTRATOR_STORY_TOOLS: frozenset[str] = frozenset({
@@ -161,6 +163,7 @@ _ORCHESTRATOR_MEMORY_TOOLS: frozenset[str] = frozenset({
 _ORCHESTRATOR_BASH_PHASES: frozenset[str] = frozenset({
     "execution", "implementation-validation",
     "exec-review",  # orchestrator may run tests/type-checks to verify executor claims
+    "frame",        # troubleshooting / repro during open-ended exploration
 })
 
 

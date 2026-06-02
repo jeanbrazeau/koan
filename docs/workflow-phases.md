@@ -24,9 +24,10 @@ transitions allow any-to-any movement within a workflow's available
 phases.
 
 The discovery band is divergent. It exists outside the linear path
-because its purpose is open-ended exploration before a question is
-well-formed. It produces no fixed artifact; its exit is negotiated with
-the user when they signal sufficient clarity.
+because its purpose is open-ended exploration that refuses nothing: the
+user may bring feature design questions, bug hunting and troubleshooting
+sessions, or general-purpose questions. It produces no fixed artifact;
+its exit is negotiated with the user when they signal sufficient clarity.
 
 The why band answers the question of intent. It captures what the user is
 trying to accomplish, who is affected by the current state, and what makes
@@ -96,19 +97,20 @@ cross.
 ### frame (discovery band)
 
 The frame phase is the only divergent phase in the system. Its
-responsibility is to support open-ended dialogue with the user when the
-user is not yet sure what they want, what shape it should take, or whether
-they want to build it at all. The agent's role is closer to a sounding
-board than an analyst: it surfaces tradeoffs, names hidden assumptions,
-offers alternatives, and pushes back on premature commitment, without
-converging on an artifact unless the user signals readiness.
+responsibility is to support open-ended exploration for whatever the user
+brings: feature design questions, bug hunting and troubleshooting sessions,
+or general-purpose questions. The agent refuses nothing. It may analyze,
+investigate, troubleshoot, draw conclusions, and make recommendations,
+subject only to a light guardrail: if the agent is about to recommend a
+large, hard-to-reverse architectural direction, it names it as a decision
+and lets the user choose rather than committing silently.
 
 This phase has no required upstream phase. It is the entry point for the
 standalone `discovery` workflow, and it is also reachable from any yield
 boundary in any other workflow as an escape hatch when the user discovers
 mid-workflow that they need to step back. Its downstream behavior is
 determined at exit and is one of three options: promotion into another
-workflow with the discovery transcript carried forward as initial
+workflow with the exploration transcript carried forward as initial
 context, transition to another phase within the current workflow, or exit
 with no artifact and no further phase.
 
@@ -117,21 +119,20 @@ user what artifact shape, if any, is appropriate. Whatever is chosen is
 written then, not before.
 
 The dominant tool-call shape is `koan_yield` for open-ended conversation,
-supplemented by `koan_search` and `koan_reflect` to surface relevant
-prior context from project memory. `koan_request_scouts` is technically
-available but is discouraged via prompt discipline because the phase is
-exploratory rather than investigative; codebase reading is appropriate
-when the dialogue starts referring to specific systems, not as a
-default. No artifact-writing tools are called until the user signals
+supplemented by `koan_search`, `koan_reflect`, and `koan_ask_question` to
+surface prior context and clarify intent. `koan_request_scouts`, `bash`,
+and direct file reading (Read / Grep / Glob) are available and used for
+bug hunting and troubleshooting when the question calls for codebase
+investigation. No artifact-writing tools are called until the user signals
 exit.
 
-The termination condition is user-driven and explicit. The phase does
-not auto-advance under any circumstance; it always yields back to the
-user. The contract boundary is that frame must not commit to
-architectural choices, must not write any decision into project memory
-unless the user explicitly directs curation, and must not produce a
-brief.md or any other workflow artifact without negotiating its shape
-with the user first.
+The termination condition is user-driven and explicit. The phase does not
+auto-advance under any circumstance; it always yields back to the user.
+The contract boundary is that frame must flag large architectural
+commitments rather than decide them silently, must not write any decision
+into project memory unless the user explicitly directs curation, and must
+not produce a brief.md or any other workflow artifact without negotiating
+its shape with the user first.
 
 ### intake (why band)
 
@@ -352,12 +353,14 @@ cross multiple milestones and warrant a load-bearing artifact, and
 where the operational behavior is itself worth describing as a shared
 artifact. See `initiative.md` for the full contract.
 
-The discovery workflow is a single-phase preset: `frame → exit`. The
-preset has no other phases. Its use case is open-ended thinking when
-the user is not sure what they want and wants the agent as a sounding
-board. The exit is negotiated; the user may choose to write a brief or
-a tech-plan sketch at exit, write nothing, or transition into a
-delivery workflow with the discovery transcript carried forward as
+The discovery workflow is a single-phase preset: `frame -> exit`. The
+preset has no other phases. Its use case is open-ended exploration --
+the user may bring feature design questions, bug hunting and
+troubleshooting sessions, or any general question. The agent refuses
+nothing and may investigate the codebase directly when the question
+calls for it. The exit is negotiated; the user may choose to write a
+brief or a tech-plan sketch at exit, write nothing, or transition into
+a delivery workflow with the exploration transcript carried forward as
 context. This workflow is structurally identical in shape to the
 existing single-phase `curation` workflow, which serves as the
 implementation precedent.
@@ -393,11 +396,12 @@ suggested defaults, not constraints.
 
 The new phases need entries in the MCP permission fence at
 `koan/lib/permissions.py`. The `_ORCHESTRATOR_SCOUT_PHASES` frozenset
-lists `core-flows`, `tech-plan-spec`, and `tech-plan-review` (the legacy
-bare `tech-plan` entry was replaced by the spec/review pair). The `frame`
-phase is intentionally absent from the scout-phases set; scout access in
-frame is denied at the fence layer because the phase's purpose is
-exploration of intent rather than codebase investigation.
+lists `core-flows`, `tech-plan-spec`, `tech-plan-review`, and `frame`
+(the legacy bare `tech-plan` entry was replaced by the spec/review pair).
+The `frame` phase is included in both `_ORCHESTRATOR_SCOUT_PHASES` and
+`_ORCHESTRATOR_BASH_PHASES` to support bug hunting and troubleshooting,
+which require codebase investigation via scouts, bash, and direct file
+reading.
 
 ## Producer-and-acceptance summary
 

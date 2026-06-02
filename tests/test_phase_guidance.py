@@ -492,28 +492,40 @@ def test_intake_step3_no_chat_synthesis():
 # frame
 # ---------------------------------------------------------------------------
 
-def test_frame_step1_yields_no_artifact():
-    """Frame step 1 must not write artifacts and must mention koan_yield and sounding board.
+def test_frame_step1_strong_yield_no_artifact():
+    """Frame step 1 must cover all three exploration categories and strongly prompt koan_yield.
 
-    The step may mention koan_artifact_write in a prohibitive context (per cross-reference
-    repetition rule), but must not contain a write directive (an actual call template).
+    The step must mention koan_yield, koan_reflect, koan_ask_question, and bug (broadened
+    scope). It must not contain 'sounding board' or an actual koan_artifact_write call
+    template; a prohibitive mention is OK.
     """
     from koan.phases import frame
     g = frame.step_guidance(1, _ctx())
     text = "\n".join(g.instructions)
-    assert "sounding board" in text.lower()
+    # Broadened scope: bug hunting must be named
+    assert "bug" in text.lower()
+    # Memory and clarification tools must be encouraged
+    assert "koan_reflect" in text
+    assert "koan_ask_question" in text
+    # Always-yield must be stated in the body
+    assert "koan_yield" in text
+    # invoke_after footer also uses koan_yield
     assert "koan_yield" in g.invoke_after
+    # Must not contain 'sounding board' (removed from broadened posture)
+    assert "sounding board" not in text.lower()
     # Must not contain an actual write call template; prohibition mention is OK
     assert 'koan_artifact_write(filename=' not in text
     assert 'koan_artifact_write(\n' not in text
 
 
-def test_frame_role_context_forbids_scouts():
-    """Frame PHASE_ROLE_CONTEXT must explicitly prohibit koan_request_scouts."""
+def test_frame_role_context_permits_investigation():
+    """Frame PHASE_ROLE_CONTEXT must encourage koan_request_scouts, not prohibit it."""
     from koan.phases import frame
     ctx_text = frame.PHASE_ROLE_CONTEXT
+    # koan_request_scouts must appear as a positive encouragement
     assert "koan_request_scouts" in ctx_text
-    assert "MUST NOT" in ctx_text
+    # The old prohibition must be gone
+    assert "MUST NOT call `koan_request_scouts`" not in ctx_text
 
 
 def test_frame_total_steps_is_one():
