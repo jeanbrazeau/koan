@@ -1,7 +1,7 @@
 # Core-flows phase -- 2-step workflow.
 #
 #   Step 1 (Analyze)   -- read brief.md, identify flows; no writes
-#   Step 2 (Write)     -- write core-flows.md with status=Final
+#   Step 2 (Write)     -- write core-flows.md (frozen at exit)
 #
 # core-flows.md is FROZEN at exit. Every downstream phase (tech-plan-spec,
 # tech-plan-review, milestone-spec, plan-spec, exec-review) reads it as
@@ -38,8 +38,8 @@ PHASE_ROLE_CONTEXT = (
     "\n"
     "core-flows.md is a FROZEN artifact. It is read by every downstream phase\n"
     "(tech-plan-spec, tech-plan-review, milestone-spec, plan-spec, exec-review)\n"
-    "as authoritative behavioral spec, parallel to brief.md. Once you write it\n"
-    "with status='Final', no downstream phase may re-write it.\n"
+    "as authoritative behavioral spec, parallel to brief.md. Once you write it,\n"
+    "it is frozen; no downstream phase may re-write it.\n"
     "\n"
     "## Load-bearing content\n"
     "\n"
@@ -73,7 +73,6 @@ PHASE_ROLE_CONTEXT = (
     "- MUST NOT include file paths, component names, or implementation detail.\n"
     "- MUST NOT include component diagrams (CMP, CON, STT) -- SEQ only.\n"
     "- MUST use `koan_artifact_write` for the terminal write.\n"
-    "- MUST set status='Final' to mark frozen at exit.\n"
     "- SHOULD NOT call `koan_request_scouts` unless the dialogue explicitly refers\n"
     "  to specific subsystems and codebase reading becomes warranted. The permission\n"
     "  fence allows it, but operational behavior is usually derivable from brief.md\n"
@@ -87,8 +86,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
     """Build the StepGuidance for the given step.
 
     Step 1 (Analyze): read brief.md, identify flows, decide diagram vs prose per
-    flow -- no writes. Step 2 (Write): emit core-flows.md via koan_artifact_write
-    with status='Final'.
+    flow -- no writes. Step 2 (Write): emit core-flows.md via koan_artifact_write.
     """
     if step == 1:
         lines: list[str] = []
@@ -168,7 +166,6 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "",
                 "Step narrative: trigger, sequenced steps, exit conditions.",
                 '""",',
-                '    status="Final",',
                 ")",
                 "```",
                 "",
@@ -189,7 +186,6 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "- Grounding rule: no actor in any diagram absent from the bounded inputs",
                 "  (brief.md and the dialogue).",
                 "- This artifact is FROZEN at exit. Downstream phases read it as authoritative.",
-                "  Set status='Final'.",
             ],
             invoke_after=terminal_invoke(ctx.next_phase, ctx.suggested_phases),
         )

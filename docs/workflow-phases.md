@@ -77,14 +77,11 @@ override upstream content. The trust model is documented in
 `phase-trust.md`.
 
 The artifact lifecycle from `artifacts.md` continues to apply. Artifacts
-are classified as frozen, additive-forward, or disposable. The status
-taxonomy of `Draft -> In-Progress -> Approved -> Final` exists in
-`koan/artifacts.py:STATUS_VALUES`, but the `Approved` value is not
-currently enforced by any code path -- it is reserved for a future
-structural-gating mechanism. The gate at `tech-plan-review` is
-conventional: the reviewer applies rewrite-or-loop-back semantics and
-yields; the user's phase-switch decision (advance to `milestone-spec` or
-loop back to `tech-plan-spec`) is the implicit acceptance moment.
+are classified as frozen, additive-forward, or disposable. The gate at
+`tech-plan-review` is conventional: the reviewer applies
+rewrite-or-loop-back semantics and yields; the user's phase-switch
+decision (advance to `milestone-spec` or loop back to `tech-plan-spec`)
+is the implicit acceptance moment.
 
 ## Phase taxonomy
 
@@ -156,8 +153,8 @@ The dominant tool-call shape is `koan_ask_question` for structured user
 dialogue, `koan_request_scouts` for codebase exploration of unfamiliar
 subsystems, `koan_search` and `koan_reflect` to consult prior project
 memory, and `koan_artifact_write` for the terminal `brief.md` write. The
-termination condition is the writing of `brief.md` with `Final` status,
-at which point the phase auto-advances to the configured next phase.
+termination condition is the writing of `brief.md`, at which point the
+phase auto-advances to the configured next phase.
 
 The contract boundary is that intake must not infer architectural
 decisions, propose implementation approaches, or define work units.
@@ -274,8 +271,6 @@ findings are surfaced via `koan_yield` with `tech-plan-spec` recommended
 for loop-back. The phase yields after evaluation; the user's phase-switch
 decision (forward to `milestone-spec` or back to `tech-plan-spec`) is the
 implicit acceptance moment, mirroring plan-review and milestone-review.
-The `Approved` value in the artifact status taxonomy is not enforced in
-this workflow.
 
 Upstream is tech-plan-spec; downstream is `milestone-spec` when the
 architecture is acceptable, or `tech-plan-spec` on loop-back. The phase

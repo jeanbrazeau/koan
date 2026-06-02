@@ -734,7 +734,9 @@ async def test_artifact_write_atomic_writes_with_frontmatter(tmp_path):
     assert text.startswith("---\n")
     meta, body = split_frontmatter(text)
     assert meta is not None
-    assert meta["status"] == "In-Progress"
+    # Status field removed -- only timestamps in frontmatter
+    assert "status" not in meta
+    assert "created" in meta
     assert body == "hello"
 
     # Return value is ok=True JSON
@@ -742,7 +744,7 @@ async def test_artifact_write_atomic_writes_with_frontmatter(tmp_path):
     payload = json.loads(result[0].text)
     assert payload["ok"] is True
     assert payload["filename"] == "smoke.md"
-    assert payload["status"] == "In-Progress"
+    assert "status" not in payload
 
 
 @pytest.mark.anyio
@@ -790,35 +792,15 @@ async def test_artifact_write_does_not_block(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_artifact_write_explicit_status_final(tmp_path):
-    """Passing status='Final' is stored on disk."""
-    from koan.web.mcp_endpoint import build_mcp_server
-    from koan.artifacts import split_frontmatter
-
-    app_state, agent = _make_orchestrator_agent(tmp_path, "test-write-final")
-    _, handlers = build_mcp_server(app_state)
-
-    await handlers.koan_artifact_write(_FakeCtx(agent), "smoke.md", "done", status="Final")
-
-    text = (tmp_path / "smoke.md").read_text()
-    meta, _ = split_frontmatter(text)
-    assert meta["status"] == "Final"
-
-
-@pytest.mark.anyio
-async def test_artifact_write_invalid_status_raises_tool_error(tmp_path):
-    """An unrecognised status raises ToolError(error=invalid_status)."""
-    import json
-    from fastmcp.exceptions import ToolError
+async def test_artifact_write_does_not_block_2(tmp_path):
+    """koan_artifact_write returns immediately without a status argument."""
     from koan.web.mcp_endpoint import build_mcp_server
 
-    app_state, agent = _make_orchestrator_agent(tmp_path, "test-write-badstatus")
+    app_state, agent = _make_orchestrator_agent(tmp_path, "test-write-noarg")
     _, handlers = build_mcp_server(app_state)
 
-    with pytest.raises(ToolError) as exc_info:
-        await handlers.koan_artifact_write(_FakeCtx(agent), "smoke.md", "body", status="bogus")
-    body = json.loads(str(exc_info.value))
-    assert body["error"] == "invalid_status"
+    result = await handlers.koan_artifact_write(_FakeCtx(agent), "smoke.md", "content")
+    assert result is not None
 
 
 @pytest.mark.anyio
@@ -831,7 +813,7 @@ async def test_artifact_view_strips_frontmatter(tmp_path):
     _, handlers = build_mcp_server(app_state)
 
     target = tmp_path / "doc.md"
-    write_artifact_atomic(target, "# Hello\nbody text\n", status=None)
+    write_artifact_atomic(target, "# Hello\nbody text\n")
 
     result = await handlers.koan_artifact_view(_FakeCtx(agent), "doc.md")
     returned_text = result[0].text
@@ -840,27 +822,28 @@ async def test_artifact_view_strips_frontmatter(tmp_path):
 
 
 @pytest.mark.anyio
-async def test_artifact_list_includes_status(tmp_path):
-    """koan_artifact_list JSON contains a status field per artifact."""
+async def test_artifact_list_omits_status(tmp_path):
+    """koan_artifact_list JSON must not contain a status field per artifact."""
     import json
     from koan.web.mcp_endpoint import build_mcp_server
     from koan.artifacts import write_artifact_atomic
 
-    app_state, agent = _make_orchestrator_agent(tmp_path, "test-list-status")
+    app_state, agent = _make_orchestrator_agent(tmp_path, "test-list-no-status")
     _, handlers = build_mcp_server(app_state)
 
-    write_artifact_atomic(tmp_path / "with-fm.md", "body", status="Final")
+    write_artifact_atomic(tmp_path / "with-fm.md", "body")
     (tmp_path / "plain.md").write_text("# No frontmatter\n")
 
     result = await handlers.koan_artifact_list(_FakeCtx(agent))
     payload = json.loads(result[0].text)
     by_path = {a["path"]: a for a in payload["artifacts"]}
 
-    assert "status" in by_path["with-fm.md"]
-    assert by_path["with-fm.md"]["status"] == "Final"
-
-    assert "status" in by_path["plain.md"]
-    assert by_path["plain.md"]["status"] is None
+    assert "status" not in by_path["with-fm.md"]
+    assert "status" not in by_path["plain.md"]
+    # Canonical fields must be present
+    assert "path" in by_path["with-fm.md"]
+    assert "size" in by_path["with-fm.md"]
+    assert "modified_at" in by_path["with-fm.md"]
 
 
 # -- api_sessions_list: workflow_history schema --------------------------------

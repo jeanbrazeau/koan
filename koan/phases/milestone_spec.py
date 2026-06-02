@@ -222,7 +222,6 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "## Milestone 1: <title> [status]",
                 "...",
                 '""",',
-                '    status="In-Progress",',
                 ")",
                 "```",
                 "",

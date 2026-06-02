@@ -159,7 +159,6 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "# Plan title",
                 "...",
                 '""",',
-                '    status="Final",',
                 ")",
                 "```",
                 "",
@@ -200,8 +199,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "",
                 "`koan_artifact_write` writes the plan artifact to the run directory"
                 " immediately (non-blocking). The artifact is visible in the sidebar."
-                " Full-rewrite semantics: call it with the same filename to update."
-                " `status=\"Final\"` marks a plan-spec artifact as complete.",
+                " Full-rewrite semantics: call it with the same filename to update.",
                 "",
                 "Do NOT use Write or Edit -- those tools are not available in"
                 " this phase.",

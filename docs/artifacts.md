@@ -32,14 +32,14 @@ is no longer authoritative. Its content is compressed into a downstream artifact
 
 ## Per-artifact lifecycle table
 
-| Artifact              | Lifetime         | Producer phase(s)                                 | Reader phase(s)                                                                                                                                                      | Final-status timing                                                |
-| --------------------- | ---------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| `brief.md`            | frozen           | `intake`                                          | `milestone-spec`, `milestone-review`, `plan-spec`, `plan-review`, `exec-review`, `curation`; executor (via handoff)                                                  | `Final` at intake exit                                             |
-| `core-flows.md`       | frozen           | `core-flows`                                      | `tech-plan-spec`, `tech-plan-review`, `milestone-spec`, `milestone-review`, `plan-spec`, `plan-review`, `exec-review`; executor (via handoff in initiative workflow) | `Final` at core-flows exit                                         |
-| `tech-plan.md`        | disposable       | `tech-plan-spec`                                  | `tech-plan-review`, `milestone-spec`, `milestone-review`, `plan-spec`, `plan-review`, `exec-review`; executor (via handoff in initiative workflow)                   | `Final` at tech-plan-review exit                                   |
-| `milestones.md`       | additive-forward | `milestone-spec` (CREATE), `exec-review` (UPDATE) | all milestone phases; executor (via handoff)                                                                                                                         | `In-Progress` until last milestone done; `Final` after last UPDATE |
-| `plan.md`             | disposable       | `plan-spec`                                       | `plan-review`, `execute`, `exec-review`                                                                                                                              | `Final` at plan-spec exit                                          |
-| `plan-milestone-N.md` | disposable       | `plan-spec`                                       | `plan-review`, `execute`, `exec-review`                                                                                                                              | `Final` at plan-spec exit                                          |
+| Artifact              | Lifetime         | Producer phase(s)                                 | Reader phase(s)                                                                                                                                                      |
+| --------------------- | ---------------- | ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `brief.md`            | frozen           | `intake`                                          | `milestone-spec`, `milestone-review`, `plan-spec`, `plan-review`, `exec-review`, `curation`; executor (via handoff)                                                  |
+| `core-flows.md`       | frozen           | `core-flows`                                      | `tech-plan-spec`, `tech-plan-review`, `milestone-spec`, `milestone-review`, `plan-spec`, `plan-review`, `exec-review`; executor (via handoff in initiative workflow) |
+| `tech-plan.md`        | disposable       | `tech-plan-spec`                                  | `tech-plan-review`, `milestone-spec`, `milestone-review`, `plan-spec`, `plan-review`, `exec-review`; executor (via handoff in initiative workflow)                   |
+| `milestones.md`       | additive-forward | `milestone-spec` (CREATE), `exec-review` (UPDATE) | all milestone phases; executor (via handoff)                                                                                                                         |
+| `plan.md`             | disposable       | `plan-spec`                                       | `plan-review`, `execute`, `exec-review`                                                                                                                              |
+| `plan-milestone-N.md` | disposable       | `plan-spec`                                       | `plan-review`, `execute`, `exec-review`                                                                                                                              |
 
 Note: M2-M6 introduce the producers and readers listed in the table. M1 only
 documents the contract; the tools that enforce it land in later milestones.
@@ -254,7 +254,6 @@ a YAML frontmatter block prepended by the driver:
 
 ```
 ---
-status: In-Progress
 created: 2026-04-26T12:34:56.789012+00:00
 last_modified: 2026-04-26T12:34:56.789012+00:00
 ---
@@ -264,16 +263,16 @@ Frontmatter rules:
 
 - **Driver-managed, LLM-invisible.** The LLM never sees or writes frontmatter.
   `koan_artifact_view` strips it before returning the body to the caller.
-  `koan_artifact_list` exposes `status` per file for frontend and projection use.
-- **Fields**: `status` (string), `created` (ISO-8601 UTC), `last_modified`
-  (ISO-8601 UTC). Field order is stable (`status`, `created`, `last_modified`).
-- **First write**: `status` defaults to `In-Progress`; `created` and
-  `last_modified` are both set to the write timestamp.
-- **Subsequent writes**: `created` is preserved; `last_modified` is updated;
-  `status` is preserved unless the caller passes an explicit value.
-- **Migration**: artifacts written before M1 have no frontmatter. On the next
-  write, frontmatter is attached; `created` is set to the migration timestamp
-  (the original creation moment is unrecoverable).
+- **Fields**: `created` (ISO-8601 UTC), `last_modified` (ISO-8601 UTC). Field
+  order is stable (`created`, `last_modified`).
+- **First write**: both `created` and `last_modified` are set to the write
+  timestamp.
+- **Subsequent writes**: `created` is preserved; `last_modified` is updated.
+- **Migration**: artifacts written before frontmatter was introduced have no
+  frontmatter block. On the next write, frontmatter is attached; `created` is
+  set to the migration timestamp (the original creation moment is
+  unrecoverable). Stale `status` keys from pre-removal artifacts are silently
+  dropped on the next write.
 - **Parse failure**: if an existing file has malformed frontmatter (no closing
   `---` delimiter or invalid YAML), the driver logs a warning, treats the file
   as having no frontmatter, and overwrites with valid frontmatter on the next
@@ -281,31 +280,12 @@ Frontmatter rules:
 
 ---
 
-## Status taxonomy
-
-Four values, defined in `koan/artifacts.py:STATUS_VALUES`:
-
-| Status        | Meaning                                                 |
-| ------------- | ------------------------------------------------------- |
-| `Draft`       | Work in progress; not ready for downstream consumption. |
-| `In-Progress` | Default for first write. Active but not yet complete.   |
-| `Approved`    | Reviewed and accepted; downstream phases may proceed.   |
-| `Final`       | Producing phase has exited; content is stable.          |
-
-Precise per-artifact transition rules are settled in M4. M1 establishes the
-vocabulary and the `In-Progress` default.
-
----
-
 ## Write tool
 
-**`koan_artifact_write(filename, content, status?)`** -- the only
+**`koan_artifact_write(filename, content)`** -- the only
 artifact-write tool. Writes the file (full-rewrite semantics) and returns
-immediately with `{"ok": true, "filename": ..., "status": ...}`. Emits
+immediately with `{"ok": true, "filename": ...}`. Emits
 `artifact_diff` events for the sidebar. Use this for every artifact mutation.
-The `status` argument is optional; defaults to `In-Progress` on first write
-and preserves the existing status on subsequent writes unless explicitly
-overridden.
 
 The legacy `koan_artifact_propose` tool was retired in M5 (commit `99a4e29`)
 along with the inline-review frontend surface (M6, commit `1670f06`).

@@ -16,10 +16,6 @@ from .logger import get_logger
 
 log = get_logger("artifacts")
 
-# -- Status taxonomy ----------------------------------------------------------
-
-STATUS_VALUES: tuple[str, ...] = ("Draft", "Approved", "In-Progress", "Final")
-
 _FRONTMATTER_DELIMITER = "---"
 
 
@@ -84,7 +80,7 @@ def dump_frontmatter(meta: dict) -> str:
     Returns '---\\n<yaml>---\\n'. Uses yaml.safe_dump with default_flow_style=False
     and sort_keys=False to keep field order stable.
     """
-    # sort_keys=False preserves insertion order (status, created, last_modified)
+    # sort_keys=False preserves insertion order (created, last_modified)
     yaml_text = yaml.safe_dump(meta, default_flow_style=False, sort_keys=False)
     return f"{_FRONTMATTER_DELIMITER}\n{yaml_text}{_FRONTMATTER_DELIMITER}\n"
 
@@ -101,25 +97,17 @@ def compose_artifact(meta: dict, body: str) -> str:
 
 # -- Atomic write helper -------------------------------------------------------
 
-def write_artifact_atomic(
-    target: Path,
-    body: str,
-    status: str | None,
-) -> dict:
+def write_artifact_atomic(target: Path, body: str) -> dict:
     """Write `body` to `target` with managed YAML frontmatter, atomically.
 
     Reads the existing file (if any) to preserve `created`. Updates
-    `last_modified` to now. Sets `status` if provided; otherwise preserves
-    the existing status or defaults to 'In-Progress' for first writes.
-
-    Validates `status` against STATUS_VALUES; raises ValueError on mismatch.
-    Returns the resulting frontmatter dict.
+    `last_modified` to now. Returns the resulting frontmatter dict with
+    keys `created` and `last_modified`.
 
     Atomic write via .tmp + os.rename avoids partial reads under concurrent access.
     """
-    if status is not None and status not in STATUS_VALUES:
-        raise ValueError(f"invalid status: {status!r}")
-
+    # Status field removed -- lifecycle state lives in the orchestrator's
+    # conversation context, not in the file. Only timestamps are persisted.
     existing_meta: dict = {}
     if target.exists():
         try:
@@ -134,8 +122,7 @@ def write_artifact_atomic(
 
     now = now_iso()
     new_meta = {
-        # Explicit key order: status, created, last_modified
-        "status": status if status is not None else existing_meta.get("status", "In-Progress"),
+        # Explicit key order: created, last_modified
         "created": existing_meta.get("created", now),
         "last_modified": now,
     }
@@ -148,27 +135,10 @@ def write_artifact_atomic(
     return new_meta
 
 
-# -- Status reading helper -----------------------------------------------------
-
-def read_artifact_status(path: Path) -> str | None:
-    """Read just enough of `path` to extract the frontmatter `status`.
-
-    Returns None if the file has no frontmatter or no status field.
-    Reads the first 4096 bytes; frontmatter is bounded by convention.
-    """
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")[:4096]
-    except Exception:
-        return None
-    meta, _ = split_frontmatter(text)
-    if meta is None:
-        return None
-    return meta.get("status")
-
-
 # -- Artifact listing ----------------------------------------------------------
 
 def list_artifacts(run_dir: str | Path) -> list[dict]:
+    """List run-dir artifacts as {path, size, modified_at} dicts (root .md files + stories/, excluding subagents/)."""
     root = Path(run_dir)
     results: list[dict] = []
 
@@ -181,7 +151,6 @@ def list_artifacts(run_dir: str | Path) -> list[dict]:
                     "path": str(f.relative_to(root)),
                     "size": st.st_size,
                     "modified_at": st.st_mtime,
-                    "status": read_artifact_status(f),
                 })
 
     # stories/ recursively, excluding subagents/
@@ -196,7 +165,6 @@ def list_artifacts(run_dir: str | Path) -> list[dict]:
                     "path": str(fp.relative_to(root)),
                     "size": st.st_size,
                     "modified_at": st.st_mtime,
-                    "status": read_artifact_status(fp),
                 })
 
     return results

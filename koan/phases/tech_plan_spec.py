@@ -97,12 +97,7 @@ PHASE_ROLE_CONTEXT = (
     "  rationale, so the reviewer phase (tech-plan-review) has material to\n"
     "  stress-test.\n"
     "- MUST use `koan_artifact_write` for the terminal write.\n"
-    "- MUST set status='In-Progress' at write time. The reviewer may rewrite in\n"
-    "  place; the status flips to 'Final' at review exit when no rewrite was needed,\n"
-    "  or stays 'In-Progress' if the reviewer did rewrite. Final status is the\n"
-    "  reviewer's call.\n"
-    "- Per brief.md decision 1, no 'Approved' gate is enforced. Status discipline\n"
-    "  is conventional only -- no code path reads 'Approved' to gate transitions.\n"
+    "- The reviewer (tech-plan-review) may rewrite this artifact in place.\n"
 )
 
 
@@ -113,7 +108,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
 
     Step 1 (Analyze): read brief.md, core-flows.md, and codebase; decide diagram
     vs suppression-prose per slot -- no writes. Step 2 (Write): emit tech-plan.md
-    via koan_artifact_write with status='In-Progress'.
+    via koan_artifact_write.
     """
     if step == 1:
         lines: list[str] = []
@@ -223,7 +218,6 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "Prose: component responsibilities, boundaries, chosen path, rejected",
                 "alternatives with rationale.",
                 '""",',
-                '    status="In-Progress",',
                 ")",
                 "```",
                 "",
@@ -253,7 +247,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "  brief.md, core-flows.md (if present), or codebase analysis notes.",
                 "- Level-separation: no cross-level mixing within a single diagram.",
                 "- Below-threshold slots: prose only. No diagram, no marker, no placeholder.",
-                "- status='In-Progress': the reviewer may rewrite in place.",
+                "- The reviewer may rewrite this artifact in place.",
             ],
             invoke_after=terminal_invoke(ctx.next_phase, ctx.suggested_phases),
         )

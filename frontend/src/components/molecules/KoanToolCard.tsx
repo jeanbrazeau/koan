@@ -111,11 +111,11 @@ function ReflectCard({ toolInput, result, inFlight }: Omit<KoanToolCardProps, 't
 
 // ArtifactWriteCard shows a live markdown preview of the artifact content as
 // the LLM streams args. Reads toolInput (aggregate) so every delta tick updates
-// the preview. Args: filename, content, status per koan_artifact_write signature.
+// the preview. Args: filename, content per koan_artifact_write signature.
+// Status display removed -- artifact lifecycle state is no longer tracked in frontmatter.
 function ArtifactWriteCard({ toolInput, inFlight }: Omit<KoanToolCardProps, 'toolName'>) {
   const filename = (toolInput?.filename as string) || ''
   const content = (toolInput?.content as string) || ''
-  const status = (toolInput?.status as string) || ''
   return (
     <div className="ktc ktc--artifact-write">
       <div className="ktc-header">
@@ -126,7 +126,6 @@ function ArtifactWriteCard({ toolInput, inFlight }: Omit<KoanToolCardProps, 'too
           {inFlight ? 'Writing artifact' : 'Wrote artifact'}
         </span>
         {filename && <span className="ktc-meta">{filename}</span>}
-        {status && <span className="ktc-meta">{status}</span>}
       </div>
       {content && (
         <div className="ktc-artifact-preview">

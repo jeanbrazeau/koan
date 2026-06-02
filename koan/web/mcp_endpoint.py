@@ -1832,28 +1832,25 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         ctx: Context,
         filename: str,
         content: str,
-        status: str | None = None,
     ) -> list[ContentBlock]:
         """Write or update an artifact file. Non-blocking; full-rewrite semantics.
 
-        Driver-managed YAML frontmatter (status, created, last_modified) is
-        composed onto the body. The `status` parameter optionally flips the
-        artifact's lifecycle marker (Draft / Approved / In-Progress / Final);
-        if omitted, the existing status is preserved or defaulted to In-Progress
-        on first write.
+        Driver-managed YAML frontmatter (created, last_modified) is composed
+        onto the body. `created` is preserved across rewrites; `last_modified`
+        is refreshed on every write. Status tracking has been removed -- artifact
+        lifecycle state lives in the orchestrator's conversation context.
 
         Args:
             filename: Root-only basename, must match [a-z0-9][a-z0-9_-]*.md
             content: Full markdown body (no frontmatter; the driver writes it).
-            status: Optional lifecycle marker. Must be one of STATUS_VALUES.
         """
         agent = await _get_agent(ctx)
         _check_or_raise(agent, app_state, "koan_artifact_write",
-                        {"filename": filename, "status": status})
+                        {"filename": filename})
 
         call_id = begin_tool_call(
             agent, "koan_artifact_write",
-            {"filename": filename, "content_len": len(content or ""), "status": status},
+            {"filename": filename, "content_len": len(content or "")},
             f"write {filename}",
         )
         result_blocks: list[ContentBlock] | None = None
@@ -1874,12 +1871,7 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
 
             from ..artifacts import write_artifact_atomic
             target = Path(run_dir) / filename
-            try:
-                meta = write_artifact_atomic(target, content or "", status)
-            except ValueError as exc:
-                raise ToolError(json.dumps({
-                    "error": "invalid_status", "message": str(exc),
-                }))
+            write_artifact_atomic(target, content or "")
 
             # Emit artifact diff so the sidebar reflects the new/updated file.
             from ..driver import _push_artifact_diff
@@ -1888,7 +1880,6 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
             result_blocks = [_text_block(json.dumps({
                 "ok": True,
                 "filename": filename,
-                "status": meta.get("status"),
             }))]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)

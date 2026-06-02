@@ -27,7 +27,7 @@ def test_intake_step3_writes_brief_md():
     text = "\n".join(g.instructions)
     assert "brief.md" in text
     assert "koan_artifact_write" in text
-    assert 'status="Final"' in text
+    assert "FROZEN" in text
     # All seven section headings must appear
     assert "Initiative" in text
     assert "Scope" in text
@@ -554,13 +554,13 @@ def test_core_flows_step1_reads_brief_md():
 
 
 def test_core_flows_step2_writes_core_flows_md():
-    """Core-flows step 2 must write core-flows.md with status=Final."""
+    """Core-flows step 2 must write core-flows.md and note the artifact is frozen."""
     from koan.phases import core_flows
     g = core_flows.step_guidance(2, _ctx())
     text = "\n".join(g.instructions)
     assert "core-flows.md" in text
     assert "koan_artifact_write" in text
-    assert 'status="Final"' in text or "status='Final'" in text
+    assert "FROZEN" in text
 
 
 def test_core_flows_role_context_forbids_implementation_detail():
