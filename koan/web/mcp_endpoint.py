@@ -357,6 +357,7 @@ class Handlers:
     koan_search: Callable[..., Awaitable[str]]
     koan_reflect: Callable[..., Awaitable[str]]
     koan_artifact_write: Callable[..., Awaitable[str]]
+    koan_artifact_edit: Callable[..., Awaitable[str]]
     koan_memory_propose: Callable[..., Awaitable[str]]
     koan_artifact_list: Callable[..., Awaitable[str]]
     koan_artifact_view: Callable[..., Awaitable[str]]
@@ -1887,6 +1888,110 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         finally:
             end_tool_call(agent, call_id, "koan_artifact_write", result_blocks, steer_manifest or None)
 
+    async def koan_artifact_edit(
+        ctx: Context,
+        filename: str,
+        old_string: str,
+        new_string: str,
+    ) -> list[ContentBlock]:
+        """Surgical in-place edit of an artifact's body. Single-unique-match semantics.
+
+        Reads the artifact, strips frontmatter (so old_string originates from
+        what koan_artifact_view showed the caller), replaces exactly one
+        occurrence of old_string with new_string, and re-writes via
+        write_artifact_atomic (preserving created, refreshing last_modified).
+
+        Error conditions:
+            invalid_filename: filename fails the [a-z0-9][a-z0-9_-]*.md pattern.
+            invalid_edit: old_string is empty, or old_string == new_string.
+            no_run_dir: no run directory is associated with this agent.
+            not_found: the artifact file does not exist.
+            no_match: old_string has zero occurrences in the body.
+            multiple_matches: old_string has more than one occurrence in the body.
+
+        Returns {"ok": true, "filename": ...} on success. Emits artifact_diff
+        so the sidebar refreshes, matching koan_artifact_write behavior.
+        """
+        agent = await _get_agent(ctx)
+        _check_or_raise(agent, app_state, "koan_artifact_edit",
+                        {"filename": filename})
+
+        call_id = begin_tool_call(
+            agent, "koan_artifact_edit",
+            {"filename": filename},
+            f"edit {filename}",
+        )
+        result_blocks: list[ContentBlock] | None = None
+        steer_manifest: list[dict] = []
+        try:
+            err = _validate_artifact_filename(filename)
+            if err:
+                raise ToolError(json.dumps({
+                    "error": "invalid_filename", "message": err,
+                }))
+
+            # Reject degenerate edits before touching disk.
+            if not old_string:
+                raise ToolError(json.dumps({
+                    "error": "invalid_edit",
+                    "message": "old_string must be non-empty",
+                }))
+            if old_string == new_string:
+                raise ToolError(json.dumps({
+                    "error": "invalid_edit",
+                    "message": "old_string and new_string are identical; no edit to apply",
+                }))
+
+            run_dir = _resolve_run_dir(agent)
+            if not run_dir:
+                raise ToolError(json.dumps({
+                    "error": "no_run_dir",
+                    "message": "No run directory available",
+                }))
+
+            target = Path(run_dir) / filename
+            if not target.is_file():
+                raise ToolError(json.dumps({
+                    "error": "not_found",
+                    "message": f"{filename} not found",
+                }))
+
+            # Strip frontmatter so old_string matches what koan_artifact_view
+            # returned to the caller -- matching raw on-disk text (including the
+            # managed frontmatter block) would be unreliable.
+            from ..artifacts import split_frontmatter, write_artifact_atomic
+            raw = target.read_text(encoding="utf-8")
+            _, body = split_frontmatter(raw)
+
+            count = body.count(old_string)
+            if count == 0:
+                raise ToolError(json.dumps({
+                    "error": "no_match",
+                    "message": "old_string not found in artifact body",
+                }))
+            if count > 1:
+                raise ToolError(json.dumps({
+                    "error": "multiple_matches",
+                    "message": f"{count} occurrences found; old_string must match exactly one",
+                }))
+
+            new_body = body.replace(old_string, new_string, 1)
+            write_artifact_atomic(target, new_body)
+
+            # Emit artifact diff so the sidebar reflects the updated file.
+            from ..driver import _push_artifact_diff
+            _push_artifact_diff(app_state)
+
+            result_blocks = [_text_block(json.dumps({
+                "ok": True,
+                "filename": filename,
+            }))]
+            result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
+            _push_tool_attachments(steer_manifest, agent)
+            return result_blocks
+        finally:
+            end_tool_call(agent, call_id, "koan_artifact_edit", result_blocks, steer_manifest or None)
+
     async def koan_memory_propose(
         ctx: Context,
         proposals: list[dict],
@@ -2078,6 +2183,7 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
     mcp.tool(name="koan_search")(koan_search)
     mcp.tool(name="koan_reflect")(koan_reflect)
     mcp.tool(name="koan_artifact_write")(koan_artifact_write)
+    mcp.tool(name="koan_artifact_edit")(koan_artifact_edit)
     mcp.tool(name="koan_memory_propose")(koan_memory_propose)
     mcp.tool(name="koan_artifact_list")(koan_artifact_list)
     mcp.tool(name="koan_artifact_view")(koan_artifact_view)
@@ -2100,6 +2206,7 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         koan_search=koan_search,
         koan_reflect=koan_reflect,
         koan_artifact_write=koan_artifact_write,
+        koan_artifact_edit=koan_artifact_edit,
         koan_memory_propose=koan_memory_propose,
         koan_artifact_list=koan_artifact_list,
         koan_artifact_view=koan_artifact_view,

@@ -846,6 +846,159 @@ async def test_artifact_list_omits_status(tmp_path):
     assert "modified_at" in by_path["with-fm.md"]
 
 
+# -- koan_artifact_edit -------------------------------------------------------
+
+@pytest.mark.anyio
+async def test_artifact_edit_replaces_single_occurrence(tmp_path):
+    """koan_artifact_edit replaces exactly one occurrence and the body is updated."""
+    import json
+    from koan.web.mcp_endpoint import build_mcp_server
+    from koan.artifacts import split_frontmatter
+
+    app_state, agent = _make_orchestrator_agent(tmp_path, "test-edit-replace")
+    _, handlers = build_mcp_server(app_state)
+
+    await handlers.koan_artifact_write(_FakeCtx(agent), "doc.md", "hello world\n")
+
+    result = await handlers.koan_artifact_edit(_FakeCtx(agent), "doc.md", "world", "koan")
+    payload = json.loads(result[0].text)
+    assert payload["ok"] is True
+    assert payload["filename"] == "doc.md"
+
+    _, body = split_frontmatter((tmp_path / "doc.md").read_text())
+    assert body == "hello koan\n"
+    assert "world" not in body
+
+
+@pytest.mark.anyio
+async def test_artifact_edit_preserves_created(tmp_path):
+    """koan_artifact_edit preserves the created timestamp across edits."""
+    from koan.web.mcp_endpoint import build_mcp_server
+    from koan.artifacts import split_frontmatter
+
+    app_state, agent = _make_orchestrator_agent(tmp_path, "test-edit-created")
+    _, handlers = build_mcp_server(app_state)
+
+    await handlers.koan_artifact_write(_FakeCtx(agent), "doc.md", "original content\n")
+    first_meta, _ = split_frontmatter((tmp_path / "doc.md").read_text())
+    assert first_meta is not None
+    original_created = first_meta["created"]
+
+    await handlers.koan_artifact_edit(_FakeCtx(agent), "doc.md", "original", "updated")
+    second_meta, _ = split_frontmatter((tmp_path / "doc.md").read_text())
+    assert second_meta is not None
+    assert second_meta["created"] == original_created
+    assert "last_modified" in second_meta
+
+
+@pytest.mark.anyio
+async def test_artifact_edit_file_not_found(tmp_path):
+    """koan_artifact_edit raises ToolError with error=not_found for missing file."""
+    import json
+    from fastmcp.exceptions import ToolError
+    from koan.web.mcp_endpoint import build_mcp_server
+
+    app_state, agent = _make_orchestrator_agent(tmp_path, "test-edit-notfound")
+    _, handlers = build_mcp_server(app_state)
+
+    with pytest.raises(ToolError) as exc_info:
+        await handlers.koan_artifact_edit(_FakeCtx(agent), "missing.md", "old", "new")
+    body = json.loads(str(exc_info.value))
+    assert body["error"] == "not_found"
+
+
+@pytest.mark.anyio
+async def test_artifact_edit_no_match(tmp_path):
+    """koan_artifact_edit raises ToolError with error=no_match when old_string absent."""
+    import json
+    from fastmcp.exceptions import ToolError
+    from koan.web.mcp_endpoint import build_mcp_server
+
+    app_state, agent = _make_orchestrator_agent(tmp_path, "test-edit-nomatch")
+    _, handlers = build_mcp_server(app_state)
+
+    await handlers.koan_artifact_write(_FakeCtx(agent), "doc.md", "hello world\n")
+
+    with pytest.raises(ToolError) as exc_info:
+        await handlers.koan_artifact_edit(_FakeCtx(agent), "doc.md", "nonexistent", "x")
+    body = json.loads(str(exc_info.value))
+    assert body["error"] == "no_match"
+
+
+@pytest.mark.anyio
+async def test_artifact_edit_multiple_matches(tmp_path):
+    """koan_artifact_edit raises ToolError with error=multiple_matches when >1 occurrence."""
+    import json
+    from fastmcp.exceptions import ToolError
+    from koan.web.mcp_endpoint import build_mcp_server
+
+    app_state, agent = _make_orchestrator_agent(tmp_path, "test-edit-multi")
+    _, handlers = build_mcp_server(app_state)
+
+    await handlers.koan_artifact_write(_FakeCtx(agent), "doc.md", "foo bar foo\n")
+
+    with pytest.raises(ToolError) as exc_info:
+        await handlers.koan_artifact_edit(_FakeCtx(agent), "doc.md", "foo", "baz")
+    body = json.loads(str(exc_info.value))
+    assert body["error"] == "multiple_matches"
+
+
+@pytest.mark.anyio
+async def test_artifact_edit_invalid_edit_empty_old(tmp_path):
+    """koan_artifact_edit raises ToolError with error=invalid_edit for empty old_string."""
+    import json
+    from fastmcp.exceptions import ToolError
+    from koan.web.mcp_endpoint import build_mcp_server
+
+    app_state, agent = _make_orchestrator_agent(tmp_path, "test-edit-empty")
+    _, handlers = build_mcp_server(app_state)
+
+    await handlers.koan_artifact_write(_FakeCtx(agent), "doc.md", "content\n")
+
+    with pytest.raises(ToolError) as exc_info:
+        await handlers.koan_artifact_edit(_FakeCtx(agent), "doc.md", "", "new")
+    body = json.loads(str(exc_info.value))
+    assert body["error"] == "invalid_edit"
+
+
+@pytest.mark.anyio
+async def test_artifact_edit_invalid_edit_same_strings(tmp_path):
+    """koan_artifact_edit raises ToolError with error=invalid_edit when old==new."""
+    import json
+    from fastmcp.exceptions import ToolError
+    from koan.web.mcp_endpoint import build_mcp_server
+
+    app_state, agent = _make_orchestrator_agent(tmp_path, "test-edit-same")
+    _, handlers = build_mcp_server(app_state)
+
+    await handlers.koan_artifact_write(_FakeCtx(agent), "doc.md", "same content\n")
+
+    with pytest.raises(ToolError) as exc_info:
+        await handlers.koan_artifact_edit(_FakeCtx(agent), "doc.md", "same", "same")
+    body = json.loads(str(exc_info.value))
+    assert body["error"] == "invalid_edit"
+
+
+@pytest.mark.anyio
+async def test_artifact_edit_emits_diff_events(tmp_path):
+    """koan_artifact_edit triggers artifact_diff so the sidebar refreshes."""
+    from koan.web.mcp_endpoint import build_mcp_server
+
+    app_state, agent = _make_orchestrator_agent(tmp_path, "test-edit-diff")
+    _, handlers = build_mcp_server(app_state)
+
+    await handlers.koan_artifact_write(_FakeCtx(agent), "doc.md", "before edit\n")
+    # Clear events recorded during write so we can isolate the edit's events
+    events_before = len(app_state.projection_store.events)
+
+    await handlers.koan_artifact_edit(_FakeCtx(agent), "doc.md", "before", "after")
+
+    new_event_types = [
+        e.event_type for e in app_state.projection_store.events[events_before:]
+    ]
+    assert any(t in new_event_types for t in ("artifact_created", "artifact_modified", "artifact_diff"))
+
+
 # -- api_sessions_list: workflow_history schema --------------------------------
 
 def test_api_sessions_list_returns_workflow_from_history(tmp_path, client):

@@ -107,6 +107,12 @@
   50%      { opacity: 1; }
 }
 
+/* ---- ArtifactEditCard ---- */
+/* header-only card; no additional layout needed beyond shared .ktc classes */
+.ktc--artifact-edit .ktc-label {
+  color: var(--color-purple);
+}
+
 /* ---- ArtifactWriteCard ---- */
 /* layout values are local; flag for promotion if reused */
 .ktc--artifact-write .ktc-artifact-preview {

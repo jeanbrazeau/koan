@@ -56,7 +56,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         # Documentation of the tools the orchestrator may use;
         # actual allow/deny lives in _check_orchestrator_permission.
         # write/edit are intentionally absent -- all artifact mutations
-        # flow through koan_artifact_write per this task's design.
+        # flow through koan_artifact_write / koan_artifact_edit.
         "koan_complete_step",
         "koan_set_phase",
         "koan_set_workflow",
@@ -74,6 +74,7 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "koan_search",
         "koan_reflect",
         "koan_artifact_write",
+        "koan_artifact_edit",
         "koan_memory_propose",
         "bash",
     }),
@@ -287,12 +288,13 @@ def _check_orchestrator_permission(
         )
         return {"allowed": False, "reason": reason}
 
-    # koan_artifact_write -- non-blocking artifact write tool. All artifact
-    # mutations flow through this tool; write/edit are blocked for orchestrator.
-    if tool_name == "koan_artifact_write":
+    # koan_artifact_write / koan_artifact_edit -- the two artifact mutation tools.
+    # All artifact mutations flow through these tools; built-in write/edit are
+    # blocked for orchestrator. Both tools are available in every phase.
+    if tool_name in ("koan_artifact_write", "koan_artifact_edit"):
         log.debug(
-            "permission allow: role=orchestrator tool=koan_artifact_write phase=%s step=%s",
-            phase, current_step,
+            "permission allow: role=orchestrator tool=%s phase=%s step=%s",
+            tool_name, phase, current_step,
         )
         return {"allowed": True, "reason": None}
 

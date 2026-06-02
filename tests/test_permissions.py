@@ -410,3 +410,34 @@ class TestOrchestratorWriteEditDenied:
             r = check_permission("orchestrator", "edit", current_phase=phase, current_step=2)
             assert not r["allowed"], f"orchestrator edit should be denied in phase={phase}"
 
+
+# -- koan_artifact_edit permissions -------------------------------------------
+
+class TestOrchestratorArtifactEdit:
+    """koan_artifact_edit is orchestrator-only, available in every phase.
+    Mirrors the koan_artifact_write permission contract."""
+
+    _PHASES = (
+        "intake", "plan-spec", "plan-review", "execute", "execution",
+        "brief-generation", "implementation-validation", "curation",
+        "milestone-spec", "milestone-review", "exec-review", "frame",
+    )
+
+    def test_edit_allowed_every_phase(self):
+        for phase in self._PHASES:
+            r = check_permission("orchestrator", "koan_artifact_edit",
+                                 current_phase=phase, current_step=2)
+            assert r["allowed"], (
+                f"koan_artifact_edit should be allowed for orchestrator in phase={phase}"
+            )
+
+    def test_edit_denied_for_scout(self):
+        r = check_permission("scout", "koan_artifact_edit",
+                             current_phase="intake", current_step=2)
+        assert not r["allowed"], "koan_artifact_edit should be denied for scout"
+
+    def test_edit_denied_for_executor(self):
+        r = check_permission("executor", "koan_artifact_edit",
+                             current_phase="execution", current_step=2)
+        assert not r["allowed"], "koan_artifact_edit should be denied for executor"
+

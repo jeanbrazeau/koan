@@ -136,6 +136,28 @@ function ArtifactWriteCard({ toolInput, inFlight }: Omit<KoanToolCardProps, 'too
   )
 }
 
+/**
+ * ArtifactEditCard renders a koan_artifact_edit call showing the filename only.
+ * old_string/new_string are not shown -- the filename is sufficient context for
+ * the activity feed (brief.md decision 7).
+ */
+function ArtifactEditCard({ toolInput, inFlight }: Omit<KoanToolCardProps, 'toolName'>) {
+  const filename = (toolInput?.filename as string) || ''
+  return (
+    <div className="ktc ktc--artifact-edit">
+      <div className="ktc-header">
+        <span className="ktc-indicator">
+          {inFlight ? <span className="ktc-running-dot" /> : <CheckSvg />}
+        </span>
+        <span className="ktc-label">
+          {inFlight ? 'Editing artifact' : 'Edited artifact'}
+        </span>
+        {filename && <span className="ktc-meta">{filename}</span>}
+      </div>
+    </div>
+  )
+}
+
 // YieldCard stays in_flight=True for the entire user-block window per intake
 // decision 8 -- the pulsing dot signals "awaiting user". Suggestions are shown
 // to give context about what the orchestrator is offering.
@@ -249,6 +271,7 @@ function FallbackCard({ label, inFlight }: { label: string; inFlight: boolean })
 const TOOL_RENDERERS: Record<string, ToolRenderer> = {
   koan_reflect: ReflectCard,
   koan_artifact_write: ArtifactWriteCard,
+  koan_artifact_edit: ArtifactEditCard,
   koan_yield: YieldCard,
   koan_ask_question: AskQuestionCard,
   koan_request_executor: ExecutorCard,

@@ -249,7 +249,7 @@ Source of truth: `koan/phases/plan_spec.py:PHASE_ROLE_CONTEXT`.
 
 ## Frontmatter convention
 
-Every artifact written by `koan_artifact_write` has
+Every artifact written by `koan_artifact_write` or `koan_artifact_edit` has
 a YAML frontmatter block prepended by the driver:
 
 ```
@@ -280,12 +280,22 @@ Frontmatter rules:
 
 ---
 
-## Write tool
+## Write and edit tools
 
-**`koan_artifact_write(filename, content)`** -- the only
-artifact-write tool. Writes the file (full-rewrite semantics) and returns
-immediately with `{"ok": true, "filename": ...}`. Emits
-`artifact_diff` events for the sidebar. Use this for every artifact mutation.
+**`koan_artifact_write(filename, content)`** -- full-rewrite tool. Writes the
+file with managed frontmatter and returns immediately with
+`{"ok": true, "filename": ...}`. Emits `artifact_diff` events for the sidebar.
+Use this to create an artifact or replace it wholesale.
+
+**`koan_artifact_edit(filename, old_string, new_string)`** -- surgical edit
+tool. Reads the artifact body (frontmatter-stripped), replaces exactly one
+occurrence of `old_string` with `new_string`, and re-writes via the atomic
+helper (preserving `created`, refreshing `last_modified`). Returns
+`{"ok": true, "filename": ...}` on success. Emits `artifact_diff` events.
+Error conditions: `not_found` (file missing), `no_match` (zero occurrences),
+`multiple_matches` (more than one occurrence), `invalid_edit` (empty
+`old_string` or `old_string == new_string`). Preferred for targeted in-place
+fixes; `koan_artifact_write` is preferred for extensive rewrites.
 
 The legacy `koan_artifact_propose` tool was retired in M5 (commit `99a4e29`)
 along with the inline-review frontend surface (M6, commit `1670f06`).
