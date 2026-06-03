@@ -68,6 +68,11 @@ def _make_app_state_with_agent(
     event_log = AsyncMock()
     event_log.emit_step_transition = AsyncMock()
 
+    # is_primary=False: run_agent_loop runs exactly one turn and returns for
+    # non-primary agents. These golden tests pin the single-turn translation,
+    # so they use the non-primary path to avoid parking on the yield_future
+    # hand-back that a primary orchestrator would take. The multi-turn primary
+    # park/resume path is covered in tests/test_loop.py.
     agent = AgentState(
         agent_id=agent_id,
         role="orchestrator",
@@ -77,7 +82,7 @@ def _make_app_state_with_agent(
         phase_module=phase_module,
         phase_ctx=PhaseContext(run_dir="", subagent_dir=tmp_subagent_dir),
         event_log=event_log,
-        is_primary=True,
+        is_primary=False,
     )
     app_state.agents[agent_id] = agent
     return app_state, agent

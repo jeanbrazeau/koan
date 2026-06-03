@@ -335,120 +335,18 @@ class PydanticAIAgent:
         run_usage = None
 
         try:
-            async with pai_agent.iter(options.boot_prompt, deps=deps) as agent_run:
-                async for node in agent_run:
-                    if isinstance(node, ModelRequestNode):
-                        # Stream the model's response events.
-                        async with node.stream(agent_run.ctx) as stream:
-                            async for ev in stream:
-                                if isinstance(ev, PartStartEvent):
-                                    part = ev.part
-                                    if isinstance(part, ToolCallPart):
-                                        # tool_start: beginning of a tool call streaming in.
-                                        yield StreamEvent(
-                                            type="tool_start",
-                                            tool_name=part.tool_name,
-                                            tool_use_id=part.tool_call_id,
-                                            block_index=ev.index,
-                                        )
-                                elif isinstance(ev, PartDeltaEvent):
-                                    delta = ev.delta
-                                    if isinstance(delta, TextPartDelta):
-                                        # token_delta: streaming text content.
-                                        yield StreamEvent(
-                                            type="token_delta",
-                                            content=delta.content_delta,
-                                        )
-                                    elif isinstance(delta, ThinkingPartDelta):
-                                        # thinking: streaming thinking/reasoning content.
-                                        if delta.content_delta:
-                                            yield StreamEvent(
-                                                type="thinking",
-                                                content=delta.content_delta,
-                                                is_thinking=True,
-                                            )
-                                    elif isinstance(delta, ToolCallPartDelta):
-                                        # tool_input_delta: streaming tool call args.
-                                        if delta.args_delta is not None:
-                                            args_str = (
-                                                delta.args_delta
-                                                if isinstance(delta.args_delta, str)
-                                                else str(delta.args_delta)
-                                            )
-                                            yield StreamEvent(
-                                                type="tool_input_delta",
-                                                content=args_str,
-                                                block_index=ev.index,
-                                            )
-                                elif isinstance(ev, PartEndEvent):
-                                    part = ev.part
-                                    if isinstance(part, ToolCallPart):
-                                        # tool_stop: tool call args are finalized.
-                                        yield StreamEvent(
-                                            type="tool_stop",
-                                            block_index=ev.index,
-                                        )
-                                    # TextPart end: emit assistant_text with the full content.
-                                    # TextPart.content holds the accumulated text (not a delta).
-                                    from pydantic_ai.messages import TextPart
-                                    if isinstance(part, TextPart) and part.content:
-                                        yield StreamEvent(
-                                            type="assistant_text",
-                                            content=part.content,
-                                        )
-
-                    elif isinstance(node, CallToolsNode):
-                        # Iterate tool execution events to emit tool_result events.
-                        async with node.stream(agent_run.ctx) as events_iter:
-                            async for tool_ev in events_iter:
-                                if isinstance(tool_ev, FunctionToolResultEvent):
-                                    result_part = tool_ev.part
-                                    tool_name = result_part.tool_name
-                                    tool_use_id = result_part.tool_call_id
-                                    # content may be str, list, or other ToolReturnContent.
-                                    raw_content = result_part.content
-                                    content_str = (
-                                        raw_content
-                                        if isinstance(raw_content, str)
-                                        else str(raw_content) if raw_content is not None
-                                        else ""
-                                    )
-                                    # Derive metrics from tool output, mirroring
-                                    # ClaudeSDKAgent's parser paths (M4: grep/glob added).
-                                    # read -> {lines_read, bytes_read} from cat -n lines.
-                                    # grep/glob -> {matches, files_matched} from header.
-                                    metrics = None
-                                    if tool_name == "read":
-                                        metrics = _parse_read_result_from_content(content_str)
-                                    elif tool_name in ("grep", "glob"):
-                                        metrics = _parse_grep_result_from_content(content_str)
-                                    yield StreamEvent(
-                                        type="tool_result",
-                                        tool_name=tool_name,
-                                        tool_use_id=tool_use_id,
-                                        content=content_str,
-                                        metrics=metrics,
-                                    )
-
-                    elif isinstance(node, End):
-                        # Run complete: capture final RunUsage and emit turn_complete.
-                        run_usage = agent_run.usage
-                        # Derive a per-request RequestUsage from the RunUsage totals.
-                        # pydantic-ai 2.0.0b5 does not expose per-request RequestUsage
-                        # on AgentStream.usage; RunUsage carries the run-level totals.
-                        # We synthesize a RequestUsage from those totals for the usage
-                        # field on turn_complete so spawn_subagent can emit real
-                        # input_tokens/output_tokens at agent_exited.
-                        request_usage = RequestUsage(
-                            input_tokens=run_usage.input_tokens,
-                            output_tokens=run_usage.output_tokens,
-                            cache_read_tokens=run_usage.cache_read_tokens,
-                            cache_write_tokens=run_usage.cache_write_tokens,
-                        )
-                        yield StreamEvent(
-                            type="turn_complete",
-                            usage=request_usage,
-                        )
+            # Delegate the iteration to the driver-owned multi-turn loop. For a
+            # primary orchestrator this runs many turns -- parking on yield_future
+            # at each terminal-text hand-back and resuming on the next user message
+            # -- and returns only when koan_set_phase("done") sets workflow_done.
+            # Scouts/executors (is_primary=False) run exactly one turn and return.
+            # run_agent_loop owns agent_state.message_history across turns and emits
+            # the same 8-type StreamEvent vocabulary documented above.
+            from .loop import run_agent_loop
+            async for ev in run_agent_loop(
+                pai_agent, deps, options, self._app_state, agent_state,
+            ):
+                yield ev
 
             self._success = True
 
