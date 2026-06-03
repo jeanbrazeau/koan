@@ -1,13 +1,13 @@
-# End-to-end attachment delivery tests for M3.
+# Attachment delivery tests (M3, updated for the M5 in-process loop).
 #
-# Three scenarios:
-#   1. File attached to a chat message reaches koan_yield as an EmbeddedResource
-#      block adjacent to the USER MESSAGE text block; tool_completed event carries
-#      the attachment manifest.
-#   2. Non-Claude runner_type collapses file blocks to a single TextContent notice;
-#      manifest is still populated.
+# Scenarios:
+#   1. A chat-message attachment surfaces in the loop's resume prompt as a text
+#      notice (in-process path; koan_yield removed in M5).
+#   2. A binary EmbeddedResource (runner_type "claude") cannot ride the single-
+#      string resume prompt -- documents the text-only delivery limitation.
 #   3. Per-decision attachments on /api/memory/curation reach koan_memory_propose
-#      as File blocks in the correct order.
+#      as File blocks in the correct order (still the MCP-handler path).
+#   4. start-run attachments delivered on the first koan_complete_step.
 
 from __future__ import annotations
 
@@ -54,27 +54,28 @@ class FakeContext:
         return None
 
 
-# -- Scenario 1: Claude runner receives EmbeddedResource block for text file ----
+# -- Scenario 1: in-process resume delivers attachment text to the next turn ---
+#
+# koan_yield is removed in M5. On the in-process path the loop resumes after a
+# terminal-text hand-back: drain_user_messages() + assemble_resume_prompt()
+# build the next turn's prompt. Attachments are delivered as TEXT appended to
+# that prompt (the loop carries a single string), so the non-claude/in-process
+# path surfaces the upload notice; the binary EmbeddedResource produced for
+# runner_type "claude" has no .text and is therefore omitted.
 
 @pytest.mark.anyio
-async def test_chat_attachment_reaches_koan_yield_as_embedded_resource(tmp_path):
-    """Upload a file, attach it to a chat message, and assert koan_yield returns
-    an EmbeddedResource block immediately after the USER MESSAGE text block.
-    The tool_completed event must carry the attachment manifest.
+async def test_resume_prompt_includes_attachment_text_notice(tmp_path):
+    """A buffered message with an attachment yields a resume prompt carrying the
+    USER MESSAGE text plus the upload text-notice (non-claude/in-process path).
     """
-    from mcp.types import EmbeddedResource, TextContent
-    from koan.web.uploads import init_upload_state
+    from koan.web.uploads import init_upload_state, register_upload, commit_to_run
+    from koan.state import drain_user_messages
+    from koan.agents.loop import assemble_resume_prompt
 
     app_state = AppState()
     app_state.run.run_dir = str(tmp_path)
     app_state.run.phase = "intake"
     init_upload_state(app_state.uploads)
-
-    agent = _make_agent(app_state, tmp_path, runner_type="claude")
-    _, handlers = build_mcp_server(app_state)
-
-    # Upload a small text file via the upload registry.
-    from koan.web.uploads import register_upload, commit_to_run
 
     class FakeFile:
         filename = "note.txt"
@@ -83,69 +84,43 @@ async def test_chat_attachment_reaches_koan_yield_as_embedded_resource(tmp_path)
 
     record = await register_upload(app_state.uploads, FakeFile())
     uid = record.id
-
-    # Commit the file to run_dir (simulates what api_chat does).
     commit_to_run(app_state.uploads, [uid], tmp_path)
 
-    # Buffer a chat message with the attachment id.
     import time
     from koan.state import ChatMessage
-    msg = ChatMessage(
+    app_state.interactions.user_message_buffer.append(ChatMessage(
         content="check this file",
         timestamp_ms=int(time.time() * 1000),
         attachments=[uid],
-    )
-    app_state.interactions.user_message_buffer.append(msg)
+    ))
 
-    # Resolve the yield future immediately so koan_yield doesn't block.
-    loop = asyncio.get_running_loop()
-    fut = loop.create_future()
-    app_state.interactions.yield_future = fut
-    # The handler drains user_message_buffer on resolve; we trigger by resolving
-    # in the same event loop tick AFTER the handler starts blocking.
-    # Strategy: run koan_yield concurrently and resolve the future once it blocks.
+    messages = drain_user_messages(app_state)
+    prompt = assemble_resume_prompt(messages, app_state, runner_type="pydantic_ai")
 
-    # Actually with pre-buffered messages koan_yield drains immediately without
-    # setting yield_future. Messages are already in user_message_buffer.
-    result = await handlers.koan_yield(FakeContext(agent), suggestions=None)
-
-    # First block: the USER MESSAGE text block
-    assert isinstance(result[0], TextContent)
-    assert "USER MESSAGE" in result[0].text
-    assert "check this file" in result[0].text
-
-    # Second block: EmbeddedResource for note.txt
-    assert isinstance(result[1], EmbeddedResource)
-
-    # M3: verify tool_attachments projection event carries full koan-side fields.
-    events = app_state.projection_store.events
-    attach_events = [e for e in events if e.event_type == "tool_attachments"]
-    assert len(attach_events) >= 1, "expected at least one tool_attachments event"
-    manifest = attach_events[-1].payload.get("attachments", [])
-    assert len(manifest) == 1
-    att = manifest[0]
-    assert att["upload_id"] == uid
-    assert att["filename"] == "note.txt"
-    assert att["path"] != ""  # koan-side path populated
+    assert "USER MESSAGE" in prompt
+    assert "check this file" in prompt
+    # Attachment surfaces as a text notice naming the file.
+    assert "note.txt" in prompt
+    assert "attachment(s) omitted" in prompt
 
 
-# -- Scenario 2: Non-Claude runner collapses blocks to text notice -------------
+# -- Scenario 2: binary EmbeddedResource is omitted from the single-string prompt
 
 @pytest.mark.anyio
-async def test_non_claude_runner_gets_text_notice_not_file_block(tmp_path):
-    """Same upload flow with runner_type='codex' should produce a single
-    TextContent notice block, not an EmbeddedResource. Manifest still populated.
+async def test_resume_prompt_omits_binary_attachment_for_claude(tmp_path):
+    """For runner_type 'claude', upload_ids_to_blocks returns a binary
+    EmbeddedResource with no .text, so it cannot ride the single-string resume
+    prompt. The user message text still survives. Documents the in-process
+    text-only attachment limitation (full binary delivery would need M5c work).
     """
-    from mcp.types import EmbeddedResource, TextContent
     from koan.web.uploads import init_upload_state, register_upload, commit_to_run
+    from koan.state import drain_user_messages
+    from koan.agents.loop import assemble_resume_prompt
 
     app_state = AppState()
     app_state.run.run_dir = str(tmp_path)
     app_state.run.phase = "intake"
     init_upload_state(app_state.uploads)
-
-    agent = _make_agent(app_state, tmp_path, runner_type="codex")
-    _, handlers = build_mcp_server(app_state)
 
     class FakeFile:
         filename = "data.csv"
@@ -157,35 +132,19 @@ async def test_non_claude_runner_gets_text_notice_not_file_block(tmp_path):
 
     import time
     from koan.state import ChatMessage
-    msg = ChatMessage(
+    app_state.interactions.user_message_buffer.append(ChatMessage(
         content="see attached",
         timestamp_ms=int(time.time() * 1000),
         attachments=[record.id],
-    )
-    app_state.interactions.user_message_buffer.append(msg)
+    ))
 
-    result = await handlers.koan_yield(FakeContext(agent), suggestions=None)
+    messages = drain_user_messages(app_state)
+    prompt = assemble_resume_prompt(messages, app_state, runner_type="claude")
 
-    # First block: the USER MESSAGE text block
-    assert isinstance(result[0], TextContent)
-    assert "USER MESSAGE" in result[0].text
-
-    # Second block: the text notice (NOT an EmbeddedResource)
-    assert isinstance(result[1], TextContent)
-    assert "attachment(s) omitted" in result[1].text
-    assert "data.csv" in result[1].text
-    assert not any(isinstance(b, EmbeddedResource) for b in result)
-
-    # M3: even for non-Claude runners the tool_attachments event must fire with
-    # full koan-side fields (manifest is always populated regardless of runner).
-    events = app_state.projection_store.events
-    attach_events = [e for e in events if e.event_type == "tool_attachments"]
-    assert len(attach_events) >= 1
-    manifest = attach_events[-1].payload.get("attachments", [])
-    assert len(manifest) == 1
-    assert manifest[0]["upload_id"] == record.id
-    assert manifest[0]["filename"] == "data.csv"
-    assert manifest[0]["path"] != ""
+    assert "USER MESSAGE" in prompt
+    assert "see attached" in prompt
+    # Binary EmbeddedResource carries no text -> not appended to the prompt.
+    assert "data.csv" not in prompt
 
 
 # -- Scenario 3: Per-decision attachments in koan_memory_propose ---------------

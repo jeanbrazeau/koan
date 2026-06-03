@@ -224,8 +224,10 @@ def _build_agent() -> Agent[_Deps, None]:
     def _reject_text(text: str) -> str:
         raise ModelRetry("Do not produce text output. Call the `done` tool instead.")
 
+    # Use 'google:' provider prefix -- 'google-gla:' is a v1 alias not accepted
+    # by pydantic-ai v2.0.0b5's infer_provider_class.
     agent: Agent[_Deps, str] = Agent(
-        model=f"google-gla:{_model()}",
+        model=f"google:{_model()}",
         system_prompt=SYSTEM_PROMPT,
         model_settings={
             "temperature": 0.0,

@@ -209,18 +209,22 @@ def test_terminal_invoke_with_next_phase_calls_set_phase():
     assert 'koan_set_phase("plan-spec")' in text
 
 
-def test_terminal_invoke_with_none_calls_yield():
+def test_terminal_invoke_with_none_hands_back():
     from koan.phases.format_step import terminal_invoke
     text = terminal_invoke(None, ["plan-spec", "execute"])
-    assert "koan_yield" in text
+    # koan_yield is gone -- the terminal-text turn is the hand-back.
+    assert "koan_yield" not in text
+    assert "End your turn" in text
+    # The user-confirmed transition still commits via koan_set_phase.
+    assert "koan_set_phase" in text
     assert "plan-spec" in text
     assert "execute" in text
 
 
-def test_terminal_invoke_yield_with_no_suggestions_no_hint_clause():
+def test_terminal_invoke_no_suggestions_no_hint_clause():
     from koan.phases.format_step import terminal_invoke
     text = terminal_invoke(None, [])
-    assert "koan_yield" in text
+    assert "koan_yield" not in text
     # Without suggestions, no "(e.g. ...)" clause should appear
     assert "(e.g." not in text
     # "done" option should still be mentioned
@@ -492,12 +496,13 @@ def test_intake_step3_no_chat_synthesis():
 # frame
 # ---------------------------------------------------------------------------
 
-def test_frame_step1_strong_yield_no_artifact():
-    """Frame step 1 must cover all three exploration categories and strongly prompt koan_yield.
+def test_frame_step1_strong_handback_no_artifact():
+    """Frame step 1 must cover all three exploration categories and strongly prompt hand-back.
 
-    The step must mention koan_yield, koan_reflect, koan_ask_question, and bug (broadened
-    scope). It must not contain 'sounding board' or an actual koan_artifact_write call
-    template; a prohibitive mention is OK.
+    The step must mention the hand-back (end your turn, no tool call), koan_reflect,
+    koan_ask_question, and bug (broadened scope). It must not mention the removed
+    koan_yield tool, must not contain 'sounding board' or an actual
+    koan_artifact_write call template; a prohibitive mention is OK.
     """
     from koan.phases import frame
     g = frame.step_guidance(1, _ctx())
@@ -507,10 +512,12 @@ def test_frame_step1_strong_yield_no_artifact():
     # Memory and clarification tools must be encouraged
     assert "koan_reflect" in text
     assert "koan_ask_question" in text
-    # Always-yield must be stated in the body
-    assert "koan_yield" in text
-    # invoke_after footer also uses koan_yield
-    assert "koan_yield" in g.invoke_after
+    # The removed koan_yield tool must not be referenced
+    assert "koan_yield" not in text
+    assert "koan_yield" not in g.invoke_after
+    # Always-hand-back must be stated in the body and the footer
+    assert "end your turn" in text.lower()
+    assert "end your turn" in g.invoke_after.lower()
     # Must not contain 'sounding board' (removed from broadened posture)
     assert "sounding board" not in text.lower()
     # Must not contain an actual write call template; prohibition mention is OK

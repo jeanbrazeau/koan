@@ -64,9 +64,9 @@ PHASE_ROLE_CONTEXT = (
     "## Structural invariant\n"
     "\n"
     "You propose, the user approves, then you write. Every memory mutation\n"
-    "(create, update, delete) must be presented to the user via `koan_yield`\n"
-    "and explicitly approved before you call a write tool. There are no\n"
-    "silent writes.\n"
+    "(create, update, delete) must be presented to the user -- end your turn\n"
+    "with the proposal (no tool call) so the loop hands back and waits for\n"
+    "approval -- before you call a write tool. There are no silent writes.\n"
     "\n"
     "## Tools\n"
     "\n"
@@ -435,7 +435,7 @@ def _step_2_memorize(ctx: PhaseContext) -> StepGuidance:
         "",
         "This is the writing step. Your candidate list from step 1 becomes",
         "`koan_memorize` and `koan_forget` calls, gated by user approval",
-        "via `koan_yield`.",
+        "(end your turn with the proposal and wait for the user before writing).",
         "",
         "Read the writing discipline, contrastive examples, and the",
         "draft-quality checklist below BEFORE drafting your first",

@@ -1,21 +1,19 @@
 # AgentRegistry -- maps agent types to Agent instances and resolves
-# agent configuration (installation, model, thinking mode) for a role.
+# agent configuration (model spec) for a role.
 # Replaces koan/runners/registry.py; the runner-level types (RunnerRegistry,
 # compute_balanced_profile, compute_builtin_profiles) move here.
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import TYPE_CHECKING
 
 from ..logger import get_logger
 from ..probe import ProbeResult
 from ..types import (
     BUILTIN_PROFILE_NAMES,
-    ROLE_EFFORT,
     ROLE_MODEL_TIER,
-    AgentInstallation,
-    ModelInfo,
+    CachingPolicy,
+    ModelSpec,
     ModelTier,
     Profile,
     ProfileTier,
@@ -32,22 +30,17 @@ if TYPE_CHECKING:
 log = get_logger("agent_registry")
 
 
-# -- Built-in profile definitions ----------------------------------------------
+# -- Built-in Gemini profile definitions (static; probe_results vestigial) ----
+#
+# Static per-tier Gemini specs: strong/standard/cheap -> model + thinking.
+# These are the provider-based replacement for the old runner-priority table.
+# Context windows are filled with known values; update when models change.
 
-# Balanced: auto-fallback across available runners
-_TIER_PRIORITY: dict[ModelTier, list[tuple[str, str]]] = {
-    "strong": [("claude", "sonnet"), ("codex", "gpt-5"), ("gemini", "gemini-pro")],
-    "standard": [("claude", "sonnet"), ("codex", "gpt-5"), ("gemini", "gemini-pro")],
-    "cheap": [("claude", "haiku"), ("codex", "gpt-5-mini"), ("gemini", "gemini-flash")],
-}
-
-# Fixed built-in profiles: (runner_type, model) per tier, no fallback logic
-_FIXED_PROFILE_SPECS: dict[str, dict[ModelTier, tuple[str, str]]] = {
-    "frontier": {
-        "strong": ("claude", "opus[1m]"),
-        "standard": ("claude", "sonnet"),
-        "cheap": ("claude", "haiku"),
-    },
+_GEMINI_TIER_SPECS: dict[ModelTier, tuple[str, ThinkingMode, int]] = {
+    # (model_id, thinking, context_window)
+    "strong":   ("gemini-2.5-pro-latest",   "high",     1_000_000),
+    "standard": ("gemini-2.5-flash-latest",  "medium",   1_000_000),
+    "cheap":    ("gemini-flash-lite-latest",  "disabled", 1_000_000),
 }
 
 _TIER_DEFAULT_THINKING: dict[ModelTier, ThinkingMode] = {
@@ -76,9 +69,9 @@ def _best_supported_thinking(
 class AgentRegistry:
     """Resolves agent configuration and constructs Agent instances for a role.
 
-    Replaces RunnerRegistry from koan/runners/registry.py. The public interface
-    is unchanged except for naming: get_runner -> get_agent, RunnerError ->
-    AgentError, RunnerDiagnostic -> AgentDiagnostic (runner= field -> agent=).
+    Replaces RunnerRegistry from koan/runners/registry.py. Post-M1 the primary
+    resolution path is resolve_model_spec (provider-based). get_agent is
+    orphaned pending the M2 rewire.
     """
 
     def get_agent(
@@ -89,31 +82,18 @@ class AgentRegistry:
     ) -> Agent:
         """Construct and return an Agent for the given runner_type.
 
-        runner_type identifies the agent class for this profile tier. The name
-        is historical (predates the M2 Runner -> Agent rename) and is preserved
-        for config-schema stability. Current mapping:
-          'claude'  -> ClaudeSDKAgent (drives the Claude Agent SDK directly)
-          'codex'   -> CommandLineAgent(CodexRunner)
-          'gemini'  -> CommandLineAgent(GeminiRunner)
-
-        In M2 the 'claude' branch resolves to ClaudeSDKAgent; codex and gemini
-        still resolve to CommandLineAgent wrapping their respective Runner.
-        ClaudeSDKAgent requires app_state for the steering PostToolUse hook
-        closure -- pass it from spawn_subagent. CommandLineAgent ignores it.
-
-        Runner and agent classes are imported lazily inside each branch to avoid
-        the circular import that arises at module load time: koan/runners/__init__.py
-        eagerly imports codex/gemini, which import AgentDiagnostic/AgentError
-        from koan/agents/base.py, which triggers koan/agents/__init__.py, which
-        evaluates koan/agents/registry.py. A module-level import here would
-        re-enter those modules mid-init and fail with AttributeError.
+        Orphaned after the M1 config reshape -- the legacy spawn path is rewired
+        to PydanticAIAgent in M2 and this method is deleted at the M9 rip-out.
+        Retained so tests that inject agent_impl directly still compile.
 
         Raises AgentError with code 'unknown_runner_type' for unrecognized types.
         Raises AgentError with code 'missing_app_state' when claude is requested
-        without app_state (required for the PostToolUse hook closure).
+        without app_state.
         """
+        # M2 seam: this branch constructs the legacy SDK/CLI agents. Once M2 is
+        # complete PydanticAIAgent is used instead and this method is deleted.
         if runner_type == "claude":
-            from .claude import ClaudeSDKAgent  # lazy -- see docstring
+            from .claude import ClaudeSDKAgent  # lazy -- avoids circular import
             if app_state is None:
                 raise AgentError(AgentDiagnostic(
                     code="missing_app_state",
@@ -123,10 +103,10 @@ class AgentRegistry:
                 ))
             return ClaudeSDKAgent(subagent_dir=subagent_dir, app_state=app_state)
         elif runner_type == "codex":
-            from ..runners.codex import CodexRunner  # lazy -- see docstring
+            from ..runners.codex import CodexRunner  # lazy -- avoids circular import
             runner = CodexRunner()
         elif runner_type == "gemini":
-            from ..runners.gemini import GeminiRunner  # lazy -- see docstring
+            from ..runners.gemini import GeminiRunner  # lazy -- avoids circular import
             runner = GeminiRunner(subagent_dir=subagent_dir)
         else:
             raise AgentError(AgentDiagnostic(
@@ -137,95 +117,26 @@ class AgentRegistry:
             ))
         return CommandLineAgent(runner=runner, subagent_dir=subagent_dir)
 
-    def get_installation(
-        self,
-        runner_type: str,
-        config: KoanConfig,
-        run_installations: dict[str, str] | None = None,
-    ) -> AgentInstallation:
-        """Return the AgentInstallation for runner_type, optionally scoped to a run alias.
+    # get_installation removed -- binary detection retired; provider credentials
+    # resolve in koan/agents/adapter.py.
 
-        Raises AgentError with code 'no_installation' if no matching installation
-        is found in config.agent_installations.
-        """
-        alias = (run_installations or {}).get(runner_type)
-        if alias:
-            for inst in config.agent_installations:
-                if inst.alias == alias and inst.runner_type == runner_type:
-                    return inst
-            raise AgentError(AgentDiagnostic(
-                code="no_installation",
-                agent=runner_type,
-                stage="get_installation",
-                message=f"Installation alias '{alias}' not found for agent '{runner_type}'",
-                details={"runner_type": runner_type, "alias": alias},
-            ))
+    # resolve_installation removed -- binary detection retired; provider credentials
+    # resolve in koan/agents/adapter.py.
 
-        # No alias specified -- fall back to first installation of this type.
-        for inst in config.agent_installations:
-            if inst.runner_type == runner_type:
-                return inst
-
-        raise AgentError(AgentDiagnostic(
-            code="no_installation",
-            agent=runner_type,
-            stage="get_installation",
-            message=f"No {runner_type} installation configured",
-            details={"runner_type": runner_type},
-        ))
-
-    def resolve_installation(
-        self,
-        runner_type: str,
-        config: KoanConfig,
-        run_installations: dict[str, str] | None = None,
-    ) -> AgentInstallation:
-        """Resolve a working installation for *runner_type*.
-
-        Returns the installation after validating its binary exists on disk.
-        Raises AgentError if the installation is missing or the binary is not found.
-        """
-        inst = self.get_installation(runner_type, config, run_installations)
-        if not Path(inst.binary).exists():
-            raise AgentError(AgentDiagnostic(
-                code="binary_not_found",
-                agent=runner_type,
-                stage="resolve_installation",
-                message=(
-                    f"Binary not found for {runner_type} installation '{inst.alias}': {inst.binary}. "
-                    f"Update the installation in Settings or re-detect the binary."
-                ),
-                details={"runner_type": runner_type, "alias": inst.alias, "binary": inst.binary},
-            ))
-        return inst
-
-    def resolve_agent_config(
+    def resolve_model_spec(
         self,
         role: SubagentRole,
         config: KoanConfig,
         builtin_profiles: dict[str, Profile] | None = None,
-        run_installations: dict[str, str] | None = None,
-        # DEPRECATED parameter -- ignored if builtin_profiles is provided
-        balanced_profile: Profile | None = None,
-    ) -> tuple[AgentInstallation, str, ThinkingMode]:
-        """Resolve (installation, model_alias, thinking_mode) for the given role.
+    ) -> ModelSpec:
+        """Resolve ModelSpec for a role via the active profile's tier mapping.
 
-        Reads the active profile from config, selects the tier for role, and
-        resolves the installation. Raises AgentError on any resolution failure.
-
-        Thinking mode resolution branches on runner_type:
-        - claude: reads ROLE_EFFORT[role] and clamps via _claude_clamp against the
-          resolved model's advertised thinking_modes. ProfileTier.thinking is not
-          consulted for claude; effort is role-keyed.
-        - gemini/codex: returns ProfileTier.thinking unchanged, as before.
+        Reads ROLE_MODEL_TIER[role] -> tier -> ProfileTier.model (ModelSpec).
+        Raises AgentError with code 'no_profile' if the active profile or tier
+        is missing from both config.profiles and builtin_profiles.
         """
         tier = ROLE_MODEL_TIER.get(role, "standard")
 
-        # Back-compat: wrap legacy balanced_profile into builtin_profiles dict.
-        if builtin_profiles is None and balanced_profile is not None:
-            builtin_profiles = {"balanced": balanced_profile}
-
-        # Resolve active profile.
         profile: Profile | None = None
         for p in config.profiles:
             if p.name == config.active_profile:
@@ -239,7 +150,7 @@ class AgentRegistry:
             raise AgentError(AgentDiagnostic(
                 code="no_profile",
                 agent="",
-                stage="resolve_agent_config",
+                stage="resolve_model_spec",
                 message=f"Profile '{config.active_profile}' not found",
             ))
 
@@ -248,133 +159,63 @@ class AgentRegistry:
             raise AgentError(AgentDiagnostic(
                 code="no_profile",
                 agent="",
-                stage="resolve_agent_config",
+                stage="resolve_model_spec",
                 message=f"Profile '{profile.name}' has no tier '{tier}'",
             ))
 
-        installation = self.resolve_installation(
-            profile_tier.runner_type, config, run_installations,
-        )
+        return profile_tier.model
 
-        # Branch on runner_type: claude derives effort from ROLE_EFFORT[role] and
-        # clamps against per-model thinking_modes. Gemini and codex keep reading
-        # ProfileTier.thinking so their existing thinking configuration is unchanged.
-        if profile_tier.runner_type == "claude":
-            requested = ROLE_EFFORT[role]
-            thinking = self._claude_clamp(installation, profile_tier.model, role, requested)
-        else:
-            thinking = profile_tier.thinking
-        return installation, profile_tier.model, thinking
-
-    def _claude_clamp(
-        self,
-        installation: AgentInstallation,
-        model_alias: str,
-        role: SubagentRole,
-        requested: ThinkingMode,
-    ) -> ThinkingMode:
-        """Clamp the requested ThinkingMode to the highest mode the model advertises.
-
-        Lazy-imports ClaudeSDKAgent to avoid the circular import cycle that arises
-        when koan/agents/registry.py is evaluated during koan/agents/__init__.py
-        initialization (same discipline as get_agent).
-
-        Calls ClaudeSDKAgent.list_models(installation) to get per-model thinking_modes,
-        finds the ModelInfo for model_alias, and delegates to _best_supported_thinking.
-        Emits an INFO log when an actual clamp occurs (requested != clamped) so the
-        downgrade is observable.
-
-        If model_alias is not found in the advertised list (defensive path), returns
-        requested unchanged rather than raising. Brief decision 8 mandates explicit
-        clamping over silent SDK downgrade.
-        """
-        from .claude import ClaudeSDKAgent  # lazy -- avoids circular import at module load
-        models = ClaudeSDKAgent.list_models(installation)
-        model_info = next((m for m in models if m.alias == model_alias), None)
-        if model_info is None:
-            # Model alias not advertised; return requested unchanged (defensive path).
-            return requested
-        clamped = _best_supported_thinking(model_info.thinking_modes, requested)
-        if clamped != requested:
-            log.info(
-                "claude effort clamped | role=%s model=%s requested=%s clamped=%s",
-                role, model_alias, requested, clamped,
-            )
-        return clamped
+    # _claude_clamp removed -- binary detection retired; provider adapter handles
+    # per-provider thinking mapping in koan/agents/adapter.py.
 
 
 # -- Built-in profile computation ----------------------------------------------
 
-def _resolve_thinking(
-    model_lookup: dict[tuple[str, str], ModelInfo],
-    runner_type: str,
-    model: str,
-    tier_name: ModelTier,
-) -> ThinkingMode:
-    default_thinking = _TIER_DEFAULT_THINKING[tier_name]
-    info = model_lookup.get((runner_type, model))
-    if info is not None and default_thinking not in info.thinking_modes:
-        return _best_supported_thinking(info.thinking_modes, default_thinking)
-    return default_thinking
-
-
-def _compute_balanced(
-    available_runners: set[str],
-    model_lookup: dict[tuple[str, str], ModelInfo],
-) -> Profile:
+def _compute_balanced() -> Profile:
+    """Build the balanced built-in profile with static Gemini ModelSpec tiers."""
     tiers: dict[str, ProfileTier] = {}
     for tier_name in ("strong", "standard", "cheap"):
-        priority = _TIER_PRIORITY[tier_name]
-        picked = False
-        for runner_type, model in priority:
-            if runner_type in available_runners:
-                thinking = _resolve_thinking(model_lookup, runner_type, model, tier_name)
-                tiers[tier_name] = ProfileTier(
-                    runner_type=runner_type, model=model, thinking=thinking,
-                )
-                picked = True
-                break
-        if not picked and available_runners:
-            fallback_rt = next(iter(available_runners))
-            fallback_model = fallback_rt
-            for rt, m in priority:
-                if rt == fallback_rt:
-                    fallback_model = m
-                    break
-            thinking = _resolve_thinking(model_lookup, fallback_rt, fallback_model, tier_name)
-            tiers[tier_name] = ProfileTier(
-                runner_type=fallback_rt, model=fallback_model, thinking=thinking,
-            )
+        model_id, thinking, ctx_window = _GEMINI_TIER_SPECS[tier_name]
+        tiers[tier_name] = ProfileTier(model=ModelSpec(
+            provider="google",
+            model=model_id,
+            thinking=thinking,
+            context_window=ctx_window,
+        ))
     return Profile(name="balanced", tiers=tiers)
 
 
-def _compute_fixed(
-    name: str,
-    spec: dict[ModelTier, tuple[str, str]],
-    model_lookup: dict[tuple[str, str], ModelInfo],
-) -> Profile:
+def _compute_fixed(name: str, specs: dict[ModelTier, tuple[str, ThinkingMode, int]]) -> Profile:
+    """Build a named fixed built-in profile from a static (model, thinking, ctx_window) spec map."""
     tiers: dict[str, ProfileTier] = {}
-    for tier_name, (runner_type, model) in spec.items():
-        thinking = _resolve_thinking(model_lookup, runner_type, model, tier_name)
-        tiers[tier_name] = ProfileTier(
-            runner_type=runner_type, model=model, thinking=thinking,
-        )
+    for tier_name, (model_id, thinking, ctx_window) in specs.items():
+        tiers[tier_name] = ProfileTier(model=ModelSpec(
+            provider="google",
+            model=model_id,
+            thinking=thinking,
+            context_window=ctx_window,
+        ))
     return Profile(name=name, tiers=tiers)
 
 
-def compute_builtin_profiles(probe_results: list[ProbeResult]) -> dict[str, Profile]:
-    """Compute all built-in profiles (balanced, frontier, ...) from probe results."""
-    available_runners = {pr.runner_type for pr in probe_results if pr.available}
-    model_lookup: dict[tuple[str, str], ModelInfo] = {}
-    for pr in probe_results:
-        if pr.available:
-            for m in pr.models:
-                model_lookup[(pr.runner_type, m.alias)] = m
+# Frontier uses larger/more-capable models than balanced across all tiers.
+_GEMINI_FRONTIER_SPECS: dict[ModelTier, tuple[str, ThinkingMode, int]] = {
+    "strong":   ("gemini-2.5-pro-latest",   "high",     1_000_000),
+    "standard": ("gemini-2.5-pro-latest",   "medium",   1_000_000),
+    "cheap":    ("gemini-2.5-flash-latest",  "low",      1_000_000),
+}
 
+
+def compute_builtin_profiles(probe_results: list[ProbeResult]) -> dict[str, Profile]:
+    """Compute all built-in profiles (balanced, frontier) as static Gemini ModelSpec profiles.
+
+    probe_results vestigial -- runner probing is retired; provider profiles are
+    static. Param kept until the M8 settings rework removes probe_results entirely.
+    """
+    # probe_results ignored: provider profiles are static Gemini specs now.
     profiles: dict[str, Profile] = {}
-    profiles["balanced"] = _compute_balanced(available_runners, model_lookup)
-    for name, spec in _FIXED_PROFILE_SPECS.items():
-        profiles[name] = _compute_fixed(name, spec, model_lookup)
+    profiles["balanced"] = _compute_balanced()
+    profiles["frontier"] = _compute_fixed("frontier", _GEMINI_FRONTIER_SPECS)
     return profiles
 
 

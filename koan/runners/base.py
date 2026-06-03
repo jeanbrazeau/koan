@@ -6,9 +6,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from ..types import AgentInstallation, ModelInfo, ThinkingMode
+
+if TYPE_CHECKING:
+    # Lazy import -- pydantic_ai is a heavy package and RequestUsage is only
+    # needed for type annotations on StreamEvent.usage. Importing under
+    # TYPE_CHECKING avoids a load-time circular dependency risk with callers
+    # that import StreamEvent before pydantic_ai is fully initialized.
+    from pydantic_ai.usage import RequestUsage
 
 
 @dataclass(kw_only=True)
@@ -33,6 +40,11 @@ class StreamEvent:
     # EmbeddedResource/ImageContent blocks in the tool_result content. None
     # when no attachment blocks are present or the runner cannot extract them.
     attachments: list[dict] | None = None
+    # Populated on the request-final event (turn_complete) by PydanticAIAgent
+    # with the per-request RequestUsage from pydantic-ai. None for all other
+    # event types, and for agents (CLI runners) that do not carry real usage.
+    # This replaces the char-length token_count approximation at agent_exited.
+    usage: RequestUsage | None = None
 
 
 class Runner(Protocol):
@@ -64,7 +76,6 @@ class Runner(Protocol):
 KOAN_MCP_TOOLS: frozenset[str] = frozenset({
     "koan_complete_step",
     "koan_set_phase",
-    "koan_yield",
     "koan_request_scouts",
     "koan_ask_question",
     "koan_request_executor",

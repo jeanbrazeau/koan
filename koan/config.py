@@ -9,7 +9,15 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from .types import BUILTIN_PROFILE_NAMES, AgentInstallation, Profile, ProfileTier
+from .types import (
+    BUILTIN_PROFILE_NAMES,
+    CachingPolicy,
+    ModelSpec,
+    Profile,
+    ProfileTier,
+    ProviderAuth,
+    ThinkingMode,
+)
 
 log = logging.getLogger("koan.config")
 
@@ -18,10 +26,21 @@ CONFIG_PATH = Path.home() / ".koan" / "config.json"
 
 @dataclass
 class KoanConfig:
-    agent_installations: list[AgentInstallation] = field(default_factory=list)
+    """Driver-internal config root; provider-based shape replaces the CLI-binary model."""
+
+    provider_auth: list[ProviderAuth] = field(default_factory=list)
     profiles: list[Profile] = field(default_factory=list)
     active_profile: str = "balanced"
     scout_concurrency: int = 8
+
+    @property
+    def agent_installations(self) -> list:
+        """Compatibility shim -- agent_installations replaced by provider_auth in M1.
+
+        koan/web/app.py settings endpoints still reference this field; they are reworked
+        in M8 to use provider_auth. Returns empty list so app startup does not crash.
+        """
+        return []
 
 
 # -- Write lock (lazily initialized) ------------------------------------------
@@ -38,33 +57,61 @@ def _get_write_lock() -> asyncio.Lock:
 
 # -- Parsers -------------------------------------------------------------------
 
-def _parse_agent_installations(raw: list) -> list[AgentInstallation]:
-    results: list[AgentInstallation] = []
+def _parse_model_spec(raw: dict) -> ModelSpec:
+    """Parse a ModelSpec from a camelCase config dict.
+
+    Expects keys: provider, model, thinking, settings (optional dict),
+    caching (optional sub-object with mode/ttl), contextWindow (optional int).
+    Falls back gracefully for any missing key.
+    """
+    caching_raw = raw.get("caching") or {}
+    caching = CachingPolicy(
+        mode=caching_raw.get("mode", "auto"),
+        ttl=caching_raw.get("ttl", "5m"),
+    )
+    return ModelSpec(
+        provider=raw.get("provider", ""),
+        model=raw.get("model", ""),
+        thinking=raw.get("thinking", "disabled"),
+        settings=raw.get("settings") or {},
+        caching=caching,
+        context_window=int(raw.get("contextWindow") or 0),
+    )
+
+
+def _parse_provider_auth(raw: list) -> list[ProviderAuth]:
+    """Parse a list of ProviderAuth from camelCase config dicts.
+
+    Expects each entry to have: provider, envKeys (list), region (opt), baseUrl (opt).
+    """
+    results: list[ProviderAuth] = []
     if not isinstance(raw, list):
         return results
     for entry in raw:
         if not isinstance(entry, dict):
-            log.warning("agentInstallations entry is not an object; skipping.")
+            log.warning("providerAuth entry is not an object; skipping.")
             continue
-        alias = entry.get("alias", "")
-        runner_type = entry.get("runnerType", "")
-        binary = entry.get("binary", "")
-        if not alias or not runner_type or not binary:
-            log.warning("agentInstallations entry missing alias/runnerType/binary; skipping.")
+        provider = entry.get("provider", "")
+        if not provider:
+            log.warning("providerAuth entry missing provider; skipping.")
             continue
-        extra_args = entry.get("extraArgs", [])
-        if not isinstance(extra_args, list):
-            extra_args = []
-        results.append(AgentInstallation(
-            alias=alias,
-            runner_type=runner_type,
-            binary=binary,
-            extra_args=[str(a) for a in extra_args],
+        env_keys = entry.get("envKeys", [])
+        if not isinstance(env_keys, list):
+            env_keys = []
+        results.append(ProviderAuth(
+            provider=provider,
+            env_keys=[str(k) for k in env_keys],
+            region=entry.get("region") or None,
+            base_url=entry.get("baseUrl") or None,
         ))
     return results
 
 
 def _parse_profiles(raw: list) -> list[Profile]:
+    """Parse a list of Profile from config dicts.
+
+    Each profile tier value is a ModelSpec dict (provider/model/thinking/settings/caching/contextWindow).
+    """
     results: list[Profile] = []
     if not isinstance(raw, list):
         return results
@@ -85,13 +132,12 @@ def _parse_profiles(raw: list) -> list[Profile]:
             if not isinstance(tier_val, dict):
                 log.warning("profiles[%s].tiers[%s] is not an object; skipping tier.", name, tier_name)
                 continue
-            rt = tier_val.get("runnerType", "")
+            provider = tier_val.get("provider", "")
             model = tier_val.get("model", "")
-            thinking = tier_val.get("thinking", "disabled")
-            if not rt or not model:
-                log.warning("profiles[%s].tiers[%s] missing runnerType/model; skipping tier.", name, tier_name)
+            if not provider or not model:
+                log.warning("profiles[%s].tiers[%s] missing provider/model; skipping tier.", name, tier_name)
                 continue
-            tiers[tier_name] = ProfileTier(runner_type=rt, model=model, thinking=thinking)
+            tiers[tier_name] = ProfileTier(model=_parse_model_spec(tier_val))
         results.append(Profile(name=name, tiers=tiers))
     return results
 
@@ -110,6 +156,12 @@ def _parse_scout_concurrency(raw: dict) -> int:
 # -- Loaders / savers ---------------------------------------------------------
 
 async def load_koan_config() -> KoanConfig:
+    """Load KoanConfig from ~/.koan/config.json.
+
+    Reads providerAuth and profiles from camelCase JSON; returns defaults on
+    missing or invalid file. Built-in profiles (balanced, frontier) are excluded
+    from the persisted profiles -- they are recomputed at startup.
+    """
     defaults = KoanConfig()
 
     try:
@@ -135,7 +187,7 @@ async def load_koan_config() -> KoanConfig:
     profiles = [p for p in _parse_profiles(parsed.get("profiles", [])) if p.name not in BUILTIN_PROFILE_NAMES]
 
     return KoanConfig(
-        agent_installations=_parse_agent_installations(parsed.get("agentInstallations", [])),
+        provider_auth=_parse_provider_auth(parsed.get("providerAuth", [])),
         profiles=profiles,
         active_profile=active_profile,
         scout_concurrency=_parse_scout_concurrency(parsed),
@@ -143,6 +195,11 @@ async def load_koan_config() -> KoanConfig:
 
 
 async def save_koan_config(config: KoanConfig) -> None:
+    """Write KoanConfig to ~/.koan/config.json atomically via a tmp-file rename.
+
+    Serializes providerAuth (camelCase) and profiles with ModelSpec tiers.
+    Strips the legacy agentInstallations key from existing files on write.
+    """
     async with _get_write_lock():
         config_dir = CONFIG_PATH.parent
         config_dir.mkdir(parents=True, exist_ok=True)
@@ -153,19 +210,20 @@ async def save_koan_config(config: KoanConfig) -> None:
         except (FileNotFoundError, json.JSONDecodeError):
             pass
 
-        # Remove legacy keys
+        # Remove legacy keys (agentInstallations replaced by providerAuth)
         existing.pop("modelTiers", None)
         existing.pop("activeInstallations", None)
+        existing.pop("agentInstallations", None)
 
-        # Serialize agent_installations
-        existing["agentInstallations"] = [
+        # Serialize provider_auth
+        existing["providerAuth"] = [
             {
-                "alias": inst.alias,
-                "runnerType": inst.runner_type,
-                "binary": inst.binary,
-                "extraArgs": inst.extra_args,
+                "provider": pa.provider,
+                "envKeys": pa.env_keys,
+                **({"region": pa.region} if pa.region else {}),
+                **({"baseUrl": pa.base_url} if pa.base_url else {}),
             }
-            for inst in config.agent_installations
+            for pa in config.provider_auth
         ]
 
         # Serialize active_profile (omit if default)
@@ -180,9 +238,15 @@ async def save_koan_config(config: KoanConfig) -> None:
                 "name": p.name,
                 "tiers": {
                     tier_name: {
-                        "runnerType": pt.runner_type,
-                        "model": pt.model,
-                        "thinking": pt.thinking,
+                        "provider": pt.model.provider,
+                        "model": pt.model.model,
+                        "thinking": pt.model.thinking,
+                        "settings": pt.model.settings,
+                        "caching": {
+                            "mode": pt.model.caching.mode,
+                            "ttl": pt.model.caching.ttl,
+                        },
+                        "contextWindow": pt.model.context_window,
                     }
                     for tier_name, pt in p.tiers.items()
                 },

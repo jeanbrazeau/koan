@@ -5,7 +5,7 @@
 #                         or recommend loop-back for new-files findings
 #
 # Rewrite-or-loop-back: internal findings are fixed via koan_artifact_write;
-# new-files findings surface via koan_yield with plan-spec recommended.
+# new-files findings surface by ending the turn with plan-spec recommended.
 # Scope: "general" -- reusable by any workflow.
 
 from __future__ import annotations
@@ -89,7 +89,8 @@ PHASE_ROLE_CONTEXT = (
     "- MUST read the plan artifact and brief.md before evaluating.\n"
     "- MUST classify each finding as internal or new-files-needed.\n"
     "- MUST issue koan_artifact_write for internal findings (rewrite in place).\n"
-    "- MUST recommend loop-back via koan_yield for new-files findings.\n"
+    "- MUST recommend loop-back for new-files findings by ending your turn (no\n"
+    "  tool call) with the recommendation, handing the decision to the user.\n"
     "- MUST NOT verify file paths, function names, line numbers, imports,\n"
     "  or snippet syntax against the codebase. Those are executor-resolvable\n"
     "  and listed in the do-not-flag enumeration above.\n"
@@ -258,16 +259,16 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "  old_string=..., new_string=...)` for each change. For extensive rewrites,",
                 '  use `koan_artifact_write(filename="<plan_artifact>", content=<corrected_plan>)`',
                 "  to replace the artifact wholesale. The corrected plan must address every",
-                "  internal finding. Then yield with `execute` recommended (proceed to",
-                "  executor handoff).",
+                "  internal finding. Then end your turn with `execute` recommended",
+                "  (proceed to executor handoff).",
                 "- **Any finding new-files-needed -> recommend loop-back**. Do NOT call",
-                "  `koan_artifact_write`. Yield with `plan-spec` recommended in the",
-                "  `koan_yield` suggestions so the producer phase re-runs with the new",
-                "  files in scope. Surface the new-files findings prominently so the",
-                "  next plan-spec session knows what to load.",
+                "  `koan_artifact_write`. End your turn with `plan-spec` recommended so",
+                "  the producer phase re-runs with the new files in scope. Surface the",
+                "  new-files findings prominently so the next plan-spec session knows",
+                "  what to load.",
                 "- **Mixed**: rewrite the internal findings in place AND recommend",
-                "  loop-back via the yield. The producer phase, when it re-runs, will see",
-                "  both the partially-rewritten plan and the new-files findings.",
+                "  loop-back when you hand back. The producer phase, when it re-runs, will",
+                "  see both the partially-rewritten plan and the new-files findings.",
                 "",
                 "The plan artifact filename comes from the workflow guidance: `plan.md`",
                 "for plan workflow; `plan-milestone-N.md` for milestones workflow (read",

@@ -59,11 +59,48 @@ class ModelInfo:
     tier_hint: ModelTier | None
 
 
+# -- Provider config types (M1: config schema reshape) ------------------------
+# Defined before ProfileTier (book order: dependencies before use).
+
+
 @dataclass
-class ProfileTier:
-    runner_type: str
+class CachingPolicy:
+    """Per-provider caching directives resolved by the adapter into request settings."""
+
+    mode: Literal["auto", "off"] = "auto"
+    ttl: Literal["5m", "1h"] = "5m"
+
+
+@dataclass
+class ModelSpec:
+    """Resolved provider+model+settings for one role's model selection."""
+
+    provider: str
     model: str
     thinking: ThinkingMode
+    settings: dict = field(default_factory=dict)
+    caching: CachingPolicy = field(default_factory=CachingPolicy)
+    context_window: int = 0
+
+
+@dataclass
+class ProviderAuth:
+    """Provider credentials config; replaces AgentInstallation (CLI binary) at M9."""
+
+    provider: str
+    env_keys: list[str] = field(default_factory=list)
+    region: str | None = None
+    base_url: str | None = None
+
+
+# -- Profile types ------------------------------------------------------------
+
+
+@dataclass
+class ProfileTier:
+    """Model selection for one tier slot; reshaped from (runner_type, model, thinking) to ModelSpec."""
+
+    model: ModelSpec
 
 
 @dataclass
@@ -75,6 +112,8 @@ class Profile:
 BUILTIN_PROFILE_NAMES: frozenset[str] = frozenset({"balanced", "frontier"})
 
 
+# Vestigial -- consumed by the legacy ClaudeSDKAgent/CommandLineAgent path and probe.py;
+# removed at the M9 rip-out. The new config path uses ProviderAuth.
 @dataclass
 class AgentInstallation:
     alias: str
@@ -91,11 +130,8 @@ ROLE_MODEL_TIER: dict[SubagentRole, ModelTier] = {
     "executor": "standard",
 }
 
-# Role-keyed effort assignment for the Claude branch of resolve_agent_config.
-# Gemini and codex continue to read ProfileTier.thinking; only Claude consults this table.
-# Every SubagentRole member has an explicit entry so that adding a new role without
-# an effort decision fails fast (KeyError) rather than silently using a default.
-# A future "reviewer" role should map to "max" when added to SubagentRole.
+# Superseded by the provider adapter's per-provider thinking mapping;
+# retained until the legacy claude path is removed at M9.
 ROLE_EFFORT: dict[SubagentRole, ThinkingMode] = {
     "intake": "max",
     "scout": "medium",

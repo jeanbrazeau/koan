@@ -56,7 +56,7 @@ class PhaseBinding:
     # Recommended next phase for auto-advance. None means the phase yields
     # with multi-option suggestions for user direction; a phase name means
     # the phase auto-advances via koan_set_phase. Treat as guidance: the
-    # orchestrator may call koan_yield instead when findings warrant.
+    # orchestrator may hand back to the user instead when findings warrant.
     # Same module can have different next_phase across workflows.
     next_phase: str | None = None
 
@@ -941,7 +941,8 @@ _DISCOVERY_FRAME_GUIDANCE = (
     "bug hunting and troubleshooting sessions, or any general question. Refuse\n"
     "nothing. Use `koan_ask_question` to clarify intent, `koan_reflect` and\n"
     "`koan_search` to surface prior context, and investigate the codebase directly\n"
-    "when the question calls for it. Always end each turn with `koan_yield`.\n"
+    "when the question calls for it. Always end each turn with a plain-text\n"
+    "message and no tool call -- that hands control back to the user.\n"
     "\n"
     "Exit is user-driven. When the user signals they are ready, present three\n"
     "options:\n"

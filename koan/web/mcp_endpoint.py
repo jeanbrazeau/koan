@@ -53,13 +53,12 @@ from ..run_state import (
 )
 from ..lib.permissions import check_permission
 from ..lib.task_json import make_workflow_history_entry
-from ..lib.workflows import WORKFLOWS, get_suggested_phases, get_workflow, is_valid_transition as wf_is_valid
+from ..lib.workflows import WORKFLOWS, get_workflow, is_valid_transition as wf_is_valid
 from ..logger import get_logger, truncate_payload
 from ..memory import MEMORY_TYPES, MemoryStore
 from ..memory.timestamps import iso_to_ms as _iso_to_ms
-from ..phases import PhaseContext, StepGuidance
+from ..phases import PhaseContext
 from ..phases.format_step import (
-    format_step,
     format_user_messages,
     steering_envelope_open,
     steering_envelope_close,
@@ -341,7 +340,6 @@ class Handlers:
     and registered with mcp.tool().
     """
     koan_complete_step: Callable[..., Awaitable[str]]
-    koan_yield: Callable[..., Awaitable[str]]
     koan_set_phase: Callable[..., Awaitable[str]]
     koan_set_workflow: Callable[..., Awaitable[str]]
     koan_request_scouts: Callable[..., Awaitable[str]]
@@ -566,152 +564,15 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         new_blocks: list[ContentBlock] = list(blocks) + steering_blocks
         return new_blocks, steer_manifest
 
-    async def _compute_memory_injection(agent: AgentState) -> str:
-        """Run the mechanical RAG injection pipeline for the current phase.
-
-        Returns a rendered markdown block, or "" if the phase has no retrieval
-        directive, memory is unavailable, or retrieval fails. Retrieval is
-        best-effort: failure must never block the phase handshake.
-        """
-        workflow = app_state.run.workflow
-        if workflow is None:
-            return ""
-        binding = workflow.get_binding(app_state.run.phase)
-        if binding is None or not binding.retrieval_directive:
-            return ""
-
-        anchor = _compose_rag_anchor(
-            task_description=app_state.run.task_description or "",
-            run_dir=agent.phase_ctx.run_dir or app_state.run.run_dir,
-        )
-
-        try:
-            from ..memory.retrieval.rag import inject, render_injection_block
-            index = app_state.memory.retrieval_index
-            results = await inject(
-                index=index,
-                directive=binding.retrieval_directive,
-                anchor=anchor,
-                k=5,
-            )
-            return render_injection_block(results)
-        except Exception:
-            log.warning(
-                "mechanical memory injection failed for phase %r; continuing without injection",
-                app_state.run.phase,
-                exc_info=True,
-            )
-            return ""
-
-    # -- koan_complete_step private helpers (capture app_state) ---------------
-
-    async def _step_phase_handshake(agent: AgentState) -> str:
-        """Handle step 0 -> 1: deliver step 1 guidance prepended with phase role context."""
-        phase_module = agent.phase_module
-        ctx = agent.phase_ctx
-
-        step_names = getattr(phase_module, "STEP_NAMES", {})
-        step_name = step_names.get(1, "")
-
-        # Audit log
-        if agent.event_log is not None:
-            await agent.event_log.emit_step_transition(1, step_name, phase_module.TOTAL_STEPS)
-
-        # Projection event
-        from ..events import build_step_advanced
-        app_state.projection_store.push_event(
-            "agent_step_advanced",
-            build_step_advanced(1, step_name, total_steps=phase_module.TOTAL_STEPS),
-            agent_id=agent.agent_id,
-        )
-
-        # Mechanical memory injection runs once per phase, at the step 0 -> 1
-        # handshake. The rendered block is stashed on ctx.memory_injection and
-        # phase modules prepend it to their step 1 instructions.
-        ctx.memory_injection = await _compute_memory_injection(agent)
-
-        # Populate auto-advance context for terminal_invoke in each phase's
-        # last-step invoke_after. Done here (not in koan_set_phase) so the
-        # values are available when step_guidance(TOTAL_STEPS, ctx) is called.
-        workflow = app_state.run.workflow
-        if workflow:
-            binding = workflow.get_binding(app_state.run.phase)
-            ctx.next_phase = binding.next_phase if binding else None
-            ctx.suggested_phases = get_suggested_phases(workflow, app_state.run.phase)
-        else:
-            ctx.next_phase = None
-            ctx.suggested_phases = []
-
-        agent.step = 1
-        guidance = phase_module.step_guidance(1, ctx)
-
-        # Prepend PHASE_ROLE_CONTEXT so the orchestrator receives the phase role context
-        role_context = getattr(phase_module, "PHASE_ROLE_CONTEXT", "") or ""
-        if role_context:
-            guidance = StepGuidance(
-                title=guidance.title,
-                instructions=[role_context, ""] + list(guidance.instructions),
-                invoke_after=guidance.invoke_after,
-            )
-
-        result = format_step(guidance)
-
-        if app_state.server.debug:
-            app_state.projection_store.push_event(
-                "debug_step_guidance",
-                {"content": result},
-                agent_id=agent.agent_id,
-            )
-
-        return result
-
-    async def _step_within_phase(
-        agent: AgentState,
-        phase_module: object,
-        ctx: PhaseContext,
-        next_step: int,
-    ) -> str:
-        """Handle normal within-phase step advancement."""
-        current_step = agent.step
-
-        # Loop-back handling
-        if next_step <= current_step:
-            await phase_module.on_loop_back(current_step, next_step, ctx)
-
-        agent.step = next_step
-
-        step_names = getattr(phase_module, "STEP_NAMES", {})
-        step_name = step_names.get(next_step, "")
-
-        # Audit log
-        if agent.event_log is not None:
-            await agent.event_log.emit_step_transition(next_step, step_name, phase_module.TOTAL_STEPS)
-
-        # Projection event
-        from ..events import build_step_advanced
-        app_state.projection_store.push_event(
-            "agent_step_advanced",
-            build_step_advanced(next_step, step_name, total_steps=phase_module.TOTAL_STEPS),
-            agent_id=agent.agent_id,
-        )
-
-        # Scan for artifacts between steps (e.g. after a write step)
-        from ..driver import _push_artifact_diff
-        _push_artifact_diff(app_state)
-
-        guidance = phase_module.step_guidance(next_step, ctx)
-        result = format_step(guidance)
-
-        if app_state.server.debug:
-            app_state.projection_store.push_event(
-                "debug_step_guidance",
-                {"content": result},
-                agent_id=agent.agent_id,
-            )
-
-        return result
-
     # -- Tool handlers (async closures capturing app_state) -------------------
+    # _compute_memory_injection removed: logic now lives in
+    # koan/tools/koan_tools.py:_compute_memory_injection_core, called from
+    # advance_step. koan_tools.py re-imports _compose_rag_anchor from here
+    # to keep anchor composition single-sourced until M9.
+    # koan_complete_step and koan_set_phase delegate their core logic to
+    # koan/tools/koan_tools.py (advance_step / apply_set_phase) so the step
+    # machine has a single home. The MCP handlers add HTTP-only concerns:
+    # start-run attachment delivery (koan_complete_step) and steering drain.
 
     async def koan_complete_step(ctx: Context, thoughts: str = "") -> list[ContentBlock]:
         agent = await _get_agent(ctx)
@@ -720,205 +581,56 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         call_id = begin_tool_call(agent, "koan_complete_step", {"thoughts": thoughts}, f"step {agent.step} -> next")
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
+        # Capture before advance_step mutates agent.step (step 0 -> 1 on handshake).
+        was_step_zero = agent.step == 0
         try:
-            agent.handshake_observed = True
-
-            # workflow_done tombstone -- orchestrator called koan_set_phase("done") earlier
-            if app_state.run.workflow_done:
-                result_blocks = [_text_block("All phases complete. You may now exit.")]
-                return result_blocks
-
-            # Step 0: phase handshake (initial call or post-koan_set_phase)
-            if agent.step == 0:
-                result_blocks = [_text_block(await _step_phase_handshake(agent))]
-
-                # Inject start-run attachments on the primary agent's very first
-                # step-0 call. Guard on is_primary so scouts/executors never see
-                # boot-time attachments. Clear after delivery so phase re-entries
-                # (each koan_set_phase resets step to 0) do not re-emit them.
-                if agent.is_primary and app_state.run.start_attachments:
-                    from .uploads import upload_ids_to_blocks
-                    attach_blocks, attach_manifest = upload_ids_to_blocks(
-                        app_state.uploads,
-                        "",  # run_dir is vestigial in upload_ids_to_blocks (M3)
-                        app_state.run.start_attachments,
-                        agent.runner_type,
-                    )
-                    result_blocks.extend(attach_blocks)
-                    steer_manifest.extend(attach_manifest)
-                    app_state.run.start_attachments = []
-                    log.info(
-                        "start-run attachments delivered: agent=%s count=%d",
-                        agent.agent_id[:8], len(attach_blocks),
-                    )
-
-                result_blocks, drain_manifest = _drain_and_append_steering(result_blocks, agent)
-                steer_manifest.extend(drain_manifest)
-                _push_tool_attachments(steer_manifest, agent)
-                return result_blocks
-
-            phase_module = agent.phase_module
-            ctx_phase = agent.phase_ctx
-            current_step = agent.step
-
-            # Validate current step completion
-            err = phase_module.validate_step_completion(current_step, ctx_phase)
-            if err:
+            # Delegate to the shared core; the MCP wrapper handles the HTTP-only
+            # concerns (start-run attachments, steering drain) around the result.
+            from ..tools.koan_tools import ToolDeps, advance_step
+            try:
+                result_text = await advance_step(ToolDeps(app_state=app_state, agent=agent), thoughts)
+            except ValueError as e:
+                # advance_step raises ValueError for step validation failures;
+                # convert to ToolError for the fastmcp wire protocol.
                 raise ToolError(
-                    json.dumps({"error": "step_validation_failed", "message": err})
+                    json.dumps({"error": "step_validation_failed", "message": str(e)})
+                )
+            result_blocks = [_text_block(result_text)]
+
+            # Inject start-run attachments on the primary agent's very first
+            # step-0 call. Guard on was_step_zero (captured before the handshake
+            # advanced the counter) and is_primary so scouts/executors never see
+            # boot-time attachments. Clear after delivery so phase re-entries
+            # (each koan_set_phase resets step to 0) do not re-emit them.
+            if was_step_zero and agent.is_primary and app_state.run.start_attachments:
+                from .uploads import upload_ids_to_blocks
+                attach_blocks, attach_manifest = upload_ids_to_blocks(
+                    app_state.uploads,
+                    "",  # run_dir is vestigial in upload_ids_to_blocks (M3)
+                    app_state.run.start_attachments,
+                    agent.runner_type,
+                )
+                result_blocks.extend(attach_blocks)
+                steer_manifest.extend(attach_manifest)
+                app_state.run.start_attachments = []
+                log.info(
+                    "start-run attachments delivered: agent=%s count=%d",
+                    agent.agent_id[:8], len(attach_blocks),
                 )
 
-            # Get next step
-            next_step = phase_module.get_next_step(current_step, ctx_phase)
-
-            if next_step is None:
-                if not agent.is_primary:
-                    # Non-primary agents (scouts) are done -- signal completion
-                    result_blocks = [_text_block("All steps complete. You may now exit.")]
-                    return result_blocks
-                # Phase boundary defensive fallback. After M3 the orchestrator should
-                # never land here -- the prior step's invoke_after (from terminal_invoke)
-                # directed it to call koan_set_phase or koan_yield directly. If it
-                # accidentally calls koan_complete_step anyway, nudge it back.
-                from ..events import build_step_advanced
-                app_state.projection_store.push_event(
-                    "agent_step_advanced",
-                    build_step_advanced(agent.step, "", total_steps=phase_module.TOTAL_STEPS),
-                    agent_id=agent.agent_id,
-                )
-                from ..driver import _push_artifact_diff
-                _push_artifact_diff(app_state)
-                result_blocks = [_text_block(
-                    "This phase has no further steps. The directive at the end of your"
-                    " prior step's guidance instructed you to call koan_set_phase or"
-                    " koan_yield -- follow that directive now."
-                )]
-                result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
-                _push_tool_attachments(steer_manifest, agent)
-                return result_blocks
-
-            # Normal within-phase advancement
-            result_blocks = [_text_block(await _step_within_phase(agent, phase_module, ctx_phase, next_step))]
-            result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
+            result_blocks, drain_manifest = _drain_and_append_steering(result_blocks, agent)
+            steer_manifest.extend(drain_manifest)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
 
         finally:
             end_tool_call(agent, call_id, "koan_complete_step", result_blocks, steer_manifest or None)
 
-    async def koan_yield(
-        ctx: Context,
-        suggestions: list[dict] | None = None,
-    ) -> list[ContentBlock]:
-        """Yield to the user and wait for their reply. ORCHESTRATOR-ONLY.
-
-        This tool is reserved for the persistent orchestrator agent. Scouts and
-        executors are denied by the permission fence -- if you are a subagent,
-        do not call this, return your findings as your final text response
-        instead.
-
-        Blocks until the user sends a message; returns it as the tool result.
-        This is the phase-end checkpoint -- call it when you need the user to
-        pick the next phase or steer the workflow. Call in a loop for
-        multi-turn conversation.
-
-        Use koan_yield for phase-boundary decisions; use koan_artifact_write
-        to produce or update artifacts (non-blocking).
-
-        Suggestions (optional) render as clickable pills that pre-fill the chat.
-        Each dict: id (phase name or "done"), label (short display), command
-        (pre-filled text on click).
-
-        Args:
-            suggestions: Pills shown above the chat input.
-        """
-        agent = await _get_agent(ctx)
-        _check_or_raise(agent, app_state, "koan_yield", {"suggestions": suggestions})
-
-        call_id = begin_tool_call(
-            agent, "koan_yield", {},
-            f"{len(suggestions or [])} suggestion(s)",
-        )
-        result_blocks: list[ContentBlock] | None = None
-        steer_manifest: list[dict] = []
-        # reply_manifest collects attachment manifests from per-message attachment blocks;
-        # steer_manifest collects from steering drain; both flow into end_tool_call.
-        reply_manifest: list[dict] = []
-        try:
-            from ..state import drain_user_messages, drain_steering_messages
-
-            # Emit yield_started -- renders YieldEntry in the conversation stream and
-            # sets run.active_yield so the UI pins pills above the chat input.
-            from ..events import build_yield_started
-            app_state.projection_store.push_event(
-                "yield_started",
-                build_yield_started(suggestions or []),
-                agent_id=agent.agent_id,
-            )
-
-            if app_state.server.yolo:
-                # Resolve immediately without blocking -- the projection event above
-                # already rendered the yield card in the UI; the synthesized response
-                # closes it on the next tick.
-                directed = app_state.server.directed_phases
-                if directed is not None:
-                    # Directed mode: steer toward the next phase in the sequence
-                    # rather than picking from suggestions.
-                    result_blocks = [_text_block(_directed_yolo_response(directed, app_state.run.phase))]
-                else:
-                    result_blocks = [_text_block(_yolo_yield_response(suggestions))]
-            else:
-                # Check for already-buffered messages (user typed before we yielded)
-                messages = drain_user_messages(app_state) + drain_steering_messages(app_state)
-
-                if not messages:
-                    loop = asyncio.get_running_loop()
-                    future = loop.create_future()
-                    app_state.interactions.yield_future = future
-
-                    await future  # yields to event loop; POST /api/chat resolves it
-
-                    app_state.interactions.yield_future = None
-                    messages = drain_user_messages(app_state)
-
-                # Interleave per-message File/Image blocks adjacent to each message text.
-                # format_user_messages returns one TextContent per message so the zip works.
-                if messages:
-                    from .uploads import upload_ids_to_blocks
-                    text_blocks = format_user_messages(messages)
-                    result_blocks = []
-                    for msg, tb in zip(messages, text_blocks):
-                        result_blocks.append(tb)
-                        if msg.attachments:
-                            bs, ms = upload_ids_to_blocks(
-                                app_state.uploads,
-                                app_state.run.run_dir or "",
-                                msg.attachments,
-                                agent.runner_type,
-                            )
-                            result_blocks.extend(bs)
-                            reply_manifest.extend(ms)
-                else:
-                    result_blocks = [_text_block("No message received.")]
-
-            # Log after both yolo and chat paths converge on result_blocks.
-            reply_text = _text_of(result_blocks)
-            if reply_text:
-                log.info(
-                    "koan_yield resolved: agent=%s phase=%s mode=%s reply_len=%d",
-                    agent.agent_id[:8], app_state.run.phase,
-                    "yolo" if app_state.server.yolo else "chat",
-                    len(reply_text),
-                )
-                log.debug("koan_yield reply payload: %s", truncate_payload(reply_text))
-
-            result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
-            _push_tool_attachments(reply_manifest + steer_manifest, agent)
-
-            return result_blocks
-        finally:
-            total_manifest = reply_manifest + steer_manifest
-            end_tool_call(agent, call_id, "koan_yield", result_blocks, total_manifest or None)
+    # koan_yield is removed in M5.  The multi-turn loop in koan/agents/loop.py
+    # owns the hand-back: a terminal-text turn (no tool calls) is the signal
+    # for the loop to park on yield_future and wait for the next user message.
+    # Deleting this handler keeps the MCP vocabulary free of a tool the model
+    # would otherwise waste a turn calling before the in-process path lands.
 
     async def koan_set_phase(ctx: Context, phase: str) -> list[ContentBlock]:
         """Commit transition to the next workflow phase.
@@ -943,94 +655,26 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
         try:
-            current = app_state.run.phase
-            workflow = app_state.run.workflow
-
-            # "done" tombstone -- cleanly ends the workflow without a phase transition
-            if phase == "done":
-                app_state.run.workflow_done = True
-                app_state.projection_store.push_event("yield_cleared", {})
-                app_state.projection_store.push_event("workflow_completed", {
-                    "success": True,
-                    "phase": current,
-                    "summary": f"Workflow completed from phase '{current}'",
-                })
-                result_blocks = [_text_block("Workflow complete. Call koan_complete_step to finish.")]
-                result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
-                _push_tool_attachments(steer_manifest, agent)
-                return result_blocks
-
-            # Validate transition using workflow membership check
-            if workflow is None or not wf_is_valid(workflow, current, phase):
-                phases = list(workflow.available_phases) if workflow else []
-                raise ToolError(json.dumps({
-                    "error": "invalid_transition",
-                    "message": (
-                        f"'{phase}' is not available from '{current}' in the current workflow. "
-                        f"Available phases: {phases}"
-                    ),
-                }))
-
-            # Look up new phase module from the workflow's bindings
-            new_module = workflow.get_module(phase) if workflow else None
-            if new_module is None:
-                raise ToolError(json.dumps({
-                    "error": "unknown_phase",
-                    "message": f"Phase '{phase}' has no module in workflow '{workflow.name if workflow else '?'}'",
-                }))
-
-            # Log before mutating phase so the old value is still current.
-            log.info(
-                "phase transition: agent=%s from=%s to=%s",
-                agent.agent_id[:8], app_state.run.phase, phase,
-            )
-
-            # Update driver state
-            app_state.run.phase = phase
-            run_dir = _resolve_run_dir(agent)
-            if run_dir:
-                run_state = await load_run_state(run_dir)
-                await save_run_state(run_dir, {**run_state, "phase": phase})
-
-            # Push artifact diff and phase_started event
-            from ..driver import _push_artifact_diff
-            _push_artifact_diff(app_state)
-            app_state.projection_store.push_event(
-                "phase_started",
-                {"phase": phase},
-                agent_id=agent.agent_id,
-            )
-            # Clear any active yield now that a phase transition is committed
-            app_state.projection_store.push_event("yield_cleared", {})
-
-            # Emit a step-advanced event (step=0) as visual phase-transition marker in the feed
-            phase_label = phase.replace("-", " ").title()
-            from ..events import build_step_advanced
-            app_state.projection_store.push_event(
-                "agent_step_advanced",
-                build_step_advanced(0, f"-> {phase_label}"),
-                agent_id=agent.agent_id,
-            )
-
-            # Inject per-workflow phase guidance for the new phase
-            binding = workflow.get_binding(phase) if workflow else None
-            phase_guidance = binding.guidance if binding else ""
-
-            # Switch phase module and reset step counter
-            agent.phase_module = new_module
-            agent.step = 0
-            agent.phase_ctx = PhaseContext(
-                run_dir=run_dir or "",
-                subagent_dir=agent.subagent_dir,
-                project_dir=app_state.run.project_dir,
-                additional_dirs=app_state.run.additional_dirs,
-                task_description=app_state.run.task_description,
-                workflow_name=workflow.name if workflow else "",
-                phase_instructions=phase_guidance,   # scope framing from workflow
-                completed_phase=current,
-            )
-
-            result_blocks = [_text_block(f"Phase set to '{phase}'. Call koan_complete_step to begin.")]
+            # Delegate to the shared core; the MCP wrapper handles the HTTP-only
+            # concern (steering drain) around the result.
+            from ..tools.koan_tools import ToolDeps, apply_set_phase
+            try:
+                result_text = await apply_set_phase(ToolDeps(app_state=app_state, agent=agent), phase)
+            except ValueError as e:
+                # apply_set_phase raises ValueError for invalid transitions;
+                # parse error prefix to emit structured ToolError JSON.
+                msg = str(e)
+                if msg.startswith("invalid_transition:"):
+                    error_key = "invalid_transition"
+                    error_msg = msg[len("invalid_transition:"):].strip()
+                elif msg.startswith("unknown_phase:"):
+                    error_key = "unknown_phase"
+                    error_msg = msg[len("unknown_phase:"):].strip()
+                else:
+                    error_key = "phase_error"
+                    error_msg = msg
+                raise ToolError(json.dumps({"error": error_key, "message": error_msg}))
+            result_blocks = [_text_block(result_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
@@ -1041,19 +685,14 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         """Switch the active workflow mid-run, preserving the orchestrator
         process and all run-directory context.
 
-        The orchestrator carries its full conversation context across the
-        switch. The new workflow's initial_phase becomes the active phase;
-        the next koan_complete_step call returns step 1 of that phase. The
-        run directory and all artifacts produced under the previous workflow
-        remain in place; the new workflow's phase_guidance handles
-        cross-workflow context (e.g. an existing brief.md).
+        Delegates all state mutation and projection to apply_set_workflow in
+        koan/tools/koan_tools.py (single logic home shared with the in-process
+        PydanticAI tool). The MCP wrapper adds permission check, audit logging,
+        and steering drain.
 
         Args:
             workflow: Target workflow name registered in
-                      koan/lib/workflows.py:WORKFLOWS. The orchestrator
-                      can switch to any registered workflow at any time
-                      (any-to-any). The new workflow's initial_phase is
-                      entered automatically.
+                      koan/lib/workflows.py:WORKFLOWS.
         """
         agent = await _get_agent(ctx)
         _check_or_raise(agent, app_state, "koan_set_workflow", {"workflow": workflow})
@@ -1062,115 +701,18 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
         try:
-            current_workflow_obj = app_state.run.workflow
-            current_phase = app_state.run.phase
-
-            # Validate target workflow name is registered.
-            # get_workflow raises ValueError for unknown names; convert to ToolError
-            # with the same invalid_transition shape used by koan_set_phase.
+            from ..tools.koan_tools import ToolDeps, apply_set_workflow
             try:
-                new_workflow = get_workflow(workflow)
-            except ValueError:
-                raise ToolError(json.dumps({
-                    "error": "unknown_workflow",
-                    "message": (
-                        f"'{workflow}' is not a registered workflow. "
-                        f"Available workflows: {list(WORKFLOWS.keys())}"
-                    ),
-                }))
-
-            new_initial_phase = new_workflow.initial_phase
-            new_module = new_workflow.get_module(new_initial_phase)
-            if new_module is None:
-                raise ToolError(json.dumps({
-                    "error": "internal_error",
-                    "message": (
-                        f"Workflow '{workflow}' has no module for its "
-                        f"initial_phase '{new_initial_phase}'"
-                    ),
-                }))
-
-            log.info(
-                "workflow transition: agent=%s from=%s to=%s entering_phase=%s",
-                agent.agent_id[:8],
-                current_workflow_obj.name if current_workflow_obj else "?",
-                workflow,
-                new_initial_phase,
-            )
-
-            # Swap app_state.run.workflow before emitting projection events so
-            # any fold consumer reading app_state sees the new value.
-            app_state.run.workflow = new_workflow
-            app_state.run.phase = new_initial_phase
-
-            # Append to orchestrator task.json's workflow_history using the same
-            # atomic write helper as all other task.json writers (brief.md constraint).
-            from ..subagent import write_task_json
-            import aiofiles
-            orchestrator_task_path = Path(agent.subagent_dir) / "task.json"
-            async with aiofiles.open(orchestrator_task_path, "r") as f:
-                task_dict = json.loads(await f.read())
-            history = list(task_dict.get("workflow_history", []))
-            history.append(make_workflow_history_entry(workflow, new_initial_phase))
-            task_dict["workflow_history"] = history
-            await write_task_json(agent.subagent_dir, task_dict)
-
-            # Persist phase to run-state.json (mirrors koan_set_phase).
-            run_dir = _resolve_run_dir(agent)
-            if run_dir:
-                run_state = await load_run_state(run_dir)
-                await save_run_state(run_dir, {**run_state, "phase": new_initial_phase})
-
-            # Push artifact diff first so the projection snapshot includes any
-            # pending artifact changes before workflow_selected rebuilds availablePhases.
-            from ..driver import _push_artifact_diff
-            _push_artifact_diff(app_state)
-
-            # Emit projection events in order: workflow_selected rebuilds
-            # Run.available_phases; phase_started then updates Run.phase;
-            # yield_cleared clears any active yield UI state (mirrors koan_set_phase L992).
-            from ..events import build_workflow_selected
-            app_state.projection_store.push_event(
-                "workflow_selected",
-                build_workflow_selected(workflow),
-            )
-            app_state.projection_store.push_event(
-                "phase_started",
-                {"phase": new_initial_phase},
-                agent_id=agent.agent_id,
-            )
-            app_state.projection_store.push_event("yield_cleared", {})
-
-            # Step-advanced visual marker (mirrors koan_set_phase L995-L1001).
-            phase_label = new_initial_phase.replace("-", " ").title()
-            from ..events import build_step_advanced
-            app_state.projection_store.push_event(
-                "agent_step_advanced",
-                build_step_advanced(0, f"-> {workflow}: {phase_label}"),
-                agent_id=agent.agent_id,
-            )
-
-            # Rebuild PhaseContext for the new workflow + initial phase.
-            # Same pattern as koan_set_phase L1010-L1018; do not mutate in place.
-            binding = new_workflow.get_binding(new_initial_phase)
-            phase_guidance = binding.guidance if binding else ""
-            agent.phase_module = new_module
-            agent.step = 0
-            agent.phase_ctx = PhaseContext(
-                run_dir=run_dir or "",
-                subagent_dir=agent.subagent_dir,
-                project_dir=app_state.run.project_dir,
-                additional_dirs=app_state.run.additional_dirs,
-                task_description=app_state.run.task_description,
-                workflow_name=new_workflow.name,
-                phase_instructions=phase_guidance,
-                completed_phase=current_phase,
-            )
-
-            result_blocks = [_text_block(
-                f"Workflow set to '{workflow}'. Now in phase "
-                f"'{new_initial_phase}'. Call koan_complete_step to begin."
-            )]
+                result_text = await apply_set_workflow(
+                    ToolDeps(app_state=app_state, agent=agent), workflow
+                )
+            except ValueError as e:
+                msg = str(e)
+                colon = msg.find(": ")
+                err_key = msg[:colon] if colon != -1 else "error"
+                err_msg = msg[colon + 2:] if colon != -1 else msg
+                raise ToolError(json.dumps({"error": err_key, "message": err_msg}))
+            result_blocks = [_text_block(result_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
@@ -1299,54 +841,26 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         )
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
-        answer_manifest: list[dict] = []
         try:
-            future = await enqueue_interaction(agent, app_state, "ask", {"questions": questions or []})
-            if app_state.server.yolo:
-                # Resolve the future synchronously before awaiting so it returns on
-                # the next event-loop tick without ever blocking on a POST /api/interact.
-                # Safe: no external POST can race this within the same coroutine frame.
-                future.set_result(_yolo_ask_answer(questions or []))
-            result = await future
-
-            if isinstance(result, dict) and "error" in result:
-                raise ToolError(json.dumps(result))
-
-            answers = result.get("answers", [])
+            # Delegate the blocking interaction to the shared core; the MCP wrapper
+            # adds only fastmcp-specific concerns (ToolError conversion, steering drain).
+            from ..tools.koan_tools import ToolDeps, ask_question_core
+            try:
+                qa_text = await ask_question_core(
+                    ToolDeps(app_state=app_state, agent=agent), questions or []
+                )
+            except RuntimeError as exc:
+                raise ToolError(json.dumps({"error": "ask_question_failed", "message": str(exc)}))
             log.info(
                 "koan_ask_question answered: agent=%s count=%d",
-                agent.agent_id[:8], len(answers),
+                agent.agent_id[:8], len(questions or []),
             )
-            for i, a in enumerate(answers):
-                body = a.get("answer", "") if isinstance(a, dict) else str(a)
-                log.debug("ask_question answer[%d]: %s", i, truncate_payload(body))
-            questions_list = questions or []
-            # Interleave per-answer File/Image blocks adjacent to each Q/A text block.
-            from .uploads import upload_ids_to_blocks
-            result_blocks = []
-            answer_manifest: list[dict] = []
-            for i, a in enumerate(answers):
-                q_text = questions_list[i].get("question", f"Q{i+1}") if i < len(questions_list) else f"Q{i+1}"
-                a_text = a.get("answer", "") if isinstance(a, dict) else str(a)
-                result_blocks.append(_text_block(f"Q: {q_text}\nA: {a_text}"))
-                attach_ids = (a.get("attachments") or []) if isinstance(a, dict) else []
-                if attach_ids:
-                    bs, ms = upload_ids_to_blocks(
-                        app_state.uploads,
-                        app_state.run.run_dir or "",
-                        attach_ids,
-                        agent.runner_type,
-                    )
-                    result_blocks.extend(bs)
-                    answer_manifest.extend(ms)
-            if not result_blocks:
-                result_blocks = [_text_block("No answers provided.")]
+            result_blocks = [_text_block(qa_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
-            _push_tool_attachments(answer_manifest + steer_manifest, agent)
+            _push_tool_attachments(steer_manifest, agent)
             return result_blocks
         finally:
-            total_manifest = answer_manifest + steer_manifest
-            end_tool_call(agent, call_id, "koan_ask_question", result_blocks, total_manifest or None)
+            end_tool_call(agent, call_id, "koan_ask_question", result_blocks, steer_manifest or None)
 
     async def koan_request_executor(
         ctx: Context,
@@ -1419,7 +933,10 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
             end_tool_call(agent, call_id, "koan_request_executor", result_blocks, steer_manifest or None)
 
     async def koan_select_story(ctx: Context, story_id: str) -> list[ContentBlock]:
-        """Select the next story for execution."""
+        """Select the next story for execution.
+
+        Delegates to select_story core in koan/tools/koan_tools.py.
+        """
         agent = await _get_agent(ctx)
         _check_or_raise(agent, app_state, "koan_select_story", {"story_id": story_id})
 
@@ -1427,16 +944,12 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
         try:
-            run_dir = _resolve_run_dir(agent)
-            if not run_dir:
-                raise ToolError(json.dumps({"error": "no_run_dir"}))
-
-            await save_story_state(run_dir, story_id, {
-                "storyId": story_id,
-                "status": "selected",
-                "updatedAt": _now_iso(),
-            })
-            result_blocks = [_text_block(f"Story '{story_id}' selected for execution.")]
+            from ..tools.koan_tools import ToolDeps, select_story
+            try:
+                result_text = await select_story(ToolDeps(app_state=app_state, agent=agent), story_id)
+            except ValueError as e:
+                raise ToolError(json.dumps({"error": "no_run_dir", "message": str(e)}))
+            result_blocks = [_text_block(result_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
@@ -1444,7 +957,10 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
             end_tool_call(agent, call_id, "koan_select_story", result_blocks, steer_manifest or None)
 
     async def koan_complete_story(ctx: Context, story_id: str) -> list[ContentBlock]:
-        """Mark a story as successfully verified and completed."""
+        """Mark a story as successfully verified and completed.
+
+        Delegates to complete_story core in koan/tools/koan_tools.py.
+        """
         agent = await _get_agent(ctx)
         _check_or_raise(agent, app_state, "koan_complete_story", {"story_id": story_id})
 
@@ -1452,16 +968,12 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
         try:
-            run_dir = _resolve_run_dir(agent)
-            if not run_dir:
-                raise ToolError(json.dumps({"error": "no_run_dir"}))
-
-            await save_story_state(run_dir, story_id, {
-                "storyId": story_id,
-                "status": "done",
-                "updatedAt": _now_iso(),
-            })
-            result_blocks = [_text_block(f"Story '{story_id}' marked as done.")]
+            from ..tools.koan_tools import ToolDeps, complete_story
+            try:
+                result_text = await complete_story(ToolDeps(app_state=app_state, agent=agent), story_id)
+            except ValueError as e:
+                raise ToolError(json.dumps({"error": "no_run_dir", "message": str(e)}))
+            result_blocks = [_text_block(result_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
@@ -1469,7 +981,10 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
             end_tool_call(agent, call_id, "koan_complete_story", result_blocks, steer_manifest or None)
 
     async def koan_retry_story(ctx: Context, story_id: str, failure_summary: str) -> list[ContentBlock]:
-        """Send a story back for retry with a detailed failure summary."""
+        """Send a story back for retry with a detailed failure summary.
+
+        Delegates to retry_story core in koan/tools/koan_tools.py.
+        """
         agent = await _get_agent(ctx)
         _check_or_raise(agent, app_state, "koan_retry_story", {"story_id": story_id, "failure_summary": failure_summary})
 
@@ -1477,21 +992,14 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
         try:
-            run_dir = _resolve_run_dir(agent)
-            if not run_dir:
-                raise ToolError(json.dumps({"error": "no_run_dir"}))
-
-            existing = await load_story_state(run_dir, story_id)
-            retry_count = existing.get("retryCount", 0) + 1
-
-            await save_story_state(run_dir, story_id, {
-                "storyId": story_id,
-                "status": "retry",
-                "failureSummary": failure_summary,
-                "retryCount": retry_count,
-                "updatedAt": _now_iso(),
-            })
-            result_blocks = [_text_block(f"Story '{story_id}' queued for retry (attempt {retry_count}).")]
+            from ..tools.koan_tools import ToolDeps, retry_story
+            try:
+                result_text = await retry_story(
+                    ToolDeps(app_state=app_state, agent=agent), story_id, failure_summary
+                )
+            except ValueError as e:
+                raise ToolError(json.dumps({"error": "no_run_dir", "message": str(e)}))
+            result_blocks = [_text_block(result_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
@@ -1499,7 +1007,10 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
             end_tool_call(agent, call_id, "koan_retry_story", result_blocks, steer_manifest or None)
 
     async def koan_skip_story(ctx: Context, story_id: str, reason: str = "") -> list[ContentBlock]:
-        """Skip a story that is superseded or no longer needed."""
+        """Skip a story that is superseded or no longer needed.
+
+        Delegates to skip_story core in koan/tools/koan_tools.py.
+        """
         agent = await _get_agent(ctx)
         _check_or_raise(agent, app_state, "koan_skip_story", {"story_id": story_id, "reason": reason})
 
@@ -1507,20 +1018,14 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
         try:
-            run_dir = _resolve_run_dir(agent)
-            if not run_dir:
-                raise ToolError(json.dumps({"error": "no_run_dir"}))
-
-            state: dict = {
-                "storyId": story_id,
-                "status": "skipped",
-                "updatedAt": _now_iso(),
-            }
-            if reason:
-                state["skipReason"] = reason
-
-            await save_story_state(run_dir, story_id, state)
-            result_blocks = [_text_block(f"Story '{story_id}' skipped.")]
+            from ..tools.koan_tools import ToolDeps, skip_story
+            try:
+                result_text = await skip_story(
+                    ToolDeps(app_state=app_state, agent=agent), story_id, reason
+                )
+            except ValueError as e:
+                raise ToolError(json.dumps({"error": "no_run_dir", "message": str(e)}))
+            result_blocks = [_text_block(result_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
@@ -1537,27 +1042,13 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
     ) -> list[ContentBlock]:
         """Write a memory entry.
 
-        Creates a new entry when entry_id is omitted. Updates an existing
-        entry when entry_id is provided (the NNNN sequence number from
-        the entry's filename).
-
-        New entries: assigns the next sequence number, generates a filename
-        slug, sets created/modified timestamps automatically.
-
-        Updates: reads the existing entry, replaces the provided fields,
-        updates the modified timestamp. Original filename and created
-        timestamp are preserved.
-
-        The body should begin with 1-3 sentences situating the entry in
-        the project -- this opening context improves semantic search
-        matching. The rest is event-style prose: temporally grounded,
-        attributed, self-contained.
+        Delegates to memorize_core in koan/tools/koan_tools.py (single logic
+        home shared with the in-process PydanticAI tool).
 
         Args:
             type: Memory type (decision, context, lesson, procedure)
             title: Short descriptive name
-            body: Prose content (100-500 tokens). Begin with 1-3 sentences
-                  of project context for search matching.
+            body: Prose content (100-500 tokens)
             related: Filenames of related entries (optional)
             entry_id: Sequence number for updates (omit for creates)
         """
@@ -1573,50 +1064,30 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
         try:
-            store = app_state.memory.memory_store
-            result = memory_ops.memorize(store, type, title, body, related, entry_id)
-
-            # Emit memory mutation event so the projection and frontend stay in sync.
-            # title and type are already in scope from the tool parameters.
-            eid = result.get("entry_id")
-            if eid is not None:
-                from ..events import build_memory_entry_created, build_memory_entry_updated
-                seq = f"{eid:04d}"
-                summary = MemoryEntrySummary(
-                    seq=seq,
-                    type=result.get("type", type),  # type: ignore[arg-type]
-                    title=title,
-                    created_ms=_iso_to_ms(result.get("created", "")),
-                    modified_ms=_iso_to_ms(result.get("modified", "")),
+            from ..memory.ops import EntryNotFoundError, TypeMismatchError
+            from ..tools.koan_tools import ToolDeps, memorize_core
+            try:
+                result_text = await memorize_core(
+                    ToolDeps(app_state=app_state, agent=agent),
+                    type, title, body, related, entry_id,
                 )
-                builder = (
-                    build_memory_entry_created
-                    if result.get("op") == "created"
-                    else build_memory_entry_updated
-                )
-                app_state.projection_store.push_event(
-                    "memory_entry_created" if result.get("op") == "created" else "memory_entry_updated",
-                    builder(summary.to_wire()),
-                    agent_id=agent.agent_id,
-                )
-
-            result_blocks = [_text_block(json.dumps(result))]
+            except EntryNotFoundError as e:
+                raise ToolError(json.dumps({"error": "entry_not_found", "message": str(e)}))
+            except TypeMismatchError as e:
+                raise ToolError(json.dumps({"error": "type_mismatch", "message": str(e)}))
+            except ValueError as e:
+                raise ToolError(json.dumps({"error": "invalid_type", "message": str(e)}))
+            result_blocks = [_text_block(result_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
-        except EntryNotFoundError as e:
-            raise ToolError(json.dumps({"error": "entry_not_found", "message": str(e)}))
-        except TypeMismatchError as e:
-            raise ToolError(json.dumps({"error": "type_mismatch", "message": str(e)}))
-        except ValueError as e:
-            raise ToolError(json.dumps({"error": "invalid_type", "message": str(e)}))
         finally:
             end_tool_call(agent, call_id, "koan_memorize", result_blocks, steer_manifest or None)
 
     async def koan_forget(ctx: Context, entry_id: int, type: str | None = None) -> list[ContentBlock]:
         """Remove a memory entry.
 
-        Deletes the entry file from disk. Git preserves history.
+        Delegates to forget_core in koan/tools/koan_tools.py.
 
         Args:
             entry_id: Sequence number (NNNN prefix from filename)
@@ -1633,41 +1104,32 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
         try:
-            store = app_state.memory.memory_store
-            result = memory_ops.forget(store, entry_id, type)
-
-            # Emit deletion event so the projection drops the entry immediately.
-            from ..events import build_memory_entry_deleted
-            seq = f"{result.get('entry_id', entry_id):04d}"
-            app_state.projection_store.push_event(
-                "memory_entry_deleted",
-                build_memory_entry_deleted(seq),
-                agent_id=agent.agent_id,
-            )
-
-            result_blocks = [_text_block(json.dumps(result))]
+            from ..memory.ops import EntryNotFoundError, TypeMismatchError
+            from ..tools.koan_tools import ToolDeps, forget_core
+            try:
+                result_text = await forget_core(
+                    ToolDeps(app_state=app_state, agent=agent), entry_id, type
+                )
+            except EntryNotFoundError as e:
+                raise ToolError(json.dumps({"error": "entry_not_found", "message": str(e)}))
+            except TypeMismatchError as e:
+                raise ToolError(json.dumps({"error": "type_mismatch", "message": str(e)}))
+            except ValueError as e:
+                raise ToolError(json.dumps({"error": "invalid_type", "message": str(e)}))
+            result_blocks = [_text_block(result_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
-        except EntryNotFoundError as e:
-            raise ToolError(json.dumps({"error": "entry_not_found", "message": str(e)}))
-        except TypeMismatchError as e:
-            raise ToolError(json.dumps({"error": "type_mismatch", "message": str(e)}))
-        except ValueError as e:
-            raise ToolError(json.dumps({"error": "invalid_type", "message": str(e)}))
         finally:
             end_tool_call(agent, call_id, "koan_forget", result_blocks, steer_manifest or None)
 
     async def koan_memory_status(ctx: Context, type: str | None = None) -> list[ContentBlock]:
         """Get an orientation view of project memory.
 
-        Returns the project summary and a flat listing of all entries.
-        Checks whether summary.md is stale (older than the most recent
-        entry) and regenerates it just-in-time before returning.
+        Delegates to memory_status_core in koan/tools/koan_tools.py.
 
         Args:
             type: Filter listing to a specific memory type (optional).
-                  The summary is always project-wide regardless of filter.
         """
         agent = await _get_agent(ctx)
         _check_or_raise(agent, app_state, "koan_memory_status", {"type": type})
@@ -1677,27 +1139,17 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
         try:
-            store = app_state.memory.memory_store
-            result = await memory_ops.status(store, type=type)
-
-            # Emit summary update if the just-in-time regeneration ran.
-            if result.get("regenerated"):
-                from ..events import build_memory_summary_updated
-                app_state.projection_store.push_event(
-                    "memory_summary_updated",
-                    build_memory_summary_updated(result.get("summary", "")),
-                    agent_id=agent.agent_id,
+            from ..tools.koan_tools import ToolDeps, memory_status_core
+            try:
+                result_text = await memory_status_core(
+                    ToolDeps(app_state=app_state, agent=agent), type
                 )
-
-            result_blocks = [_text_block(json.dumps(result))]
+            except ValueError as e:
+                raise ToolError(json.dumps({"error": "invalid_type", "message": str(e)}))
+            result_blocks = [_text_block(result_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
-        except ValueError as e:
-            raise ToolError(json.dumps({
-                "error": "invalid_type",
-                "message": str(e),
-            }))
         finally:
             end_tool_call(agent, call_id, "koan_memory_status", result_blocks, steer_manifest or None)
 
@@ -1709,8 +1161,7 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
     ) -> list[ContentBlock]:
         """Search memory entries by semantic similarity.
 
-        Runs hybrid dense + BM25 search with cross-encoder reranking.
-        Returns the top k entries most relevant to the query.
+        Delegates to search_core in koan/tools/koan_tools.py.
 
         Args:
             query: Search query string
@@ -1727,32 +1178,19 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
         try:
-            if type is not None and type not in MEMORY_TYPES:
-                raise ValueError(f"invalid type: {type!r}")
-            index = app_state.memory.retrieval_index
-            results = await retrieval_search(index, query, k=k, type_filter=type)
-            out = {
-                "results": [
-                    {
-                        "entry_id": r.entry_id,
-                        "title": r.entry.title,
-                        "type": r.entry.type,
-                        "score": r.score,
-                        "created": r.entry.created,
-                        "modified": r.entry.modified,
-                        "body": r.entry.body,
-                    }
-                    for r in results
-                ]
-            }
-            result_blocks = [_text_block(json.dumps(out))]
+            from ..tools.koan_tools import ToolDeps, search_core
+            try:
+                result_text = await search_core(
+                    ToolDeps(app_state=app_state, agent=agent), query, type, k
+                )
+            except ValueError as e:
+                raise ToolError(json.dumps({"error": "invalid_type", "message": str(e)}))
+            except RuntimeError as e:
+                raise ToolError(json.dumps({"error": "search_failed", "message": str(e)}))
+            result_blocks = [_text_block(result_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
-        except ValueError as e:
-            raise ToolError(json.dumps({"error": "invalid_type", "message": str(e)}))
-        except RuntimeError as e:
-            raise ToolError(json.dumps({"error": "search_failed", "message": str(e)}))
         finally:
             end_tool_call(agent, call_id, "koan_search", result_blocks, steer_manifest or None)
 
@@ -1763,16 +1201,18 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
     ) -> list[ContentBlock]:
         """Synthesize a cited briefing over project memory.
 
-        Runs a single-conversation LLM tool-calling loop that searches memory
-        as many times as the model decides is needed, then returns a briefing
-        with structured citations. Intended for broad questions that require
-        synthesis across multiple entries.
+        Calls run_reflect_agent with a trace callback that emits reflect_delta
+        projection events for text-kind deltas. ToolError wrapping is
+        MCP-specific and stays here; the in-process path (reflect_core in
+        koan/tools/koan_tools.py) raises plain exceptions instead.
+
+        run_reflect_agent is called via the module-level import so test
+        monkeypatches on mcp_endpoint.run_reflect_agent take effect -- the
+        reflect_core delegation path uses a lazy import that would bypass them.
 
         Args:
             question: The broad question to answer.
-            context: Optional caller-provided context (e.g. the subsystem the
-                     orchestrator is currently working on). Included in the
-                     prompt alongside the question.
+            context: Optional caller-provided context.
         """
         agent = await _get_agent(ctx)
         _check_or_raise(agent, app_state, "koan_reflect", {})
@@ -1783,33 +1223,43 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         )
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
-
-        # _on_trace defined before try so it is in scope for run_reflect_agent.
-        # Only kind="text" deltas flow into the agent's conversation feed (M3
-        # decision 3). Other kinds (search, done, thinking) stay on the
-        # project-scoped reflect projection handled by /api/memory/reflect.
-        from ..events import build_reflect_delta
-
-        def _on_trace(ev: ReflectTraceEvent) -> None:
-            if ev.kind != "text":
-                return
-            if not ev.delta:
-                return
-            app_state.projection_store.push_event(
-                "reflect_delta",
-                build_reflect_delta(ev.delta),
-                agent_id=agent.agent_id,
-            )
-
         try:
-            index = app_state.memory.retrieval_index
-            result: ReflectResult = await run_reflect_agent(
-                index, question, context=context, on_trace=_on_trace,
-            )
+            from ..events import build_reflect_delta
+
+            # Only text-kind deltas flow into the projection feed; other kinds
+            # (search, done, thinking) are consumed by /api/memory/reflect.
+            def _on_trace(ev: ReflectTraceEvent) -> None:
+                if ev.kind != "text" or not ev.delta:
+                    return
+                app_state.projection_store.push_event(
+                    "reflect_delta",
+                    build_reflect_delta(ev.delta),
+                    agent_id=agent.agent_id,
+                )
+
+            try:
+                index = app_state.memory.retrieval_index
+                result = await run_reflect_agent(
+                    index, question, context=context, on_trace=_on_trace
+                )
+            except IterationCapExceeded as e:
+                raise ToolError(json.dumps({
+                    "error": "iteration_cap_exceeded",
+                    "message": str(e),
+                    "iterations": e.iterations,
+                }))
+            except RuntimeError as e:
+                raise ToolError(json.dumps({"error": "reflect_failed", "message": str(e)}))
+
             out = {
                 "answer": result.answer,
                 "citations": [
-                    {"id": c.id, "title": c.title, "type": c.type, "modifiedMs": c.modified_ms}
+                    {
+                        "id": c.id,
+                        "title": c.title,
+                        "type": c.type,
+                        "modifiedMs": c.modified_ms,
+                    }
                     for c in result.citations
                 ],
                 "iterations": result.iterations,
@@ -1818,14 +1268,6 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
-        except IterationCapExceeded as e:
-            raise ToolError(json.dumps({
-                "error": "iteration_cap_exceeded",
-                "message": str(e),
-                "iterations": e.iterations,
-            }))
-        except RuntimeError as e:
-            raise ToolError(json.dumps({"error": "reflect_failed", "message": str(e)}))
         finally:
             end_tool_call(agent, call_id, "koan_reflect", result_blocks, steer_manifest or None)
 
@@ -1836,10 +1278,8 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
     ) -> list[ContentBlock]:
         """Write or update an artifact file. Non-blocking; full-rewrite semantics.
 
-        Driver-managed YAML frontmatter (created, last_modified) is composed
-        onto the body. `created` is preserved across rewrites; `last_modified`
-        is refreshed on every write. Status tracking has been removed -- artifact
-        lifecycle state lives in the orchestrator's conversation context.
+        Delegates to artifact_write_core in koan/tools/koan_tools.py (single
+        logic home shared with the in-process PydanticAI tool).
 
         Args:
             filename: Root-only basename, must match [a-z0-9][a-z0-9_-]*.md
@@ -1857,31 +1297,18 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
         try:
-            err = _validate_artifact_filename(filename)
-            if err:
-                raise ToolError(json.dumps({
-                    "error": "invalid_filename", "message": err,
-                }))
-
-            run_dir = _resolve_run_dir(agent)
-            if not run_dir:
-                raise ToolError(json.dumps({
-                    "error": "no_run_dir",
-                    "message": "No run directory available",
-                }))
-
-            from ..artifacts import write_artifact_atomic
-            target = Path(run_dir) / filename
-            write_artifact_atomic(target, content or "")
-
-            # Emit artifact diff so the sidebar reflects the new/updated file.
-            from ..driver import _push_artifact_diff
-            _push_artifact_diff(app_state)
-
-            result_blocks = [_text_block(json.dumps({
-                "ok": True,
-                "filename": filename,
-            }))]
+            from ..tools.koan_tools import ToolDeps, artifact_write_core
+            try:
+                result_text = await artifact_write_core(
+                    ToolDeps(app_state=app_state, agent=agent), filename, content
+                )
+            except ValueError as e:
+                msg = str(e)
+                colon = msg.find(": ")
+                err_key = msg[:colon] if colon != -1 else "error"
+                err_msg = msg[colon + 2:] if colon != -1 else msg
+                raise ToolError(json.dumps({"error": err_key, "message": err_msg}))
+            result_blocks = [_text_block(result_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
@@ -1896,18 +1323,8 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
     ) -> list[ContentBlock]:
         """Surgical in-place edit of an artifact's body. Single-unique-match semantics.
 
-        Reads the artifact, strips frontmatter (so old_string originates from
-        what koan_artifact_view showed the caller), replaces exactly one
-        occurrence of old_string with new_string, and re-writes via
-        write_artifact_atomic (preserving created, refreshing last_modified).
-
-        Error conditions:
-            invalid_filename: filename fails the [a-z0-9][a-z0-9_-]*.md pattern.
-            invalid_edit: old_string is empty, or old_string == new_string.
-            no_run_dir: no run directory is associated with this agent.
-            not_found: the artifact file does not exist.
-            no_match: old_string has zero occurrences in the body.
-            multiple_matches: old_string has more than one occurrence in the body.
+        Delegates to artifact_edit_core in koan/tools/koan_tools.py (single
+        logic home shared with the in-process PydanticAI tool).
 
         Returns {"ok": true, "filename": ...} on success. Emits artifact_diff
         so the sidebar refreshes, matching koan_artifact_write behavior.
@@ -1924,68 +1341,18 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
         try:
-            err = _validate_artifact_filename(filename)
-            if err:
-                raise ToolError(json.dumps({
-                    "error": "invalid_filename", "message": err,
-                }))
-
-            # Reject degenerate edits before touching disk.
-            if not old_string:
-                raise ToolError(json.dumps({
-                    "error": "invalid_edit",
-                    "message": "old_string must be non-empty",
-                }))
-            if old_string == new_string:
-                raise ToolError(json.dumps({
-                    "error": "invalid_edit",
-                    "message": "old_string and new_string are identical; no edit to apply",
-                }))
-
-            run_dir = _resolve_run_dir(agent)
-            if not run_dir:
-                raise ToolError(json.dumps({
-                    "error": "no_run_dir",
-                    "message": "No run directory available",
-                }))
-
-            target = Path(run_dir) / filename
-            if not target.is_file():
-                raise ToolError(json.dumps({
-                    "error": "not_found",
-                    "message": f"{filename} not found",
-                }))
-
-            # Strip frontmatter so old_string matches what koan_artifact_view
-            # returned to the caller -- matching raw on-disk text (including the
-            # managed frontmatter block) would be unreliable.
-            from ..artifacts import split_frontmatter, write_artifact_atomic
-            raw = target.read_text(encoding="utf-8")
-            _, body = split_frontmatter(raw)
-
-            count = body.count(old_string)
-            if count == 0:
-                raise ToolError(json.dumps({
-                    "error": "no_match",
-                    "message": "old_string not found in artifact body",
-                }))
-            if count > 1:
-                raise ToolError(json.dumps({
-                    "error": "multiple_matches",
-                    "message": f"{count} occurrences found; old_string must match exactly one",
-                }))
-
-            new_body = body.replace(old_string, new_string, 1)
-            write_artifact_atomic(target, new_body)
-
-            # Emit artifact diff so the sidebar reflects the updated file.
-            from ..driver import _push_artifact_diff
-            _push_artifact_diff(app_state)
-
-            result_blocks = [_text_block(json.dumps({
-                "ok": True,
-                "filename": filename,
-            }))]
+            from ..tools.koan_tools import ToolDeps, artifact_edit_core
+            try:
+                result_text = await artifact_edit_core(
+                    ToolDeps(app_state=app_state, agent=agent), filename, old_string, new_string
+                )
+            except ValueError as e:
+                msg = str(e)
+                colon = msg.find(": ")
+                err_key = msg[:colon] if colon != -1 else "error"
+                err_msg = msg[colon + 2:] if colon != -1 else msg
+                raise ToolError(json.dumps({"error": err_key, "message": err_msg}))
+            result_blocks = [_text_block(result_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
@@ -2020,75 +1387,39 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         steer_manifest: list[dict] = []
         curation_manifest: list[dict] = []
         try:
-            # Validate proposals list is non-empty and each item matches Proposal schema.
-            if not proposals:
-                raise ToolError(json.dumps({
-                    "error": "invalid_proposal",
-                    "message": "proposals must be a non-empty list",
-                }))
-            validated: list[Proposal] = []
-            for p in proposals:
-                try:
-                    validated.append(Proposal.model_validate(p))
-                except Exception as exc:
-                    raise ToolError(json.dumps({
-                        "error": "invalid_proposal",
-                        "message": f"proposal validation failed: {exc}",
-                    }))
-
-            # Reentry guard: refuse if a prior propose is still pending.
-            existing = app_state.interactions.memory_propose_future
-            if existing is not None and not existing.done():
-                raise ToolError(json.dumps({
-                    "error": "propose_already_pending",
-                    "message": (
-                        "A prior memory proposal is still awaiting "
-                        "review; resolve it before calling "
-                        "koan_memory_propose again."
-                    ),
-                }))
-
-            # Build the batch and emit the started event.
-            batch = ActiveCurationBatch(
-                proposals=validated,
-                batch_id=uuid.uuid4().hex,
-                context_note=context_note,
-            )
-            from ..events import build_memory_curation_started
-            app_state.projection_store.push_event(
-                "memory_curation_started",
-                build_memory_curation_started(batch.to_wire()),
-                agent_id=agent.agent_id,
-            )
-
-            # api_memory_curation_submit now sets the raw decisions list on the future
-            # so this handler can call _render_curation_payload with uploads and runner_type
-            # in scope for per-decision attachment interleaving.
-            if app_state.server.yolo:
-                result_blocks = [_text_block(_yolo_memory_propose_response(batch))]
-            else:
-                loop = asyncio.get_running_loop()
-                future = loop.create_future()
-                app_state.interactions.memory_propose_future = future
-                try:
-                    decisions = await future
-                finally:
-                    app_state.interactions.memory_propose_future = None
-                if not isinstance(decisions, list):
-                    decisions = []
-                run_dir_for_curation = _resolve_run_dir(agent) or ""
-                result_blocks, curation_manifest = _render_curation_payload(
-                    batch, decisions,
-                    app_state.uploads, run_dir_for_curation, agent.runner_type,
+            # Delegate the full interaction lifecycle to the shared core.  The MCP
+            # wrapper adds per-decision attachment interleaving (which needs uploads
+            # and runner_type in scope) plus fastmcp ToolError conversion.
+            from ..tools.koan_tools import ToolDeps, propose_memory_core
+            try:
+                json_text, decisions = await propose_memory_core(
+                    ToolDeps(app_state=app_state, agent=agent), proposals or [], context_note
                 )
+            except (ValueError, RuntimeError) as exc:
+                msg = str(exc)
+                colon = msg.find(":")
+                err_key = msg[:colon].strip() if colon != -1 else "propose_error"
+                err_msg = msg[colon + 1:].strip() if colon != -1 else msg
+                raise ToolError(json.dumps({"error": err_key, "message": err_msg}))
 
-            # Emit cleared event after future resolves (tool lifecycle owns it).
-            from ..events import build_memory_curation_cleared
-            app_state.projection_store.push_event(
-                "memory_curation_cleared",
-                build_memory_curation_cleared(),
-                agent_id=agent.agent_id,
-            )
+            result_blocks = [_text_block(json_text)]
+
+            # Append per-decision attachment sections so the orchestrator receives
+            # file content adjacent to the decision it annotates.
+            if decisions:
+                from .uploads import upload_ids_to_blocks
+                run_dir_for_curation = _resolve_run_dir(agent) or ""
+                for d in decisions:
+                    attach_ids = d.get("attachments") or []
+                    if attach_ids:
+                        pid = d.get("proposal_id", "?")
+                        result_blocks.append(_text_block(f"-- Attachments for proposal {pid} --"))
+                        bs, ms = upload_ids_to_blocks(
+                            app_state.uploads, run_dir_for_curation,
+                            attach_ids, agent.runner_type,
+                        )
+                        result_blocks.extend(bs)
+                        curation_manifest.extend(ms)
 
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(curation_manifest + steer_manifest, agent)
@@ -2098,22 +1429,19 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
             end_tool_call(agent, call_id, "koan_memory_propose", result_blocks, total_manifest or None)
 
     async def koan_artifact_list(ctx: Context) -> list[ContentBlock]:
-        """List artifacts in the run directory."""
+        """List artifacts in the run directory.
+
+        Delegates to artifact_list_core in koan/tools/koan_tools.py.
+        """
         agent = await _get_agent(ctx)
         _check_or_raise(agent, app_state, "koan_artifact_list", {})
         call_id = begin_tool_call(agent, "koan_artifact_list", {}, "list")
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
         try:
-            run_dir = _resolve_run_dir(agent)
-            if not run_dir:
-                result_blocks = [_text_block(json.dumps({"artifacts": []}))]
-                result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
-                _push_tool_attachments(steer_manifest, agent)
-                return result_blocks
-            from ..artifacts import list_artifacts
-            artifacts = list_artifacts(run_dir)
-            result_blocks = [_text_block(json.dumps({"artifacts": artifacts}))]
+            from ..tools.koan_tools import ToolDeps, artifact_list_core
+            result_text = await artifact_list_core(ToolDeps(app_state=app_state, agent=agent))
+            result_blocks = [_text_block(result_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
@@ -2121,7 +1449,10 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
             end_tool_call(agent, call_id, "koan_artifact_list", result_blocks, steer_manifest or None)
 
     async def koan_artifact_view(ctx: Context, filename: str) -> list[ContentBlock]:
-        """Return the full text content of an artifact."""
+        """Return the full text content of an artifact.
+
+        Delegates to artifact_view_core in koan/tools/koan_tools.py.
+        """
         agent = await _get_agent(ctx)
         _check_or_raise(agent, app_state, "koan_artifact_view",
                         {"filename": filename})
@@ -2130,34 +1461,18 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
         try:
-            run_dir = _resolve_run_dir(agent)
-            if not run_dir:
-                raise ToolError(json.dumps({
-                    "error": "no_run_dir",
-                    "message": "No run directory available",
-                }))
-            # Path-traversal guard: resolve and verify containment.
-            run_root = Path(run_dir).resolve()
-            target = (run_root / filename).resolve()
-            if target != run_root and not str(target).startswith(
-                str(run_root) + os.sep
-            ):
-                raise ToolError(json.dumps({
-                    "error": "invalid_path",
-                    "message": "filename escapes run_dir",
-                }))
-            if not target.is_file():
-                raise ToolError(json.dumps({
-                    "error": "not_found",
-                    "message": f"{filename} not found",
-                }))
-            # Strip driver-managed frontmatter so the LLM sees body only.
-            # Frontmatter is an internal concern; exposing it would invite
-            # the LLM to parse or reproduce it, breaking the invariant.
-            from ..artifacts import split_frontmatter
-            raw = target.read_text(encoding="utf-8")
-            _, body = split_frontmatter(raw)
-            result_blocks = [_text_block(body)]
+            from ..tools.koan_tools import ToolDeps, artifact_view_core
+            try:
+                result_text = await artifact_view_core(
+                    ToolDeps(app_state=app_state, agent=agent), filename
+                )
+            except ValueError as e:
+                msg = str(e)
+                colon = msg.find(": ")
+                err_key = msg[:colon] if colon != -1 else "error"
+                err_msg = msg[colon + 2:] if colon != -1 else msg
+                raise ToolError(json.dumps({"error": err_key, "message": err_msg}))
+            result_blocks = [_text_block(result_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
@@ -2167,7 +1482,6 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
     # -- fastmcp registration (lockstep with Handlers fields) -----------------
 
     mcp.tool(name="koan_complete_step")(koan_complete_step)
-    mcp.tool(name="koan_yield")(koan_yield)
     mcp.tool(name="koan_set_phase")(koan_set_phase)
     mcp.tool(name="koan_set_workflow")(koan_set_workflow)
     mcp.tool(name="koan_request_scouts")(koan_request_scouts)
@@ -2190,7 +1504,6 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
 
     handlers = Handlers(
         koan_complete_step=koan_complete_step,
-        koan_yield=koan_yield,
         koan_set_phase=koan_set_phase,
         koan_set_workflow=koan_set_workflow,
         koan_request_scouts=koan_request_scouts,

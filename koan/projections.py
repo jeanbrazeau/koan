@@ -265,8 +265,20 @@ class AggregateLsChild(BaseToolEntry):
     entries: int | None = None             # attached by tool_result_captured
     directories: int | None = None         # attached by tool_result_captured
 
+# M4: glob is a built-in file-search tool analogous to grep; it uses the
+# same metrics shape (matches / files_matched) since each matched path is
+# one match and one file. Separate discriminator value keeps the fold's
+# dispatch clean and lets the frontend render glob entries distinctly later.
+class AggregateGlobChild(BaseToolEntry):
+    tool: Literal["glob"] = "glob"
+    pattern: str                           # glob pattern searched
+    started_at_ms: int = 0
+    completed_at_ms: int | None = None
+    matches: int | None = None             # attached by tool_result_captured
+    files_matched: int | None = None       # attached by tool_result_captured
+
 AggregateChild = Annotated[
-    AggregateReadChild | AggregateGrepChild | AggregateLsChild,
+    AggregateReadChild | AggregateGrepChild | AggregateLsChild | AggregateGlobChild,
     Field(discriminator="tool"),
 ]
 
@@ -1310,6 +1322,12 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                                 update["entries"] = metrics["entries"]
                             if "directories" in metrics:
                                 update["directories"] = metrics["directories"]
+                        elif isinstance(child, AggregateGlobChild):
+                            # M4: glob uses same metrics shape as grep.
+                            if "matches" in metrics:
+                                update["matches"] = metrics["matches"]
+                            if "files_matched" in metrics:
+                                update["files_matched"] = metrics["files_matched"]
                         if update:
                             new_children.append(child.model_copy(update=update))
                         else:
@@ -1391,9 +1409,11 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                             projection.run, agent_id, new_conv, last_tool="bash",
                         ),
                     })
-                if tool_name in ("read", "grep", "ls"):
+                if tool_name in ("read", "grep", "ls", "glob"):
                     # Exploration tools aggregate into ToolAggregateEntry.
                     # Typed fields start empty; tool_input_delta fills them in.
+                    # glob is treated like grep (file-search returning matches +
+                    # files_matched); added in M4 when the built-in glob tool landed.
                     ts_ms = 0
                     if tool_name == "read":
                         child: AggregateChild = AggregateReadChild(
@@ -1402,6 +1422,11 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                         )
                     elif tool_name == "grep":
                         child = AggregateGrepChild(
+                            call_id=call_id, in_flight=True,
+                            pattern="", started_at_ms=ts_ms,
+                        )
+                    elif tool_name == "glob":
+                        child = AggregateGlobChild(
                             call_id=call_id, in_flight=True,
                             pattern="", started_at_ms=ts_ms,
                         )
@@ -1566,6 +1591,12 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                                             child_upd["entries"] = metrics["entries"]
                                         if "directories" in metrics:
                                             child_upd["directories"] = metrics["directories"]
+                                    elif isinstance(child, AggregateGlobChild):
+                                        # M4: glob reuses grep's metrics shape.
+                                        if "matches" in metrics:
+                                            child_upd["matches"] = metrics["matches"]
+                                        if "files_matched" in metrics:
+                                            child_upd["files_matched"] = metrics["files_matched"]
                                 new_children.append(child.model_copy(update=child_upd))
                                 child_found = True
                             else:

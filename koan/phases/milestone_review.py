@@ -75,7 +75,8 @@ PHASE_ROLE_CONTEXT = (
     "- MUST classify each finding as internal or new-files-needed.\n"
     "- MUST issue koan_artifact_write against milestones.md for internal findings.\n"
     "- When rewriting, MUST preserve all [done] Outcome sections intact.\n"
-    "- MUST recommend loop-back via koan_yield for new-files findings.\n"
+    "- MUST recommend loop-back for new-files findings by ending your turn (no\n"
+    "  tool call) with the recommendation, handing the decision to the user.\n"
 )
 
 

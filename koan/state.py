@@ -68,6 +68,20 @@ class AgentState:
     # steering-drain routing to distinguish Claude from command-line agents.
     runner_type: str = ""
     started_at: datetime = field(default_factory=_utcnow)
+    # Driver-owned conversation history (M5).
+    # The multi-turn loop accumulates ModelMessage objects here across hand-backs
+    # and passes them as message_history to each subsequent agent.iter() call.
+    # Owning this list in the driver (not inside pydantic-ai) is what enables
+    # future advanced-control features: interrupts, compaction, context surgery.
+    message_history: list = field(default_factory=list)
+    # Context-file injection tracking (M4).
+    # injected_context_files: absolute paths already injected as
+    # <project_instructions> user messages; prevents duplicate injection
+    # across multiple model requests within the same agent lifetime.
+    # pending_context_files: discovered-but-not-yet-injected paths; drained
+    # by the history processor before each model request.
+    injected_context_files: set = field(default_factory=set)
+    pending_context_files: list = field(default_factory=list)
 
 
 # -- Sub-state dataclasses (grouped by access pattern) ------------------------

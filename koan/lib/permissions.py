@@ -60,7 +60,6 @@ ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
         "koan_complete_step",
         "koan_set_phase",
         "koan_set_workflow",
-        "koan_yield",
         "koan_ask_question",
         "koan_request_scouts",
         "koan_request_executor",
@@ -210,7 +209,7 @@ def _check_orchestrator_permission(
 
     # Always allowed base koan tools -- koan_set_workflow mirrors koan_set_phase;
     # any mid-story guard lives in the handler, not the fence (brief.md decision 7).
-    if tool_name in ("koan_complete_step", "koan_set_phase", "koan_set_workflow", "koan_yield"):
+    if tool_name in ("koan_complete_step", "koan_set_phase", "koan_set_workflow"):
         log.debug(
             "permission allow: role=orchestrator tool=%s phase=%s step=%s",
             tool_name, phase, current_step,

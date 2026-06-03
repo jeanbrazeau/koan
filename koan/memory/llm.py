@@ -44,11 +44,15 @@ async def generate(prompt: str, system: str = "", max_tokens: int = 1024) -> str
         model, len(prompt), len(system), max_tokens,
     )
     _api_key()  # raise early with a clear message if key is missing
+    # Use 'google:' provider prefix -- 'google-gla:' is a v1 alias not accepted
+    # by pydantic-ai v2.0.0b5's infer_provider_class.
+    # v2 system_prompt does not accept None; omit the kwarg when system is empty
+    # so it defaults to the empty tuple rather than raising TypeError.
     agent: Agent[None, str] = Agent(
-        model=f"google-gla:{model}",
-        system_prompt=system or None,
+        model=f"google:{model}",
         model_settings={"temperature": 0.0, "max_tokens": max_tokens},
         output_type=str,
+        **({"system_prompt": system} if system else {}),
     )
     result = await agent.run(prompt)
     text = result.output or ""

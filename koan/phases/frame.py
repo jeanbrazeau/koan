@@ -69,9 +69,10 @@ PHASE_ROLE_CONTEXT = (
     "\n"
     "## Strict rules\n"
     "\n"
-    "- MUST always end your turn by calling `koan_yield`. Frame has no auto-advance\n"
-    "  path. You MUST yield after every response, without exception. Never trail\n"
-    "  off without a yield; never advance the workflow on your own.\n"
+    "- MUST always end your turn with a plain-text message and no tool call. Frame\n"
+    "  has no auto-advance path. A turn with no tool call is the hand-back: it\n"
+    "  returns control to the user and waits for their reply. End your turn after\n"
+    "  every response, without exception; never advance the workflow on your own.\n"
     "- MUST NOT call `koan_artifact_write` until the user has explicitly chosen an\n"
     "  artifact shape and named it. Writing prematurely collapses the exploration.\n"
     "- MUST NOT write any decision into project memory unless the user explicitly\n"
@@ -87,7 +88,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
 
     Frame has only one step. Step 1 establishes the general-purpose exploration
     posture, surfaces relevant prior context, and opens the dialogue. The
-    invoke_after footer always calls koan_yield (next_phase=None, no auto-advance).
+    invoke_after footer always hands back to the user (next_phase=None, no auto-advance).
     """
     if step == 1:
         lines: list[str] = []
@@ -148,11 +149,12 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "Do NOT call `koan_artifact_write` until the user has explicitly chosen an",
             "artifact shape and named it. Writing prematurely collapses the exploration.",
             "",
-            "## Always yield",
+            "## Always hand back",
             "",
-            "When you are done with the user's request, you MUST end your turn by calling",
-            "`koan_yield`. The frame phase never auto-advances. Always yield back; never",
-            "trail off without a yield; never advance the workflow on your own.",
+            "When you are done with the user's request, you MUST end your turn with a",
+            "plain-text message and no tool call. A turn with no tool call is the hand-",
+            "back: it returns control to the user. The frame phase never auto-advances;",
+            "never advance the workflow on your own.",
             "",
             "## Exit",
             "",

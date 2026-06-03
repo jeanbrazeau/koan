@@ -201,22 +201,38 @@ async def spawn_subagent(
     else:
         Path(subagent_dir).mkdir(parents=True, exist_ok=True)
 
-    # Resolve Agent via registry when not injected. model/installation/thinking
-    # are None in the test-injection else-branch; AgentOptions receives dummy
-    # values that FakeAgent ignores.
+    # M1->M2 seam: resolve the ModelSpec for the role, then raise NotImplementedError.
+    # Legacy SDK/CLI agent construction is intentionally non-functional after the
+    # M1 config reshape -- the new spawn path is wired to PydanticAIAgent in M2.
+    # agent_impl is still accepted as an injection point for tests that bypass
+    # the registry entirely (FakeAgent path).
     if agent_impl is None:
         try:
             config = app_state.runner_config.config
             registry = AgentRegistry()
-            installation, model_alias, thinking_mode = registry.resolve_agent_config(
+            # resolve_model_spec replaces resolve_agent_config; returns a ModelSpec.
+            model_spec = registry.resolve_model_spec(
                 role, config,
                 builtin_profiles=app_state.runner_config.builtin_profiles,
-                run_installations=app_state.run.run_installations,
             )
-            # Pass app_state so ClaudeSDKAgent can capture it in its PostToolUse
-            # hook closure. CommandLineAgent ignores the extra parameter.
-            agent_impl = registry.get_agent(installation.runner_type, subagent_dir, app_state)
-            model = model_alias
+            # M2 seam: PydanticAIAgent wired here; the legacy binary spawn path
+            # is non-functional after the M1 config reshape.
+            # Lazy import to avoid a circular dependency: koan/agents imports from
+            # koan/subagent (indirectly via events/state), so importing PydanticAIAgent
+            # at module level would create a cycle.
+            from .agents.pydantic_ai import PydanticAIAgent
+            agent_impl = PydanticAIAgent(
+                model_spec=model_spec,
+                app_state=app_state,
+                subagent_dir=subagent_dir,
+            )
+            # model, installation, thinking_mode are legacy fields consumed by
+            # the AgentOptions constructor below. PydanticAIAgent does not use
+            # them (it reads model_spec directly); set them to None so the
+            # AgentOptions is constructed cleanly without AttributeError.
+            model = model_spec.model
+            installation = None
+            thinking_mode = None
         except AgentError as e:
             log.error("agent resolution failed for %s: %s", role, e.diagnostic.message)
             # Write diagnostic to EventLog
@@ -344,6 +360,10 @@ async def spawn_subagent(
     # Stream tracking -- same dicts as before; only the iteration source changes.
     call_ids_by_block: dict[int, tuple[str, str]] = {}
     call_id_by_tool_use_id: dict[str, str] = {}
+    # Accumulate real token usage from StreamEvent.usage (set on turn_complete by
+    # PydanticAIAgent). When populated, replaces the char-length token_count
+    # approximation at agent_exited. CLI runners leave this None.
+    accumulated_usage: dict | None = None
 
     try:
         async for ev in agent_impl.run(options):
@@ -409,7 +429,7 @@ async def spawn_subagent(
                     # aggregate child metrics continue to populate (preserved
                     # per intake constraint -- tool_result_captured is orthogonal
                     # to tool_result and both fire for read/grep/ls).
-                    if ev.tool_name in ("read", "grep", "ls"):
+                    if ev.tool_name in ("read", "grep", "ls", "glob"):
                         store.push_event(
                             "tool_result_captured",
                             build_tool_result_captured(
@@ -426,7 +446,18 @@ async def spawn_subagent(
                     for k in to_remove:
                         del call_ids_by_block[k]
             elif ev.type == "turn_complete":
-                pass
+                # Accumulate real token usage from PydanticAIAgent's RequestUsage.
+                # CLI runners emit turn_complete without usage; None is ignored here
+                # so the char-length fallback at agent_exited remains for those paths.
+                if ev.usage is not None:
+                    if accumulated_usage is None:
+                        accumulated_usage = {
+                            "input_tokens": ev.usage.input_tokens,
+                            "output_tokens": ev.usage.output_tokens,
+                        }
+                    else:
+                        accumulated_usage["input_tokens"] += ev.usage.input_tokens
+                        accumulated_usage["output_tokens"] += ev.usage.output_tokens
             else:
                 log.debug(
                     "unknown stream event type=%s agent=%s",
@@ -508,11 +539,17 @@ async def spawn_subagent(
     final_response = agent.final_response
     del app_state.agents[agent_id]
 
-    # Emit agent_exited to projection
-    token_usage = {
-        "input_tokens": agent.token_count.get("sent", 0),
-        "output_tokens": agent.token_count.get("received", 0),
-    }
+    # Emit agent_exited to projection.
+    # Use real token usage from PydanticAIAgent's StreamEvent.usage when available;
+    # fall back to the char-length token_count approximation for CLI runners that
+    # do not carry RequestUsage on turn_complete events.
+    if accumulated_usage is not None:
+        token_usage = accumulated_usage
+    else:
+        token_usage = {
+            "input_tokens": agent.token_count.get("sent", 0),
+            "output_tokens": agent.token_count.get("received", 0),
+        }
     store.push_event(
         "agent_exited",
         build_agent_exited(exit_code, error=error_str, usage=token_usage),

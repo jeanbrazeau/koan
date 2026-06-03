@@ -2,10 +2,10 @@
 #
 # format_step()          -- normal step guidance with WHEN DONE footer
 # terminal_invoke()      -- invoke_after footer for the last step of a phase;
-#                           auto-advance (koan_set_phase) or full-yield depending
-#                           on whether next_phase is bound
-# format_user_messages()  -- formats buffered user messages for inclusion in
-#                            koan_yield's tool result
+#                           auto-advance (koan_set_phase) or hand back to the
+#                           user depending on whether next_phase is bound
+# format_user_messages()  -- formats buffered user messages for delivery to the
+#                            LLM when the loop resumes after a hand-back
 # format_steering_messages() -- formats steering queue for inline delivery
 
 from __future__ import annotations
@@ -123,10 +123,11 @@ def terminal_invoke(next_phase: str | None, suggested_phases: list[str]) -> str:
     """Render the invoke_after footer for the last step of a phase.
 
     When next_phase is bound, the LLM is told to call koan_set_phase directly
-    (auto-advance). When next_phase is None, the LLM is told to compose a
-    koan_yield call with multi-option suggestions (full yield).
+    (auto-advance). When next_phase is None, the LLM is told to end its turn
+    with a plain-text summary -- a turn with no tool call is the hand-back: the
+    loop parks and waits for the user's next message.
 
-    Auto-advance is guidance: the LLM may yield instead if exceptional
+    Auto-advance is guidance: the LLM may hand back instead if exceptional
     circumstances warrant user direction.
 
     Pure function -- no app_state or workflow lookup. Inputs are typed and
@@ -137,31 +138,33 @@ def terminal_invoke(next_phase: str | None, suggested_phases: list[str]) -> str:
             "WHEN DONE:\n"
             "1. Summarize what was accomplished in this phase as your final message.\n"
             f'2. Default: call `koan_set_phase("{next_phase}")` to advance to the next phase.\n'
-            "3. If exceptional circumstances warrant user direction, call\n"
-            "   `koan_yield(suggestions=[...])` instead with reasonable next-phase\n"
-            '   suggestions plus a "done" option.\n'
+            "3. If exceptional circumstances warrant user direction, end your turn\n"
+            "   with that summary and your recommended next steps as a plain-text\n"
+            "   message (do NOT call a tool) -- ending your turn hands control back\n"
+            "   to the user, who will reply with how to proceed.\n"
             "\n"
             "Do NOT call koan_complete_step at the phase boundary -- the directive\n"
             "above is the terminal action."
         )
 
-    # next_phase is None -- full yield with multi-option suggestions.
-    # Render the suggestions hint from the phase's transition list so the LLM
-    # has concrete options without needing to look up the workflow structure.
+    # next_phase is None -- hand back to the user with the next-phase options
+    # listed in the summary. Render the options hint from the phase's transition
+    # list so the LLM has concrete choices without looking up the workflow.
     suggestions_hint = ", ".join(suggested_phases) if suggested_phases else ""
     suggestions_clause = (
         f" (e.g. {suggestions_hint})" if suggestions_hint else ""
     )
     return (
         "WHEN DONE:\n"
-        "1. Summarize what was accomplished in this phase as your final message.\n"
-        f"2. Call `koan_yield(suggestions=[...])` with reasonable next-phase\n"
-        f"   suggestions{suggestions_clause}, plus a \"done\" option to end the\n"
-        "   workflow.\n"
-        "3. Each suggestion is a dict with id (phase name or \"done\"), label\n"
-        "   (short display text), and command (a sentence that pre-fills the\n"
-        "   chat input when clicked).\n"
+        "1. Summarize what was accomplished in this phase as your final message,\n"
+        f"   and list the reasonable next-phase options{suggestions_clause}, plus\n"
+        '   the option to end the workflow ("done").\n'
+        "2. End your turn with that summary as a plain-text message (do NOT call a\n"
+        "   tool). A turn with no tool call is the hand-back: the loop parks and\n"
+        "   waits for the user's reply.\n"
+        "3. Once the user confirms a direction, call `koan_set_phase(<phase>)` (or\n"
+        '   `koan_set_phase("done")` to end the workflow).\n'
         "\n"
-        "Do NOT call koan_complete_step at the phase boundary -- koan_yield\n"
+        "Do NOT call koan_complete_step at the phase boundary -- ending your turn\n"
         "is the terminal action."
     )

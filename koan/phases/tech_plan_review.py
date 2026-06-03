@@ -16,7 +16,7 @@
 #   - This phase stress-tests architectural decisions, not implementation steps.
 #
 # Rewrite-or-loop-back: internal findings are corrected via koan_artifact_write;
-# new-files findings surface via koan_yield with tech-plan-spec recommended.
+# new-files findings surface by ending the turn with tech-plan-spec recommended.
 # The phase does NOT auto-advance -- review outcome requires user direction.
 #
 # Scope: "general" -- reusable by any workflow; initiative workflow binds it.
@@ -84,7 +84,7 @@ PHASE_ROLE_CONTEXT = (
     "For each finding, judge whether tech-plan-spec could have caught it from\n"
     "material already in scope (brief.md, core-flows.md, codebase notes it loaded).\n"
     "If yes: internal -- correct in place via `koan_artifact_write`. If no: new-\n"
-    "files-needed -- surface via `koan_yield` with tech-plan-spec recommended.\n"
+    "files-needed -- surface by ending your turn with tech-plan-spec recommended.\n"
     "See docs/phase-trust.md for the full rewrite-or-loop-back doctrine.\n"
     "\n"
     "## Strict rules\n"
@@ -94,7 +94,8 @@ PHASE_ROLE_CONTEXT = (
     "- MUST classify findings by severity: Critical / Major / Minor.\n"
     "- MUST classify each finding as internal or new-files-needed.\n"
     "- MUST issue `koan_artifact_write` for internal findings.\n"
-    "- MUST recommend loop-back via `koan_yield` for new-files findings.\n"
+    "- MUST recommend loop-back for new-files findings by ending your turn (no\n"
+    "  tool call) with the recommendation, handing the decision to the user.\n"
     "- MUST NOT introduce architectural decisions of your own. You stress-test;\n"
     "  if a stress-test reveals a missing decision, recommend loop-back to\n"
     "  tech-plan-spec rather than authoring the decision yourself.\n"

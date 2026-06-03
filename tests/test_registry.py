@@ -1,4 +1,12 @@
 # Unit tests for koan.runners.registry -- AgentRegistry and compute_balanced_profile.
+#
+# NOTE: TestGetInstallation, TestResolveInstallation, TestResolveAgentConfigThinking,
+# and TestComputeBalancedProfile are xfailed pending M2/M8:
+#   - get_installation / resolve_installation / resolve_agent_config removed in M1
+#     (binary detection retired; provider credentials resolve via adapter).
+#   - ProfileTier reshaped from (runner_type, model, thinking) to (model: ModelSpec).
+#   - compute_balanced_profile now returns static Gemini ModelSpec profiles; probe-based
+#     assertions no longer hold.
 
 import asyncio
 import json
@@ -67,6 +75,15 @@ class TestBestSupportedThinking:
 
 # -- compute_balanced_profile --------------------------------------------------
 
+# M1: compute_balanced_profile returns static Gemini ModelSpec profiles; the
+# probe-based runner_type/model/thinking assertions below no longer hold.
+# Re-established with provider-based assertions in tests/test_provider_config.py.
+@pytest.mark.xfail(
+    reason="legacy SDK/CLI probe-based profile computation replaced by static "
+           "Gemini ModelSpec profiles in M1; assertions expect runner_type/model "
+           "from ProbeResult which is no longer consulted",
+    strict=False,
+)
 class TestComputeBalancedProfile:
     def test_all_available_with_models(self):
         probes = [
@@ -152,6 +169,13 @@ class TestComputeBalancedProfile:
 
 # -- AgentRegistry.get_installation ------------------------------------------
 
+# M1: get_installation removed -- binary detection retired; provider credentials
+# resolve in koan/agents/adapter.py. Rewired in M2; removed at M9 rip-out.
+@pytest.mark.xfail(
+    reason="legacy SDK/CLI spawn path: get_installation removed in M1 "
+           "(binary detection retired); settings/probe reworked in M8",
+    strict=False,
+)
 class TestGetInstallation:
     def _make_config(self, installations):
         return KoanConfig(agent_installations=installations)
@@ -196,6 +220,13 @@ class TestGetInstallation:
 
 # -- AgentRegistry.resolve_installation ---------------------------------------
 
+# M1: resolve_installation removed -- binary detection retired; provider credentials
+# resolve in koan/agents/adapter.py. Rewired in M2; removed at M9 rip-out.
+@pytest.mark.xfail(
+    reason="legacy SDK/CLI spawn path: resolve_installation removed in M1 "
+           "(binary detection retired); settings/probe reworked in M8",
+    strict=False,
+)
 class TestResolveInstallation:
     def _make_config(self, installations):
         return KoanConfig(agent_installations=installations)
@@ -229,6 +260,14 @@ class TestResolveInstallation:
 
 # -- resolve_agent_config: role-effort wiring and clamping --------------------
 
+# M1: resolve_agent_config replaced by resolve_model_spec; ProfileTier reshaped
+# from (runner_type, model, thinking) to (model: ModelSpec). These tests guard
+# behavior re-established via resolve_model_spec + adapter in M2.
+@pytest.mark.xfail(
+    reason="legacy SDK/CLI spawn path: resolve_agent_config replaced by "
+           "resolve_model_spec in M1; ProfileTier reshaped; settings/probe reworked in M8",
+    strict=False,
+)
 class TestResolveAgentConfigThinking:
     """Pins the claude/gemini thinking mode resolution split introduced in M3."""
 
