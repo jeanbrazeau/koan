@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator
 
 if TYPE_CHECKING:
     from ..agents.base import AgentOptions
-    from ..runners.base import StreamEvent
+    from .events import StreamEvent
     from ..state import AgentState, AppState
     from ..tools.koan_tools import ToolDeps
 
@@ -241,7 +241,7 @@ async def run_agent_loop(
     )
     from pydantic_ai.usage import RequestUsage
 
-    from ..runners.base import StreamEvent
+    from .events import StreamEvent
 
     # First turn uses the boot_prompt; subsequent turns use the user's reply.
     turn_prompt: str | None = options.boot_prompt

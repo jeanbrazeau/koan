@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Any, AsyncIterator, Protocol, runtime_checkabl
 from ..types import AgentInstallation, ModelInfo, SubagentRole, ThinkingMode
 
 if TYPE_CHECKING:
-    from ..runners.base import StreamEvent
+    from .events import StreamEvent
 
 
 # -- Diagnostic types ----------------------------------------------------------

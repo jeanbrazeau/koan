@@ -42,7 +42,7 @@ import uuid
 from typing import TYPE_CHECKING, Any, AsyncIterator
 
 from .base import AgentDiagnostic, AgentError, AgentOptions
-from ..runners.base import StreamEvent
+from .events import StreamEvent
 
 if TYPE_CHECKING:
     from ..types import ModelSpec

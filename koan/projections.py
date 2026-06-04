@@ -24,7 +24,7 @@ from pydantic.alias_generators import to_camel
 
 from .lib.workflows import WORKFLOWS
 from .logger import get_logger
-from .runners.base import KOAN_MCP_TOOLS
+from .agents.events import KOAN_MCP_TOOLS
 
 log = get_logger("projections")
 

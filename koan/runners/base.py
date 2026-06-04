@@ -1,50 +1,15 @@
-# Runner protocol and StreamEvent.
-# Defines the contract that all CLI runner adapters must satisfy.
-# RunnerDiagnostic and RunnerError removed in M2 alongside koan/runners/claude.py;
-# diagnostic types live in koan.agents.base (AgentDiagnostic, AgentError).
+# Runner protocol (CLI-runner contract) -- deleted with the CLI runners in M9.
+#
+# StreamEvent and KOAN_MCP_TOOLS were relocated to koan/agents/events.py (M9:
+# they outlive this module). They are re-exported here so existing importers
+# keep working until the rip-out points them at the new home.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import TYPE_CHECKING, Literal, Protocol
+from typing import Protocol
 
+from ..agents.events import KOAN_MCP_TOOLS, StreamEvent  # noqa: F401  (re-export)
 from ..types import AgentInstallation, ModelInfo, ThinkingMode
-
-if TYPE_CHECKING:
-    # Lazy import -- pydantic_ai is a heavy package and RequestUsage is only
-    # needed for type annotations on StreamEvent.usage. Importing under
-    # TYPE_CHECKING avoids a load-time circular dependency risk with callers
-    # that import StreamEvent before pydantic_ai is fully initialized.
-    from pydantic_ai.usage import RequestUsage
-
-
-@dataclass(kw_only=True)
-class StreamEvent:
-    type: Literal[
-        "token_delta", "turn_complete", "thinking", "assistant_text",
-        "tool_start", "tool_input_delta", "tool_stop", "tool_result",
-    ]
-    content: str | None = None
-    is_thinking: bool = False
-    tool_name: str | None = None
-    tool_args: dict | None = None
-    summary: str | None = None
-    tool_use_id: str | None = None
-    block_index: int | None = None
-    # Populated for tool_result events: tool-family-specific metrics parsed
-    # from the model's tool_result block content. None when the runner could
-    # not interpret the result; the consumer treats this as "no metrics" and
-    # leaves projection state unchanged for that call_id.
-    metrics: dict | None = None
-    # Populated for tool_result events: attachment metadata extracted from
-    # EmbeddedResource/ImageContent blocks in the tool_result content. None
-    # when no attachment blocks are present or the runner cannot extract them.
-    attachments: list[dict] | None = None
-    # Populated on the request-final event (turn_complete) by PydanticAIAgent
-    # with the per-request RequestUsage from pydantic-ai. None for all other
-    # event types, and for agents (CLI runners) that do not carry real usage.
-    # This replaces the char-length token_count approximation at agent_exited.
-    usage: RequestUsage | None = None
 
 
 class Runner(Protocol):
@@ -64,32 +29,3 @@ class Runner(Protocol):
     def list_models(self, binary: str) -> list[ModelInfo]: ...
 
     def parse_stream_event(self, line: str) -> list[StreamEvent]: ...
-
-
-# Tool names registered in koan's MCP server. The fold uses this set to select
-# ToolKoanEntry for any koan MCP tool invocation.
-#
-# MAINTENANCE: this set must stay in sync with the 19 @mcp.tool() registrations
-# in koan/web/mcp_endpoint.py. It lives in base.py (not mcp_endpoint.py) to avoid
-# a circular import (mcp_endpoint imports from subagent which imports from runners).
-# When adding a new koan MCP tool to mcp_endpoint.py, update this set too.
-KOAN_MCP_TOOLS: frozenset[str] = frozenset({
-    "koan_complete_step",
-    "koan_set_phase",
-    "koan_request_scouts",
-    "koan_ask_question",
-    "koan_request_executor",
-    "koan_select_story",
-    "koan_complete_story",
-    "koan_retry_story",
-    "koan_skip_story",
-    "koan_memorize",
-    "koan_forget",
-    "koan_memory_status",
-    "koan_search",
-    "koan_reflect",
-    "koan_artifact_write",
-    "koan_memory_propose",
-    "koan_artifact_list",
-    "koan_artifact_view",
-})
