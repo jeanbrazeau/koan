@@ -1016,6 +1016,31 @@ def get_suggested_phases(workflow: Workflow, phase: str) -> list[str]:
     return list(workflow.transitions.get(phase, []))
 
 
+def build_phase_suggestions(workflow: Workflow, phase: str) -> list[dict]:
+    """Build {id, label, command} hand-back suggestions for the yield UI.
+
+    Derived deterministically from the workflow's suggested next phases for the
+    current phase, plus a terminal "done" option -- this replaces the structured
+    suggestions koan_yield used to carry, now that the in-process loop's
+    terminal-text turn is the hand-back (M5b removed koan_yield; M7.5 restores
+    the YieldPanel options without requiring the model to call a tool).
+    """
+    suggestions: list[dict] = []
+    for p in get_suggested_phases(workflow, phase):
+        label = p.replace("-", " ").replace("_", " ").title()
+        suggestions.append({
+            "id": p,
+            "label": label,
+            "command": f"Proceed to the {p} phase.",
+        })
+    suggestions.append({
+        "id": "done",
+        "label": "End workflow",
+        "command": "The workflow is complete.",
+    })
+    return suggestions
+
+
 def is_valid_transition(workflow: Workflow, from_phase: str, to_phase: str) -> bool:
     """Any phase in the workflow is reachable from any other (except self-transition).
 

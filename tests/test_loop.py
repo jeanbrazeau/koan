@@ -60,14 +60,28 @@ def test_directed_yolo_response_steers_to_next_phase():
 
 
 def test_assemble_resume_prompt_empty_is_proceed():
-    assert assemble_resume_prompt([], AppState(), "pydantic_ai") == "proceed"
+    prompt, manifest = assemble_resume_prompt([], AppState(), "pydantic_ai")
+    assert prompt == "proceed"
+    assert manifest == []
 
 
 def test_assemble_resume_prompt_wraps_user_message():
     msgs = [ChatMessage(content="do the thing", timestamp_ms=1)]
-    prompt = assemble_resume_prompt(msgs, AppState(), "pydantic_ai")
+    prompt, manifest = assemble_resume_prompt(msgs, AppState(), "pydantic_ai")
     assert "USER MESSAGE" in prompt
     assert "do the thing" in prompt
+    assert manifest == []  # no attachments
+
+
+def test_build_phase_suggestions_from_workflow():
+    """M7.5: hand-back suggestions are derived from the workflow transitions."""
+    from koan.lib.workflows import build_phase_suggestions, get_workflow
+    wf = get_workflow("plan")
+    sugg = build_phase_suggestions(wf, wf.initial_phase)
+    assert sugg, "expected at least the 'done' option"
+    assert all({"id", "label", "command"} <= set(s) for s in sugg)
+    ids = [s["id"] for s in sugg]
+    assert ids[-1] == "done"  # terminal option always last
 
 
 def test_drain_and_render_steering_emits_event_and_text():

@@ -95,13 +95,17 @@ async def test_resume_prompt_includes_attachment_text_notice(tmp_path):
     ))
 
     messages = drain_user_messages(app_state)
-    prompt = assemble_resume_prompt(messages, app_state, runner_type="pydantic_ai")
+    prompt, manifest = assemble_resume_prompt(messages, app_state, runner_type="pydantic_ai")
 
     assert "USER MESSAGE" in prompt
     assert "check this file" in prompt
     # Attachment surfaces as a text notice naming the file.
     assert "note.txt" in prompt
     assert "attachment(s) omitted" in prompt
+    # The manifest is returned so the loop can re-emit tool_attachments.
+    assert len(manifest) == 1
+    assert manifest[0]["filename"] == "note.txt"
+    assert manifest[0]["upload_id"] == uid
 
 
 # -- Scenario 2: binary EmbeddedResource is omitted from the single-string prompt
@@ -139,12 +143,15 @@ async def test_resume_prompt_omits_binary_attachment_for_claude(tmp_path):
     ))
 
     messages = drain_user_messages(app_state)
-    prompt = assemble_resume_prompt(messages, app_state, runner_type="claude")
+    prompt, manifest = assemble_resume_prompt(messages, app_state, runner_type="claude")
 
     assert "USER MESSAGE" in prompt
     assert "see attached" in prompt
     # Binary EmbeddedResource carries no text -> not appended to the prompt.
     assert "data.csv" not in prompt
+    # ...but the manifest still records it (audit visibility restored, M7.5).
+    assert len(manifest) == 1
+    assert manifest[0]["filename"] == "data.csv"
 
 
 # -- Scenario 3: Per-decision attachments in koan_memory_propose ---------------

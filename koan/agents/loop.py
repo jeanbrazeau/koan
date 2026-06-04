@@ -139,21 +139,23 @@ def assemble_resume_prompt(
     messages: list[Any],
     app_state: AppState,
     runner_type: str,
-) -> str:
-    """Build the next-turn prompt from buffered user messages and attachments.
+) -> tuple[str, list[dict]]:
+    """Build the next-turn prompt + attachment manifest from buffered messages.
 
     This is the in-process replacement for the koan_yield tool result: when the
     loop resumes after a terminal-text hand-back, the buffered user messages
     become the next prompt. Attachments are delivered as TEXT appended to the
     prompt -- the loop carries a single string, so only the text content of
-    upload_ids_to_blocks survives (binary EmbeddedResource blocks, produced for
-    runner_type "claude", have no .text and are therefore omitted here; in
-    practice the in-process runner_type is never "claude").
+    upload_ids_to_blocks survives (full binary/image delivery to multimodal
+    models is a documented follow-up: it needs multimodal content plumbing on
+    the agent.iter prompt and live verification).
 
-    Falls back to "proceed" when no messages were buffered.
+    Returns (turn_prompt, manifest) where manifest is the upload audit manifest
+    (for the tool_attachments projection event the caller re-emits). Falls back
+    to ("proceed", []) when no messages were buffered.
     """
     if not messages:
-        return "proceed"
+        return "proceed", []
 
     from ..phases.format_step import format_user_messages
     from mcp.types import TextContent
@@ -162,21 +164,23 @@ def assemble_resume_prompt(
     turn_prompt = "\n\n".join(
         b.text for b in blocks if isinstance(b, TextContent)
     )
+    manifest: list[dict] = []
     for msg in messages:
         if msg.attachments and app_state.run.run_dir:
             from ..web.uploads import upload_ids_to_blocks
-            attach_blocks, _ = upload_ids_to_blocks(
+            attach_blocks, msg_manifest = upload_ids_to_blocks(
                 app_state.uploads,
                 app_state.run.run_dir,
                 msg.attachments,
                 runner_type,
             )
+            manifest.extend(msg_manifest)
             extra = "\n\n".join(
                 b.text for b in attach_blocks if isinstance(b, TextContent)
             )
             if extra:
                 turn_prompt = f"{turn_prompt}\n\n{extra}"
-    return turn_prompt
+    return turn_prompt, manifest
 
 
 # -- Multi-turn loop -----------------------------------------------------------
@@ -374,11 +378,20 @@ async def run_agent_loop(
             return
 
         # Primary orchestrator: terminal-text hand-back.
-        # Emit yield_started so the UI renders the hand-back card.
+        # Emit yield_started so the UI renders the hand-back card, with the
+        # structured next-phase suggestions derived from the workflow (M7.5 --
+        # restores the YieldPanel options koan_yield used to carry, without
+        # requiring the model to call a tool at the hand-back).
         from ..events import build_yield_started
+        from ..lib.workflows import build_phase_suggestions
+        workflow = app_state.run.workflow
+        suggestions = (
+            build_phase_suggestions(workflow, app_state.run.phase)
+            if workflow is not None else []
+        )
         app_state.projection_store.push_event(
             "yield_started",
-            build_yield_started([]),
+            build_yield_started(suggestions),
             agent_id=agent_state.agent_id,
         )
 
@@ -412,6 +425,16 @@ async def run_agent_loop(
             # Drain the user messages that api_chat buffered and form the next prompt.
             from ..state import drain_user_messages
             messages = drain_user_messages(app_state)
-            turn_prompt = assemble_resume_prompt(
+            turn_prompt, attach_manifest = assemble_resume_prompt(
                 messages, app_state, agent_state.runner_type,
             )
+            # Re-emit tool_attachments so the audit log / UI records what the
+            # user attached on resume (M7.5 -- the koan_yield handler used to do
+            # this; restored here for the in-process hand-back).
+            if attach_manifest:
+                from ..events import build_tool_attachments
+                app_state.projection_store.push_event(
+                    "tool_attachments",
+                    build_tool_attachments(attach_manifest),
+                    agent_id=agent_state.agent_id,
+                )
