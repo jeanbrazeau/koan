@@ -23,7 +23,7 @@
 # _record_path_for_context_injection. Bash is exempt (no single path arg).
 #
 # write/edit/glob/grep/bash complete the built-in toolset (M4).
-# web_search/web_fetch land in M7 (per-provider native-or-local strategy).
+# web_search/web_fetch (M7): implemented locally (DuckDuckGo + httpx) below.
 
 from __future__ import annotations
 
@@ -432,14 +432,86 @@ async def bash_tool(
         return f"Error running command: {e}"
 
 
+# -- web tools (M7) ----------------------------------------------------------- #
+# Implemented locally (DuckDuckGo search + httpx fetch) rather than via each
+# provider's native builtin web tool. A local implementation is portable across
+# all four providers (Bedrock has no native web search) and -- unlike a
+# provider-side builtin -- runs as an ordinary koan function tool, so its result
+# flows through the same StreamEvent/projection path as the other built-ins.
+
+
+def _strip_html(html: str) -> str:
+    """Reduce an HTML document to readable text (drop script/style + tags)."""
+    html = re.sub(r"(?is)<(script|style)[^>]*>.*?</\1>", " ", html)
+    text = re.sub(r"(?s)<[^>]+>", " ", html)
+    text = text.replace("&nbsp;", " ").replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+    return re.sub(r"\s+", " ", text).strip()
+
+
+async def web_search_tool(ctx: Any, query: str, max_results: int = 5) -> str:
+    """Search the web via DuckDuckGo and return ranked results.
+
+    Args:
+        ctx: PydanticAI RunContext (unused; kept for signature uniformity).
+        query: Search query string.
+        max_results: Maximum number of results to return (default 5).
+    """
+    import asyncio
+
+    def _search() -> list[dict]:
+        from ddgs import DDGS
+        with DDGS() as client:
+            return list(client.text(query, max_results=max_results))
+
+    try:
+        results = await asyncio.to_thread(_search)
+    except Exception as e:
+        return f"Error: web search failed: {e}"
+
+    if not results:
+        return f"No results for: {query}"
+
+    lines = [f"Found {len(results)} result(s) for: {query}", ""]
+    for i, r in enumerate(results, 1):
+        title = r.get("title") or r.get("name") or ""
+        href = r.get("href") or r.get("url") or ""
+        body = r.get("body") or r.get("snippet") or ""
+        lines.append(f"{i}. {title}\n   {href}\n   {body}")
+    return "\n".join(lines)
+
+
+async def web_fetch_tool(ctx: Any, url: str, max_chars: int = 20000) -> str:
+    """Fetch a URL and return its text content (HTML stripped to readable text).
+
+    Args:
+        ctx: PydanticAI RunContext (unused; kept for signature uniformity).
+        url: The URL to fetch.
+        max_chars: Truncate the returned text to this many characters.
+    """
+    import httpx
+    try:
+        async with httpx.AsyncClient(follow_redirects=True, timeout=30.0) as client:
+            resp = await client.get(url, headers={"User-Agent": "koan/1.0"})
+            resp.raise_for_status()
+            body = resp.text
+            ctype = resp.headers.get("content-type", "")
+    except Exception as e:
+        return f"Error: fetch failed for {url}: {e}"
+
+    text = _strip_html(body) if "html" in ctype.lower() else body
+    if len(text) > max_chars:
+        text = text[:max_chars] + f"\n\n[truncated at {max_chars} chars]"
+    return text
+
+
 # -- Toolset builder ---------------------------------------------------------- #
 
 
 def build_builtin_toolset() -> Any:
-    """Build the built-in FunctionToolset with all M4 tools registered.
+    """Build the built-in FunctionToolset with all built-in tools registered.
 
-    Registers read, write, edit, glob, grep, bash. web_search and web_fetch
-    are deferred to M7 (per-provider native-or-local strategy).
+    Registers read, write, edit, glob, grep, bash (M4) and web_search,
+    web_fetch (M7, local DuckDuckGo + httpx).
 
     Each tool is wrapped in a thin inner function without a RunContext type
     annotation: 'from __future__ import annotations' makes annotations
@@ -557,6 +629,36 @@ def build_builtin_toolset() -> Any:
         description=(
             "Execute a shell command and return combined stdout + stderr. "
             "No sandbox is applied. Optionally specify a timeout in seconds."
+        ),
+    )
+
+    # -- web_search (M7) -------------------------------------------------------
+    async def _web_search(ctx, query: str, max_results: int = 5) -> str:
+        """Search the web (DuckDuckGo) and return ranked results."""
+        return await web_search_tool(ctx, query, max_results)
+
+    ts.add_function(
+        _web_search,
+        takes_ctx=True,
+        name="web_search",
+        description=(
+            "Search the web via DuckDuckGo. Returns a ranked list of "
+            "title / URL / snippet results. Args: query, max_results (default 5)."
+        ),
+    )
+
+    # -- web_fetch (M7) --------------------------------------------------------
+    async def _web_fetch(ctx, url: str, max_chars: int = 20000) -> str:
+        """Fetch a URL and return its text content (HTML stripped)."""
+        return await web_fetch_tool(ctx, url, max_chars)
+
+    ts.add_function(
+        _web_fetch,
+        takes_ctx=True,
+        name="web_fetch",
+        description=(
+            "Fetch a URL and return its readable text content (HTML tags "
+            "stripped). Args: url, max_chars (truncation limit, default 20000)."
         ),
     )
 

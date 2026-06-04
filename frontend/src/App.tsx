@@ -89,6 +89,12 @@ function useHeaderData() {
     currentStep: lastStep?.step ?? 0,
     orchestratorModel: primary?.model ?? undefined,
     elapsed: primary ? elapsed : undefined,
+    usage: primary
+      ? {
+          inputTokens: primary.conversation.inputTokens,
+          outputTokens: primary.conversation.outputTokens,
+        }
+      : undefined,
   }
 }
 

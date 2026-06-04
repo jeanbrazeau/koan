@@ -14,6 +14,7 @@ import { Fragment } from 'react'
 import { LogoMark } from '../atoms/LogoMark'
 import { StatusDot } from '../atoms/StatusDot'
 import { BreadcrumbNav } from '../molecules/BreadcrumbNav'
+import { UsageGauge } from '../molecules/UsageGauge'
 import './HeaderBar.css'
 
 interface HeaderBarProps {
@@ -24,6 +25,7 @@ interface HeaderBarProps {
   currentStep: number
   orchestratorModel?: string
   elapsed?: string
+  usage?: { inputTokens: number; outputTokens: number }
   onSettingsClick?: () => void
 
   // Mode switching
@@ -54,6 +56,7 @@ export function HeaderBar({
   currentStep,
   orchestratorModel,
   elapsed,
+  usage,
   onSettingsClick,
   mode = 'workflow',
   navItems,
@@ -115,6 +118,12 @@ export function HeaderBar({
                 <StatusDot status="done" size="sm" />
                 <span className="hb-model">{orchestratorModel}</span>
               </div>
+            )}
+            {usage && (usage.inputTokens > 0 || usage.outputTokens > 0) && (
+              <UsageGauge
+                inputTokens={usage.inputTokens}
+                outputTokens={usage.outputTokens}
+              />
             )}
             {elapsed && <span className="hb-elapsed">{elapsed}</span>}
             <button
