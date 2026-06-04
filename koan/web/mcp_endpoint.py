@@ -730,64 +730,13 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
         try:
-            if not questions:
-                result_blocks = [_text_block("No scouts requested.")]
-                result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
-                _push_tool_attachments(steer_manifest, agent)
-                return result_blocks
-
-            semaphore = asyncio.Semaphore(app_state.runner_config.config.scout_concurrency)
-            run_dir = agent.phase_ctx.run_dir
-
-            scout_tasks = []
-            for q in questions:
-                scout_id = q.get("id", str(uuid.uuid4())[:8])
-                subagent_dir = await ensure_subagent_directory(
-                    run_dir, f"scout-{scout_id}-{uuid.uuid4().hex[:8]}"
-                )
-                scout_tasks.append({
-                    "role": "scout",
-                    "label": scout_id,
-                    "run_dir": run_dir,
-                    "subagent_dir": subagent_dir,
-                    "project_dir": app_state.run.project_dir,
-                    "additional_dirs": app_state.run.additional_dirs,
-                    "question": q.get("prompt", ""),
-                    "investigator_role": q.get("role", "investigator"),
-                })
-
-            async def run_scout(scout_task: dict) -> str | None:
-                async with semaphore:
-                    from ..subagent import spawn_subagent
-                    result = await spawn_subagent(scout_task, app_state)
-
-                    if result.exit_code != 0:
-                        return None
-
-                    return result.final_response or None
-
-            # Clear stale non-primary agents before queuing the new batch
-            from ..events import build_agents_cleared, build_scout_queued
-            app_state.projection_store.push_event("agents_cleared", build_agents_cleared())
-            for st in scout_tasks:
-                app_state.projection_store.push_event(
-                    "scout_queued",
-                    build_scout_queued(
-                        scout_id=st.get("label", ""),
-                        label=st.get("label", ""),
-                    ),
-                )
-
-            results = await asyncio.gather(*[run_scout(t) for t in scout_tasks])
-            findings = [r for r in results if r is not None]
-
-            if not findings:
-                result_blocks = [_text_block("No findings returned.")]
-                result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
-                _push_tool_attachments(steer_manifest, agent)
-                return result_blocks
-
-            result_blocks = [_text_block("\n\n---\n\n".join(findings))]
+            # Delegate to the shared core (one spawn logic home across the MCP
+            # path and the in-process koan toolset).
+            from ..tools.koan_tools import ToolDeps, request_scouts_core
+            findings_text = await request_scouts_core(
+                ToolDeps(app_state=app_state, agent=agent), questions
+            )
+            result_blocks = [_text_block(findings_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks
@@ -892,40 +841,18 @@ def build_mcp_server(app_state: AppState) -> tuple[FastMCP, Handlers]:
         result_blocks: list[ContentBlock] | None = None
         steer_manifest: list[dict] = []
         try:
-            run_dir = _resolve_run_dir(agent)
-            if not run_dir:
-                raise ToolError(json.dumps({"error": "no_run_dir", "message": "No run directory available"}))
-
-            from ..events import build_agents_cleared
-            app_state.projection_store.push_event("agents_cleared", build_agents_cleared())
-
-            ts_suffix = int(time.time() * 1000)
-            subagent_dir = await ensure_subagent_directory(
-                run_dir, f"executor-{ts_suffix}"
-            )
-
-            task = {
-                "role": "executor",
-                "run_dir": run_dir,
-                "subagent_dir": subagent_dir,
-                "project_dir": app_state.run.project_dir,
-                "additional_dirs": app_state.run.additional_dirs,
-                "artifacts": artifacts or [],
-                "instructions": instructions,
-            }
-
-            from ..subagent import spawn_subagent
-            result = await spawn_subagent(task, app_state)
-
-            if result.exit_code == 0:
-                payload = {"status": "succeeded"}
-            else:
-                payload = {
-                    "status": "failed",
-                    "exit_code": result.exit_code,
-                    "error": result.error or "",
-                }
-            result_blocks = [_text_block(json.dumps(payload))]
+            # Delegate to the shared core; convert the core's ValueError
+            # (no run dir) into the fastmcp ToolError wire shape.
+            from ..tools.koan_tools import ToolDeps, request_executor_core
+            try:
+                payload_text = await request_executor_core(
+                    ToolDeps(app_state=app_state, agent=agent), artifacts, instructions
+                )
+            except ValueError as e:
+                msg = str(e)
+                key = msg.split(":", 1)[0] if ":" in msg else "executor_error"
+                raise ToolError(json.dumps({"error": key, "message": msg}))
+            result_blocks = [_text_block(payload_text)]
             result_blocks, steer_manifest = _drain_and_append_steering(result_blocks, agent)
             _push_tool_attachments(steer_manifest, agent)
             return result_blocks

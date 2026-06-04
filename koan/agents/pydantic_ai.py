@@ -311,10 +311,9 @@ class PydanticAIAgent:
 
         # Compose toolsets per (role, phase) -- M3 fence replacement.
         # compose_toolset returns the allowed vocabulary; build_koan_toolset
-        # registers only the intersection with implemented tools.  Deferred tools
-        # (koan_yield, koan_ask_question, ...) are allowed by policy but absent
-        # from build_koan_toolset, so they are simply not registered until M5/M6.
-        # Full built-in toolset (write/edit/glob/grep/bash/web) lands in M4.
+        # registers only the intersection with implemented tools.  As of M6 the
+        # koan toolset implements all live tools (the subagent-spawn tools landed
+        # in M6, the interaction tools in M5); web_search/web_fetch land in M7.
         policy = build_tool_policy()
         allowed = compose_toolset(policy, options.role, self._app_state.run.phase)
         koan_toolset = build_koan_toolset(allowed_names=allowed)

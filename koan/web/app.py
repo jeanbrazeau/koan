@@ -1790,6 +1790,17 @@ def create_app(app_state: AppState) -> Starlette:
         async with mcp_app._mcp_inner.lifespan(app):  # type: ignore[attr-defined]
             yield
 
+        # -- Shutdown: cancel in-process subagent tasks ------------------------
+        # In-process executor/scout tasks (M6) are cancelled first so their
+        # spawn_subagent loops unwind before the (legacy) subprocess teardown.
+        tasks = dict(app_state._active_tasks)
+        if tasks:
+            log.info("shutdown: cancelling %d in-process subagent task(s)…", len(tasks))
+            for t in tasks.values():
+                t.cancel()
+            await asyncio.gather(*tasks.values(), return_exceptions=True)
+            log.info("shutdown: in-process subagent tasks cancelled")
+
         # -- Shutdown: kill all active agent processes -------------------------
         procs = dict(app_state._active_processes)
         if procs:

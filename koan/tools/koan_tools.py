@@ -1170,22 +1170,167 @@ async def propose_memory_core(
     return (json_text, decisions)
 
 
+# -- M6: in-process subagent spawning ------------------------------------------
+# koan_request_scouts / koan_request_executor spawn subagents as in-process
+# asyncio tasks rather than CLI subprocesses. spawn_subagent itself runs the
+# child's PydanticAIAgent loop in-process; these cores own the task registry
+# (AppState._active_tasks, for shutdown cancellation), scout concurrency, and
+# crash containment (a subagent failure becomes a failed result, never an
+# exception that unwinds the parent orchestrator loop).
+
+
+async def spawn_tracked_subagent(
+    app_state: AppState,
+    task: dict,
+    semaphore: "Any | None" = None,
+):
+    """Run spawn_subagent as a tracked, crash-contained asyncio task.
+
+    Registers the task in app_state._active_tasks (keyed by the subagent dir)
+    so shutdown can cancel it, and converts any unexpected exception into a
+    failed SubagentResult. Cancellation propagates (shutdown must win).
+    """
+    import asyncio
+    from ..subagent import spawn_subagent, SubagentResult
+
+    async def _run():
+        if semaphore is not None:
+            async with semaphore:
+                return await spawn_subagent(task, app_state)
+        return await spawn_subagent(task, app_state)
+
+    key = task.get("subagent_dir") or task.get("label") or str(id(task))
+    t = asyncio.ensure_future(_run())
+    app_state._active_tasks[key] = t
+    try:
+        return await t
+    except asyncio.CancelledError:
+        raise
+    except Exception as e:  # belt-and-suspenders: spawn_subagent already
+        # converts AgentError into a result; this guards any other escape.
+        return SubagentResult(exit_code=1, error=f"subagent crashed: {e}")
+    finally:
+        app_state._active_tasks.pop(key, None)
+
+
+async def request_scouts_core(deps: ToolDeps, questions: list[dict] | None) -> str:
+    """Spawn one scout subagent per question (bounded by scout_concurrency) and
+    return their concatenated findings. Cores never raise on subagent failure --
+    a failed scout simply contributes no finding."""
+    import asyncio
+    import uuid
+    app_state = deps.app_state
+    agent = deps.agent
+
+    if not questions:
+        return "No scouts requested."
+
+    from ..run_state import ensure_subagent_directory
+    from ..events import build_agents_cleared, build_scout_queued
+
+    semaphore = asyncio.Semaphore(app_state.runner_config.config.scout_concurrency)
+    run_dir = _resolve_run_dir_core(agent, app_state) or ""
+
+    scout_tasks = []
+    for q in questions:
+        scout_id = q.get("id", str(uuid.uuid4())[:8])
+        subagent_dir = await ensure_subagent_directory(
+            run_dir, f"scout-{scout_id}-{uuid.uuid4().hex[:8]}"
+        )
+        scout_tasks.append({
+            "role": "scout",
+            "label": scout_id,
+            "run_dir": run_dir,
+            "subagent_dir": subagent_dir,
+            "project_dir": app_state.run.project_dir,
+            "additional_dirs": app_state.run.additional_dirs,
+            "question": q.get("prompt", ""),
+            "investigator_role": q.get("role", "investigator"),
+        })
+
+    # Clear stale non-primary agents before queuing the new batch.
+    app_state.projection_store.push_event("agents_cleared", build_agents_cleared())
+    for st in scout_tasks:
+        app_state.projection_store.push_event(
+            "scout_queued",
+            build_scout_queued(scout_id=st.get("label", ""), label=st.get("label", "")),
+        )
+
+    async def _one(scout_task: dict) -> str | None:
+        result = await spawn_tracked_subagent(app_state, scout_task, semaphore)
+        if result.exit_code != 0:
+            return None
+        return result.final_response or None
+
+    results = await asyncio.gather(*[_one(t) for t in scout_tasks])
+    findings = [r for r in results if r is not None]
+    if not findings:
+        return "No findings returned."
+    return "\n\n---\n\n".join(findings)
+
+
+async def request_executor_core(
+    deps: ToolDeps,
+    artifacts: list[str] | None,
+    instructions: str,
+) -> str:
+    """Spawn a single executor subagent to implement changes and return a JSON
+    status payload ({"status": "succeeded"} or {"status": "failed", ...})."""
+    import json
+    import time
+    app_state = deps.app_state
+    agent = deps.agent
+
+    from ..run_state import ensure_subagent_directory
+    from ..events import build_agents_cleared
+
+    run_dir = _resolve_run_dir_core(agent, app_state)
+    if not run_dir:
+        raise ValueError("no_run_dir: No run directory available")
+
+    app_state.projection_store.push_event("agents_cleared", build_agents_cleared())
+
+    subagent_dir = await ensure_subagent_directory(
+        run_dir, f"executor-{int(time.time() * 1000)}"
+    )
+    task = {
+        "role": "executor",
+        "run_dir": run_dir,
+        "subagent_dir": subagent_dir,
+        "project_dir": app_state.run.project_dir,
+        "additional_dirs": app_state.run.additional_dirs,
+        "artifacts": artifacts or [],
+        "instructions": instructions,
+    }
+
+    result = await spawn_tracked_subagent(app_state, task)
+    if result.exit_code == 0:
+        payload = {"status": "succeeded"}
+    else:
+        payload = {
+            "status": "failed",
+            "exit_code": result.exit_code,
+            "error": result.error or "",
+        }
+    return json.dumps(payload)
+
+
 # -- Full koan toolset builder -------------------------------------------------
 
 
 def build_koan_toolset(allowed_names: "frozenset[str] | None" = None) -> Any:
-    """Build a koan FunctionToolset with all 18 implemented koan tools.
+    """Build a koan FunctionToolset with all 20 implemented koan tools.
 
     Registers koan_complete_step, koan_set_phase (M2), the 14 M3 tools
     (koan_set_workflow; the 4 story tools; the 5 memory tools; the 4 artifact
-    tools), and the 2 M5 in-process interaction tools (koan_ask_question,
-    koan_memory_propose).  The 2 deferred tools (koan_request_executor,
-    koan_request_scouts) land in M6 when in-process subagent spawning is built.
+    tools), the 2 M5 in-process interaction tools (koan_ask_question,
+    koan_memory_propose), and the 2 M6 in-process subagent tools
+    (koan_request_scouts, koan_request_executor).
 
     Args:
         allowed_names: When provided, only tools whose names are in this set
             are registered.  Pass compose_toolset(policy, role, phase) here to
-            get a phase-correct toolset.  When None, all 16 implemented tools
+            get a phase-correct toolset.  When None, all implemented tools
             are registered (useful for tests that want the full vocabulary).
 
     Returns a FunctionToolset[ToolDeps].
@@ -1432,6 +1577,41 @@ def build_koan_toolset(allowed_names: "frozenset[str] | None" = None) -> Any:
             "Propose one or more memory entries to the user for approval; block until "
             "they submit decisions. Returns a JSON payload with per-proposal decisions. "
             "Args: proposals (list of proposal dicts), context_note (optional str)."
+        ),
+    )
+
+    # ---- M6: in-process subagent spawning ----
+
+    async def _koan_request_scouts(ctx, questions: list[dict] | None = None) -> str:
+        """Spawn scout subagents to investigate questions; return their findings."""
+        return await request_scouts_core(ctx.deps, questions)
+
+    async def _koan_request_executor(
+        ctx,
+        artifacts: list[str] | None = None,
+        instructions: str = "",
+    ) -> str:
+        """Spawn an executor subagent to implement changes; return a status payload."""
+        return await request_executor_core(ctx.deps, artifacts, instructions)
+
+    _reg(
+        _koan_request_scouts,
+        "koan_request_scouts",
+        (
+            "Spawn one read-only scout subagent per question (bounded by "
+            "scout_concurrency) to investigate the codebase in parallel; blocks "
+            "until all return, then yields their concatenated findings. "
+            "Args: questions (list of {id, prompt, role?})."
+        ),
+    )
+    _reg(
+        _koan_request_executor,
+        "koan_request_executor",
+        (
+            "Spawn a coding executor subagent to implement changes. It reads the "
+            "listed run-dir artifacts, then codes. Blocks until it exits and "
+            "returns a JSON status. Args: artifacts (list of run-dir paths), "
+            "instructions (free-form context)."
         ),
     )
 

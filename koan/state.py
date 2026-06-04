@@ -204,7 +204,14 @@ class AppState:
     projection_store: ProjectionStore = field(default_factory=ProjectionStore)
     agents: dict[str, AgentState] = field(default_factory=dict)
     # Track running subprocess handles so shutdown can kill them.
+    # (Legacy CLI runners only; PydanticAIAgent registers no process.
+    # Removed with the rip-out in M9.)
     _active_processes: dict[str, asyncio.subprocess.Process] = field(
+        default_factory=dict, repr=False,
+    )
+    # Track in-flight in-process subagent asyncio tasks (executor/scouts spawned
+    # via the in-process koan_request_* tools, M6) so shutdown can cancel them.
+    _active_tasks: dict[str, "asyncio.Task"] = field(
         default_factory=dict, repr=False,
     )
 
