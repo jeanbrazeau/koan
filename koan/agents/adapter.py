@@ -44,6 +44,27 @@ _PROVIDER_PREFIX: dict[str, str] = {
     "bedrock":   "bedrock",
 }
 
+# Default credential env vars per provider. Used to report provider availability
+# in the settings/start-run path (env-credential model -- replaces CLI-binary
+# probing). A provider with an explicit ProviderAuth entry in koan config uses
+# that entry's env_keys instead; this is the zero-config fallback.
+DEFAULT_PROVIDER_ENV_KEYS: dict[str, list[str]] = {
+    "google":    ["GOOGLE_API_KEY", "GEMINI_API_KEY"],
+    "anthropic": ["ANTHROPIC_API_KEY"],
+    "openai":    ["OPENAI_API_KEY"],
+    "bedrock":   ["AWS_BEARER_TOKEN_BEDROCK", "AWS_ACCESS_KEY_ID", "AWS_PROFILE"],
+}
+
+
+def provider_available(provider: str, config_env_keys: list[str] | None = None) -> bool:
+    """True when at least one credential env var for the provider is populated.
+
+    config_env_keys (from a koan ProviderAuth entry) takes precedence over the
+    DEFAULT_PROVIDER_ENV_KEYS fallback when provided.
+    """
+    keys = config_env_keys or DEFAULT_PROVIDER_ENV_KEYS.get(provider, [])
+    return any(os.environ.get(k) for k in keys)
+
 
 def resolve_credentials(auth: ProviderAuth) -> dict[str, str]:
     """Resolve live credentials for a ProviderAuth, raising on missing env vars.

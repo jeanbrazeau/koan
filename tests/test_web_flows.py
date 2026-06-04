@@ -103,48 +103,29 @@ def test_start_run_rejects_empty_profile(client, app_state):
     assert "profile" in resp.json()["message"]
 
 
-def test_start_run_blocked_no_runners(client, app_state):
+def test_start_run_blocked_no_providers(client, app_state):
+    # Env-credential model: when no provider's credentials resolve, start-run is
+    # blocked with `no_providers` (replaces the old CLI `no_runners`).
     app_state.runner_config.probe_results = [
-        ProbeResult(runner_type="claude", available=False),
-        ProbeResult(runner_type="codex", available=False),
-        ProbeResult(runner_type="gemini", available=False),
+        ProbeResult(runner_type="google", available=False),
     ]
     resp = client.post("/api/start-run", json={"task": "build something", "profile": "balanced"})
     assert resp.status_code == 422
-    data = resp.json()
-    assert data["error"] == "no_runners"
+    assert resp.json()["error"] == "no_providers"
 
 
 # -- Start-run preflight -------------------------------------------------------
 
-def test_preflight_returns_required_types(client, app_state):
+def test_preflight_returns_required_providers(client, app_state):
     from koan.agents.registry import compute_builtin_profiles
-    app_state.runner_config.probe_results = _make_probe_results()
-    app_state.runner_config.builtin_profiles = compute_builtin_profiles(app_state.runner_config.probe_results)
+    app_state.runner_config.builtin_profiles = compute_builtin_profiles([])
     resp = client.get("/api/start-run/preflight?profile=balanced")
     assert resp.status_code == 200
     data = resp.json()
-    assert "claude" in data["required_runner_types"]
-    assert "claude" in data["installations"]
-
-
-def test_preflight_shows_binary_validity(client, app_state, tmp_path):
-    from koan.agents.registry import compute_builtin_profiles
-    app_state.runner_config.probe_results = _make_probe_results()
-    app_state.runner_config.builtin_profiles = compute_builtin_profiles(app_state.runner_config.probe_results)
-    real_binary = tmp_path / "claude"
-    real_binary.touch()
-    app_state.runner_config.config.agent_installations = [
-        AgentInstallation(alias="good", runner_type="claude", binary=str(real_binary)),
-        AgentInstallation(alias="bad", runner_type="claude", binary="/nonexistent/claude"),
-    ]
-    resp = client.get("/api/start-run/preflight?profile=balanced")
-    data = resp.json()
-    insts = data["installations"]["claude"]
-    good = next(i for i in insts if i["alias"] == "good")
-    bad = next(i for i in insts if i["alias"] == "bad")
-    assert good["binary_valid"] is True
-    assert bad["binary_valid"] is False
+    # The built-in profiles are Gemini (google provider).
+    assert "google" in data["required_providers"]
+    assert "google" in data["providers"]
+    assert "available" in data["providers"]["google"]
 
 
 def test_preflight_missing_profile(client, app_state):
@@ -152,35 +133,10 @@ def test_preflight_missing_profile(client, app_state):
     assert resp.status_code == 404
 
 
-# -- Start-run installation validation -----------------------------------------
-
-def test_start_run_rejects_missing_binary(client, app_state):
-    from koan.agents.registry import compute_builtin_profiles
-    app_state.runner_config.probe_results = _make_probe_results()
-    app_state.runner_config.builtin_profiles = compute_builtin_profiles(app_state.runner_config.probe_results)
-    app_state.runner_config.config.agent_installations = [
-        AgentInstallation(alias="broken", runner_type="claude", binary="/nonexistent/claude"),
-    ]
-    app_state.run.run_installations = {"claude": "broken"}
-    resp = client.post("/api/start-run", json={
-        "task": "build something",
-        "profile": "balanced",
-    })
-    assert resp.status_code == 422
-    data = resp.json()
-    assert data["error"] == "binary_not_found"
-    assert "claude" in data["runner_type"]
-
-
-def test_start_run_rejects_unknown_installation_alias(client, app_state):
-    app_state.runner_config.probe_results = _make_probe_results()
-    resp = client.post("/api/start-run", json={
-        "task": "build something",
-        "profile": "balanced",
-        "installations": {"claude": "ghost"},
-    })
-    assert resp.status_code == 422
-    assert "ghost" in resp.json()["message"]
+# (Removed with the CLI-binary model: preflight binary-validity, start-run
+# missing-binary / unknown-installation-alias, /api/agents installation CRUD,
+# and the CLI probe-refresh test. Provider availability is credential-based;
+# there are no installations or binaries to validate.)
 
 
 # -- Artifacts ----------------------------------------------------------------
@@ -314,10 +270,6 @@ def test_api_artifact_comment_enqueues_steering(client, app_state, tmp_path):
 
 
 @pytest.mark.anyio
-@pytest.mark.xfail(
-    reason="settings-UI/probe path broken by M1 ProfileTier reshape; reworked in M8",
-    strict=False,
-)
 async def test_api_artifact_comment_resolves_active_yield(tmp_path):
     """When a yield is active, the comment resolves the yield future."""
     import asyncio
@@ -504,10 +456,9 @@ def test_model_config_removed(client, app_state):
 def test_landing_includes_profile_selector(client, app_state):
     # After SPA migration, GET / serves the React SPA, not server-rendered HTML.
     # Profile selector is rendered client-side by React.
+    from koan.agents.registry import compute_builtin_profiles
     app_state.runner_config.probe_results = _make_probe_results()
-    app_state.runner_config.builtin_profiles = {"balanced": Profile(name="balanced", tiers={
-        "strong": ProfileTier(runner_type="claude", model="opus", thinking="high"),
-    })}
+    app_state.runner_config.builtin_profiles = compute_builtin_profiles([])
     resp = client.get("/")
     assert resp.status_code == 200
 
@@ -551,65 +502,19 @@ def test_start_run_unknown_profile_rejected(client, app_state):
     assert "not found" in resp.json()["message"]
 
 
-def test_agents_list(client, app_state):
-    app_state.runner_config.config.agent_installations.append(AgentInstallation(
-        alias="my-claude", runner_type="claude", binary="/fake/bin/claude", extra_args=[],
-    ))
-    resp = client.get("/api/agents")
-    assert resp.status_code == 200
-    data = resp.json()
-    assert "installations" in data
-    aliases = [inst["alias"] for inst in data["installations"]]
-    assert "my-claude" in aliases
-    assert len(data["installations"]) >= 1
-
-
-def test_agents_create_and_delete(client, app_state):
-    resp = client.post("/api/agents", json={
-        "alias": "test-agent",
-        "runner_type": "claude",
-        "binary": "/fake/bin/claude",
-        "extra_args": [],
-    })
-    assert resp.status_code == 200
-    assert resp.json()["ok"] is True
-    assert any(i.alias == "test-agent" for i in app_state.runner_config.config.agent_installations)
-
-    resp = client.delete("/api/agents/test-agent")
-    assert resp.status_code == 200
-    assert resp.json()["ok"] is True
-    assert not any(i.alias == "test-agent" for i in app_state.runner_config.config.agent_installations)
-
-
 # -- Probe refresh ------------------------------------------------------------
 
 class TestProbeRefresh:
-    def test_probe_refresh_triggers_restate(self, client, app_state):
-        fresh_probes = [
-            ProbeResult(runner_type="claude", available=True, binary_path="/fake/bin/claude", version="2.0"),
-            ProbeResult(runner_type="codex", available=True),
-        ]
-        fresh_profile = Profile(name="balanced", tiers={
-            "strong": ProfileTier(runner_type="claude", model="opus", thinking="high"),
-        })
-
-        fresh_builtins = {"balanced": fresh_profile}
-
-        # Pre-populate with stale data
-        app_state.runner_config.probe_results = _make_probe_results()
+    def test_probe_refresh_repopulates_providers(self, client, app_state):
+        # refresh=1 recomputes builtin profiles + provider availability (env-
+        # credential model; no CLI probe). Asserts the endpoint returns 200 and
+        # provider rows.
+        app_state.runner_config.probe_results = []
         app_state.runner_config.builtin_profiles = {}
-
-        with patch("koan.probe.probe_all_runners", new_callable=AsyncMock, return_value=fresh_probes) as mock_probe, \
-             patch("koan.agents.registry.compute_builtin_profiles", return_value=fresh_builtins) as mock_builtins:
-            resp = client.get("/api/probe?refresh=1")
-
+        resp = client.get("/api/probe?refresh=1")
         assert resp.status_code == 200
-        mock_probe.assert_called_once()
-        mock_builtins.assert_called_once_with(fresh_probes)
-        assert app_state.runner_config.probe_results is fresh_probes
-        assert app_state.runner_config.builtin_profiles is fresh_builtins
-        data = resp.json()
-        assert len(data["runners"]) == 2
+        assert app_state.runner_config.builtin_profiles  # repopulated
+        assert app_state.runner_config.probe_results  # provider rows present
 
     def test_probe_no_refresh_skips_restate(self, client, app_state):
         app_state.runner_config.probe_results = _make_probe_results()

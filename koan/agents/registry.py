@@ -37,9 +37,11 @@ log = get_logger("agent_registry")
 # Context windows are filled with known values; update when models change.
 
 _GEMINI_TIER_SPECS: dict[ModelTier, tuple[str, ThinkingMode, int]] = {
-    # (model_id, thinking, context_window)
-    "strong":   ("gemini-2.5-pro-latest",   "high",     1_000_000),
-    "standard": ("gemini-2.5-flash-latest",  "medium",   1_000_000),
+    # (model_id, thinking, context_window). IDs must be valid google-GLA model
+    # names: versioned names take no "-latest" suffix (gemini-2.5-pro, not
+    # gemini-2.5-pro-latest -> 404); only unversioned names do (gemini-flash-lite-latest).
+    "strong":   ("gemini-2.5-pro",            "high",     1_000_000),
+    "standard": ("gemini-2.5-flash",          "medium",   1_000_000),
     "cheap":    ("gemini-flash-lite-latest",  "disabled", 1_000_000),
 }
 
@@ -200,9 +202,9 @@ def _compute_fixed(name: str, specs: dict[ModelTier, tuple[str, ThinkingMode, in
 
 # Frontier uses larger/more-capable models than balanced across all tiers.
 _GEMINI_FRONTIER_SPECS: dict[ModelTier, tuple[str, ThinkingMode, int]] = {
-    "strong":   ("gemini-2.5-pro-latest",   "high",     1_000_000),
-    "standard": ("gemini-2.5-pro-latest",   "medium",   1_000_000),
-    "cheap":    ("gemini-2.5-flash-latest",  "low",      1_000_000),
+    "strong":   ("gemini-2.5-pro",    "high",     1_000_000),
+    "standard": ("gemini-2.5-pro",    "medium",   1_000_000),
+    "cheap":    ("gemini-2.5-flash",  "low",      1_000_000),
 }
 
 

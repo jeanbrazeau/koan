@@ -243,29 +243,20 @@ async def api_start_run_preflight(r: Request) -> Response:
             status_code=404,
         )
 
-    # Derive required runner types from profile tiers
-    required_types: set[str] = set()
-    for tier in profile.tiers.values():
-        required_types.add(tier.runner_type)
-
-    # For each type, list available installations with validity status
-    installations_by_type: dict[str, list[dict]] = {}
-    for rt in sorted(required_types):
-        insts = []
-        for inst in st.runner_config.config.agent_installations:
-            if inst.runner_type == rt:
-                insts.append({
-                    "alias": inst.alias,
-                    "binary": inst.binary,
-                    "binary_valid": Path(inst.binary).exists(),
-                    "extra_args": inst.extra_args,
-                })
-        installations_by_type[rt] = insts
-
+    # Derive required providers from the profile's tier ModelSpecs and report
+    # whether each one's credentials resolve (env-credential model -- the old
+    # CLI installations/binary-validity preflight is retired).
+    from ..agents.adapter import provider_available
+    cfg_keys = {pa.provider: pa.env_keys for pa in st.runner_config.config.provider_auth}
+    required: set[str] = {tier.model.provider for tier in profile.tiers.values()}
+    providers = {
+        prov: {"available": provider_available(prov, cfg_keys.get(prov))}
+        for prov in sorted(required)
+    }
     return JSONResponse({
         "profile": profile_name,
-        "required_runner_types": sorted(required_types),
-        "installations": installations_by_type,
+        "required_providers": sorted(required),
+        "providers": providers,
     })
 
 
@@ -329,11 +320,12 @@ async def api_start_run(r: Request) -> Response:
     )
     log.debug("start-run task payload: %s", truncate_payload(task))
 
-    # Block when no runners available
+    # Block when no provider credentials are available (env-credential model).
     if not any(pr.available for pr in st.runner_config.probe_results):
         return JSONResponse(
-            {"error": "no_runners",
-             "message": "No available agent installations. Add and configure at least one in Settings."},
+            {"error": "no_providers",
+             "message": "No provider credentials found. Set a provider API key "
+                        "(e.g. GOOGLE_API_KEY) in the environment."},
             status_code=422,
         )
 
@@ -345,43 +337,24 @@ async def api_start_run(r: Request) -> Response:
             status_code=422,
         )
 
-    # Apply installation selections (runner_type -> alias)
-    installations = body.get("installations")
-    if isinstance(installations, dict):
-        for rt, alias in installations.items():
-            found = any(
-                inst.alias == alias and inst.runner_type == rt
-                for inst in st.runner_config.config.agent_installations
-            )
-            if not found:
-                return JSONResponse(
-                    {"error": "validation_error",
-                     "message": f"Installation '{alias}' not found for runner type '{rt}'"},
-                    status_code=422,
-                )
-        for rt, alias in installations.items():
-            st.run.run_installations[rt] = alias
-
-    # Pre-validate installations for every runner type the profile requires
-    from ..agents.registry import AgentRegistry as RunnerRegistry
-    from ..agents.base import AgentError as RunnerError
-    registry = RunnerRegistry()
-    checked_types: set[str] = set()
+    # Validate the profile's providers have credentials. The per-role ModelSpec
+    # is resolved at spawn time (resolve_model_spec); here we just fail fast if a
+    # required provider is unconfigured. (The CLI installation-selection dance is
+    # gone -- the in-process path resolves a ModelSpec, not a binary.)
+    from ..agents.adapter import provider_available
+    cfg_keys = {pa.provider: pa.env_keys for pa in st.runner_config.config.provider_auth}
     for tier in profile_obj.tiers.values():
-        if tier.runner_type in checked_types:
-            continue
-        checked_types.add(tier.runner_type)
-        try:
-            registry.resolve_installation(tier.runner_type, st.runner_config.config, st.run.run_installations)
-        except RunnerError as e:
+        prov = tier.model.provider
+        if not provider_available(prov, cfg_keys.get(prov)):
             return JSONResponse(
-                {"error": e.diagnostic.code,
-                 "message": e.diagnostic.message,
-                 "runner_type": tier.runner_type},
+                {"error": "missing_credentials",
+                 "message": f"Provider '{prov}' (required by profile '{profile}') "
+                            f"has no credentials set in the environment.",
+                 "provider": prov},
                 status_code=422,
             )
 
-    # Persist profile + installation selections
+    # Persist profile
     st.runner_config.config.active_profile = profile
     from ..config import save_koan_config
     await save_koan_config(st.runner_config.config)
@@ -1142,92 +1115,53 @@ def _serialize_probe_result(pr: ProbeResult) -> dict:
 
 
 def _serialize_profile(p: Profile, read_only: bool) -> dict:
+    # ProfileTier is {model: ModelSpec} since the M1 reshape; emit the
+    # provider/model/thinking from the ModelSpec (the old runner_type field
+    # is gone with the CLI-binary model).
     return {
         "name": p.name,
         "read_only": read_only,
         "tiers": {
             tier_name: {
-                "runner_type": pt.runner_type,
-                "model": pt.model,
-                "thinking": pt.thinking,
+                "provider": pt.model.provider,
+                "model": pt.model.model,
+                "thinking": pt.model.thinking,
             }
             for tier_name, pt in p.tiers.items()
         },
     }
 
 
+def _provider_probe_results(st: AppState) -> list[ProbeResult]:
+    """Report provider availability from env credentials (env-credential model,
+    replacing CLI-binary probing). A provider is available when its credential
+    env vars resolve; a koan ProviderAuth entry's env_keys override the default.
+    ProbeResult.runner_type carries the provider name here."""
+    from ..agents.adapter import DEFAULT_PROVIDER_ENV_KEYS, provider_available
+    cfg_keys = {pa.provider: pa.env_keys for pa in st.runner_config.config.provider_auth}
+    providers = set(DEFAULT_PROVIDER_ENV_KEYS) | set(cfg_keys)
+    return [
+        ProbeResult(runner_type=p, available=provider_available(p, cfg_keys.get(p)))
+        for p in sorted(providers)
+    ]
+
+
 async def _refresh_probe_state(st: AppState, broadcast: bool = True) -> None:
-    from ..probe import probe_all_runners
+    """Refresh provider availability + built-in profiles (env-credential model).
+
+    The CLI-binary probe + auto-created installations are retired: provider
+    availability now comes from credential env vars (_provider_probe_results),
+    and the built-in profiles are static provider specs (compute_builtin_profiles
+    ignores its argument). No config mutation -- nothing to persist here.
+    """
     from ..agents.registry import compute_builtin_profiles
 
-    st.runner_config.probe_results = await probe_all_runners()
-    st.runner_config.builtin_profiles = compute_builtin_profiles(st.runner_config.probe_results)
-
-    # --yolo: per-runner permission-skipping flags for default installations.
-    # Claude is excluded: new default installations receive --permission-mode
-    # acceptEdits unconditionally via AgentOptions.permission_mode at spawn time.
-    _YOLO_ARGS: dict[str, list[str]] = {
-        "codex": ["--dangerously-bypass-approvals-and-sandbox"],
-        "gemini": ["--yolo"],
-    }
-
-    # Auto-create or update default installations from probe results
-    existing_types = {inst.runner_type for inst in st.runner_config.config.agent_installations}
-    changed = False
-    new_insts: list[AgentInstallation] = []
-    modified_insts: list[AgentInstallation] = []
-    for pr in st.runner_config.probe_results:
-        if pr.available and pr.binary_path:
-            if pr.runner_type not in existing_types:
-                extra = _YOLO_ARGS.get(pr.runner_type, []) if st.server.yolo else []
-                inst = AgentInstallation(
-                    alias=f"{pr.runner_type}-default",
-                    runner_type=pr.runner_type,
-                    binary=pr.binary_path,
-                    extra_args=extra,
-                )
-                st.runner_config.config.agent_installations.append(inst)
-                new_insts.append(inst)
-                changed = True
-            else:
-                for inst in st.runner_config.config.agent_installations:
-                    if inst.runner_type == pr.runner_type and inst.alias == f"{pr.runner_type}-default":
-                        need_update = False
-                        if inst.binary != pr.binary_path:
-                            inst.binary = pr.binary_path
-                            need_update = True
-                        # Sync yolo flags on default installations
-                        yolo_args = _YOLO_ARGS.get(pr.runner_type, []) if st.server.yolo else []
-                        if yolo_args and not all(a in inst.extra_args for a in yolo_args):
-                            inst.extra_args = list({*inst.extra_args, *yolo_args})
-                            need_update = True
-                        if need_update:
-                            modified_insts.append(inst)
-                            changed = True
-    if changed:
-        from ..config import save_koan_config
-        await save_koan_config(st.runner_config.config)
+    st.runner_config.builtin_profiles = compute_builtin_profiles([])
+    st.runner_config.probe_results = _provider_probe_results(st)
 
     if broadcast:
-        # New installations must exist in the projection BEFORE probe_completed
-        # sets their `available` flag.
-        for inst in new_insts:
-            st.projection_store.push_event(
-                "installation_created",
-                build_installation_created(inst.alias, inst.runner_type, inst.binary, inst.extra_args),
-            )
-        for inst in modified_insts:
-            st.projection_store.push_event(
-                "installation_modified",
-                build_installation_modified(inst.alias, inst.runner_type, inst.binary, inst.extra_args),
-            )
-        # Now set available on all installations (including the ones just created)
-        _probe_results_dict = {
-            inst.alias: any(pr.runner_type == inst.runner_type and pr.available
-                           for pr in st.runner_config.probe_results)
-            for inst in st.runner_config.config.agent_installations
-        }
-        st.projection_store.push_event("probe_completed", build_probe_completed(_probe_results_dict))
+        _avail = {pr.runner_type: pr.available for pr in st.runner_config.probe_results}
+        st.projection_store.push_event("probe_completed", build_probe_completed(_avail))
         for bp in st.runner_config.builtin_profiles.values():
             tiers = _serialize_profile(bp, True)["tiers"]
             st.projection_store.push_event(
@@ -1246,21 +1180,9 @@ def _push_initial_config_events(st: AppState) -> None:
     """
     store = st.projection_store
 
-    # Installations FIRST -- probe_completed needs them to exist so it can set
-    # the `available` flag on each one.
-    for inst in st.runner_config.config.agent_installations:
-        store.push_event(
-            "installation_created",
-            build_installation_created(inst.alias, inst.runner_type, inst.binary, inst.extra_args),
-        )
-
-    # probe_completed: set available flag on each installation (now they exist)
-    _probe_avail = {
-        inst.alias: any(pr.runner_type == inst.runner_type and pr.available
-                       for pr in st.runner_config.probe_results)
-        for inst in st.runner_config.config.agent_installations
-    }
-    store.push_event("probe_completed", build_probe_completed(_probe_avail))
+    # Provider availability (env-credential model; keyed by provider name).
+    _avail = {pr.runner_type: pr.available for pr in st.runner_config.probe_results}
+    store.push_event("probe_completed", build_probe_completed(_avail))
 
     # Profiles (built-in first, then user-defined)
     for bp in st.runner_config.builtin_profiles.values():
