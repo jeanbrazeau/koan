@@ -114,9 +114,10 @@ class Agent(Protocol):
     contract: callers that wish to interrupt or compact must be prepared
     for NotImplementedError if the underlying agent does not support it.
 
-    The register_process, exit_code, and stderr_output members bridge the
-    new abstraction with spawn_subagent's existing process-management logic
-    (active-process registry, exit-code error path, stderr logging).
+    The subprocess-shaped members (register_process / exit_code /
+    stderr_output) were dropped in the M9 rip-out: the in-process PydanticAI
+    path has no subprocess, and spawn_subagent now derives success/failure from
+    a raised AgentError (or the handshake check), not from a process exit code.
     """
 
     name: str  # 'claude', 'codex', 'gemini', or 'fake' in tests
@@ -151,37 +152,6 @@ class Agent(Protocol):
         Raises NotImplementedError everywhere in M1 and on CommandLineAgent.
         The Claude Agent SDK does not yet expose a programmatic compact() surface;
         when it does, ClaudeSDKAgent (M2+) will implement this.
-        """
-        ...
-
-    def register_process(self, registry: dict, agent_id: str) -> None:
-        """Register the agent's underlying subprocess into the active-process registry.
-
-        Called by spawn_subagent before iterating run() so that the shutdown
-        path (app_state._active_processes) can cancel the subprocess if needed.
-        Command-line agents store the registry reference and populate it as
-        soon as the subprocess is spawned inside run(). SDK-style agents
-        implement this as a no-op (the SDK manages its own process lifecycle).
-        """
-        ...
-
-    @property
-    def exit_code(self) -> int | None:
-        """Exit code of the agent's underlying process or SDK session.
-
-        None until run() completes. Populated by CommandLineAgent from
-        proc.wait(); by SDK agents from the ResultMessage status.
-        Consumed by spawn_subagent for the exit-code error path.
-        """
-        ...
-
-    @property
-    def stderr_output(self) -> str:
-        """Accumulated stderr output from the agent's subprocess.
-
-        Empty string for SDK agents (no separate stderr stream).
-        Populated after run() completes. Consumed by spawn_subagent
-        to build the error_str for failed runs.
         """
         ...
 

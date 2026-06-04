@@ -345,10 +345,9 @@ async def spawn_subagent(
         extras={},
     )
 
-    # Register the process into the active-process registry before iteration.
-    # CommandLineAgent stores the registry reference and populates it as soon
-    # as the subprocess is spawned inside run(). FakeAgent is a no-op.
-    agent_impl.register_process(app_state._active_processes, agent_id)
+    # In-process agents have no subprocess to register (M9 rip-out dropped the
+    # register_process / active-process plumbing); spawn_subagent derives
+    # success/failure from a raised AgentError or the handshake check below.
 
     # Emit agent_spawned now that AgentState is fully registered and we are
     # about to start iterating. build_command errors that used to abort before
@@ -364,6 +363,9 @@ async def spawn_subagent(
     # PydanticAIAgent). When populated, replaces the char-length token_count
     # approximation at agent_exited. CLI runners leave this None.
     accumulated_usage: dict | None = None
+    # Captured if agent_impl.run() raises AgentError -- the in-process
+    # replacement for the old agent_impl.exit_code / stderr_output reads.
+    run_error: AgentError | None = None
 
     try:
         async for ev in agent_impl.run(options):
@@ -467,6 +469,7 @@ async def spawn_subagent(
     except AgentError as e:
         # Agent raised a structured failure during run(). Write to event log
         # and emit a spawn_failed projection event.
+        run_error = e
         log.error(
             "AgentError during run for %s (agent_id=%s): %s",
             role, agent_id, e.diagnostic.message,
@@ -492,12 +495,12 @@ async def spawn_subagent(
     # Tombstone: mark end of this agent's stream
     store.push_event("stream_cleared", {}, agent_id=agent_id)
 
-    # Collect exit code and stderr from agent_impl.
-    # exit_code is None for FakeAgent (which does not spawn a process);
-    # default to 0 so test doubles that set handshake_observed work correctly.
-    raw_exit_code = agent_impl.exit_code
-    exit_code = raw_exit_code if raw_exit_code is not None else 0
-    stderr_output = agent_impl.stderr_output
+    # Derive exit code + failure detail from the run. In-process agents have no
+    # subprocess: a clean run() is success (0), a raised AgentError is failure
+    # (1, with the diagnostic as the stderr-equivalent). The handshake check
+    # below can still override to 1 (bootstrap failure).
+    exit_code = 1 if run_error is not None else 0
+    stderr_output = run_error.diagnostic.message if run_error is not None else ""
 
     if stderr_output.strip():
         log.warning("stderr from %s (agent_id=%s): %s", role, agent_id, stderr_output[:500])
@@ -527,8 +530,7 @@ async def spawn_subagent(
             role, agent_id, exit_code, error_str,
         )
 
-    # Cleanup: remove from active processes, resolve pending interactions
-    app_state._active_processes.pop(agent_id, None)
+    # Cleanup: resolve pending interactions for this agent.
     _cancel_pending_interactions(agent_id, app_state)
 
     # Finalize audit log
