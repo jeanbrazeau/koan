@@ -1,5 +1,5 @@
 # Provider adapter: the single per-provider dialect seam.
-# Gemini-only until M7, when Anthropic/OpenAI/Bedrock adapters land.
+# Covers all four day-one providers (M7): google, anthropic, openai, bedrock.
 # Built against the installed pydantic-ai 2.0.0b5 API.
 #
 # Responsibilities:
@@ -15,16 +15,33 @@ import os
 from ..agents.base import AgentDiagnostic, AgentError
 from ..types import ModelSpec, ProviderAuth, ThinkingMode
 
-# Gemini thinking budget by ThinkingMode.
-# Mapped to google_thinking_config (ThinkingConfigDict) for the google provider.
-# Values are token budgets; "disabled" uses include_thoughts=False to suppress.
-_GEMINI_THINKING_BUDGET: dict[ThinkingMode, int | None] = {
+# Thinking token budget by ThinkingMode -- shared by the budget-based providers
+# (google google_thinking_config, anthropic anthropic_thinking).
+_THINKING_BUDGET: dict[ThinkingMode, int | None] = {
     "disabled": None,
     "low":      512,
     "medium":   2048,
     "high":     8192,
     "xhigh":    16384,
     "max":      32768,
+}
+
+# OpenAI exposes reasoning as a coarse effort knob, not a token budget.
+_OPENAI_EFFORT: dict[ThinkingMode, str | None] = {
+    "disabled": None,
+    "low":      "low",
+    "medium":   "medium",
+    "high":     "high",
+    "xhigh":    "high",
+    "max":      "high",
+}
+
+# koan provider name -> pydantic-ai infer_model() prefix.
+_PROVIDER_PREFIX: dict[str, str] = {
+    "google":    "google",
+    "anthropic": "anthropic",
+    "openai":    "openai",
+    "bedrock":   "bedrock",
 }
 
 
@@ -66,53 +83,95 @@ def resolve_credentials(auth: ProviderAuth) -> dict[str, str]:
 
 
 def map_thinking(provider: str, mode: ThinkingMode) -> dict:
-    """Map koan ThinkingMode to the provider's model settings dict.
+    """Map koan ThinkingMode to the provider's model_settings dict.
 
-    For 'google': returns google_thinking_config with a token budget.
-    Disabled thinking suppresses thoughts via include_thoughts=False.
-    Other providers raise NotImplementedError until M7.
+    - google:    google_thinking_config token budget (disabled suppresses thoughts).
+    - anthropic: anthropic_thinking {type: enabled, budget_tokens: N} (disabled -> off).
+    - openai:    openai_reasoning_effort low/medium/high (disabled -> off).
+    - bedrock:   no-op -- thinking on Bedrock is profile-driven per underlying
+                 model; left to pydantic-ai's BedrockModel + manual validation.
+
+    Unknown providers raise NotImplementedError.
     """
     if provider == "google":
         if mode == "disabled":
             # Explicitly disable thinking to avoid unexpected token spend.
             return {"google_thinking_config": {"include_thoughts": False}}
-        budget = _GEMINI_THINKING_BUDGET.get(mode, 2048)
+        budget = _THINKING_BUDGET.get(mode, 2048)
         return {"google_thinking_config": {"thinking_budget": budget, "include_thoughts": True}}
-    raise NotImplementedError(
-        f"thinking mapping for provider '{provider}' lands in M7"
-    )
+
+    if provider == "anthropic":
+        if mode == "disabled":
+            return {}
+        budget = _THINKING_BUDGET.get(mode) or 2048
+        return {"anthropic_thinking": {"type": "enabled", "budget_tokens": budget}}
+
+    if provider == "openai":
+        effort = _OPENAI_EFFORT.get(mode)
+        if effort is None:
+            return {}
+        return {"openai_reasoning_effort": effort}
+
+    if provider == "bedrock":
+        # Bedrock hosts Claude/OpenAI models; thinking is selected by the model
+        # profile, not a portable koan-level knob. No-op (manual validation).
+        return {}
+
+    raise NotImplementedError(f"unknown provider '{provider}' has no thinking mapping")
+
+
+def _caching_settings(spec: ModelSpec) -> dict:
+    """Resolve the CachingPolicy into provider-specific cache settings.
+
+    - anthropic: explicit cache_control on the instructions + tool definitions
+      with the policy TTL (5m/1h).
+    - google/openai: prompt caching is automatic server-side -> no settings.
+    - bedrock: no portable cache knob exposed -> no-op (fallback per brief).
+    Returns {} when caching is off or the provider needs nothing.
+    """
+    if spec.caching.mode == "off":
+        return {}
+    if spec.provider == "anthropic":
+        ttl = spec.caching.ttl  # "5m" | "1h"
+        return {
+            "anthropic_cache_instructions": ttl,
+            "anthropic_cache_tool_definitions": ttl,
+        }
+    return {}
 
 
 def build_model_settings(spec: ModelSpec) -> dict:
     """Build the pydantic-ai model_settings dict from a ModelSpec.
 
-    Merges spec.settings (temperature, max_tokens, etc.) with the thinking
-    config from map_thinking. Gemini caching is automatic (server-side no-op).
+    Merges spec.settings (temperature, max_tokens, etc.) with the per-provider
+    thinking config (map_thinking) and caching settings (_caching_settings).
     Returns a flat dict suitable for pydantic-ai's model_settings parameter.
     """
     settings: dict = dict(spec.settings)
-    # Merge provider-specific thinking config on top.
-    # map_thinking raises NotImplementedError for non-Google providers;
-    # callers should catch this until M7 adds the remaining adapters.
-    thinking_settings = map_thinking(spec.provider, spec.thinking)
-    settings.update(thinking_settings)
+    settings.update(map_thinking(spec.provider, spec.thinking))
+    settings.update(_caching_settings(spec))
     return settings
 
 
 def build_model(spec: ModelSpec):
     """Construct a pydantic-ai Model object from a ModelSpec.
 
-    For 'google': uses the stable 'google:{model_id}' string form so the
-    provider is resolved at call time via env credentials (GOOGLE_API_KEY /
-    GEMINI_API_KEY). The caller should have already called resolve_credentials
-    to surface a clear error before this point.
+    Uses the stable '{prefix}:{model_id}' string form so the provider is
+    resolved at call time via env credentials. The caller should have already
+    called resolve_credentials to surface a clear error before this point.
 
-    Other providers raise NotImplementedError until M7.
-    Returns the Model object to be passed to PydanticAIAgent in M2.
+    Raises AgentError(code='unknown_provider') for an unrecognised provider.
     """
-    if spec.provider == "google":
-        from pydantic_ai.models import infer_model
-        return infer_model(f"google:{spec.model}")
-    raise NotImplementedError(
-        f"provider '{spec.provider}' lands in M7"
-    )
+    prefix = _PROVIDER_PREFIX.get(spec.provider)
+    if prefix is None:
+        raise AgentError(AgentDiagnostic(
+            code="unknown_provider",
+            agent=spec.provider,
+            stage="build_model",
+            message=(
+                f"Unknown provider '{spec.provider}'. "
+                f"Expected one of: {', '.join(sorted(_PROVIDER_PREFIX))}"
+            ),
+        ))
+    from pydantic_ai.models import infer_model
+    return infer_model(f"{prefix}:{spec.model}")
