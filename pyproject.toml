@@ -6,7 +6,6 @@ dependencies = [
     "starlette",
     "python-multipart",
     "uvicorn[standard]",
-    "fastmcp",
     "aiofiles",
     "jsonpatch",
     "pyyaml",
@@ -14,7 +13,7 @@ dependencies = [
     "voyageai>=0.3",
     "lancedb>=0.20",
     "pydantic-ai-slim[anthropic,bedrock,google,openai,duckduckgo]==2.0.0b5",
-    "claude-agent-sdk==0.1.76",
+    "mcp",
 ]
 
 [project.scripts]
