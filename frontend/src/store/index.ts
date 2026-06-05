@@ -3,31 +3,49 @@ import { devtools } from 'zustand/middleware'
 
 // -- Wire types — match backend KoanBaseModel.to_wire() output exactly --------
 
-export interface Installation {
-  alias: string
-  runnerType: string
-  binary: string
-  extraArgs: string[]
-  available: boolean
-}
+// Installation interface removed in M4: agent installation concept deleted.
+// Provider credentials are the availability model (see ProviderStatus below).
 
 export interface Profile {
   name: string
   readOnly: boolean
-  tiers: Record<string, string>   // role → installation alias
+  /** M3: tier values changed from strings (alias) to nested provider/model/thinking objects. */
+  tiers: Record<string, { provider: string; model: string; thinking: string }>
+}
+
+/** Provider credential availability surfaced via Settings.providerStatus (M2/M3). */
+export interface ProviderStatus {
+  provider: string
+  available: boolean
+  /** Env var names checked for this provider (never values). */
+  envKeys: string[]
+}
+
+/** One entry from the all-providers model catalog surfaced via Settings.modelRegistry (M2/M3). */
+export interface ModelRegistryEntry {
+  provider: string
+  model: string
+  displayName: string
+  contextWindow: number
+  thinkingModes: string[]
+  tierHint: string | null
 }
 
 export interface Settings {
-  installations: Record<string, Installation>
+  // installations removed in M4: agent installation concept deleted.
   profiles: Record<string, Profile>
   defaultProfile: string
   defaultScoutConcurrency: number
   workflows: WorkflowInfo[]   // populated once at startup by workflows_listed; static for the process lifetime
+  /** M2/M3: per-provider credential availability, populated by provider_status_listed initial event. */
+  providerStatus: ProviderStatus[]
+  /** M2/M3: all-providers model catalog, populated by model_registry_listed initial event. */
+  modelRegistry: ModelRegistryEntry[]
 }
 
 export interface RunConfig {
   profile: string
-  installations: Record<string, string>  // role → installation alias
+  // installations removed in M4: agent installation concept deleted.
   scoutConcurrency: number
 }
 
@@ -119,6 +137,10 @@ export interface Conversation {
   isThinking: boolean
   inputTokens: number
   outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  totalCostUsd: number
+  contextWindowPercent: number
 }
 
 // -- Memory types -- mirrors backend KoanBaseModel.to_wire() camelCase output --
@@ -357,11 +379,13 @@ export const useStore = create<KoanState>()(
       lastVersion: 0,
 
       settings: {
-        installations: {},
+        // installations removed in M4: agent installation concept deleted.
         profiles: {},
         defaultProfile: 'balanced',
         defaultScoutConcurrency: 8,
         workflows: [],
+        providerStatus: [],
+        modelRegistry: [],
       },
       run: null,
       notifications: [],

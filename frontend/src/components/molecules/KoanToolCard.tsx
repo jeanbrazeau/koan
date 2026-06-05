@@ -5,7 +5,8 @@
  * TOOL_RENDERERS map. Each renderer receives typed props including toolInput
  * (the M1 aggregate field) for live partial-args rendering. Unrecognized
  * tools fall back to a labeled header-only card via FallbackCard. Suppressed
- * orchestration tools (koan_complete_step, koan_set_phase) return null.
+ * orchestration tools (koan_set_phase, koan_suggest_next) return null.
+ * koan_complete_step was removed in M6.
  *
  * Used in: content stream, replacing ToolCallRow for koan MCP tool entries.
  */
@@ -31,13 +32,11 @@ interface KoanToolCardProps {
 type ToolRenderer = (props: Omit<KoanToolCardProps, 'toolName'>) => ReactElement
 
 // Orchestration tools whose effects are visible through other molecules
-// (StepHeader, PhaseMarker). They are suppressed at the koan-tool dispatch --
-// the entry exists in the projection (ToolKoanEntry) but does not render in
-// the activity feed.
-// Moved here from App.tsx in M2: post-M1, koan_complete_step and koan_set_phase
-// create ToolKoanEntry (not ToolGenericEntry), so the old App.tsx SUPPRESSED_TOOLS
-// check on tool_generic entries was dead code.
-const SUPPRESSED_TOOLS = new Set(['koan_complete_step', 'koan_set_phase'])
+// (StepHeader, PhaseMarker, YieldPanel). They are suppressed at the koan-tool
+// dispatch -- the entry exists in the projection (ToolKoanEntry) but does not
+// render in the activity feed.
+// koan_complete_step removed in M6; koan_suggest_next added (M6).
+const SUPPRESSED_TOOLS = new Set(['koan_set_phase', 'koan_suggest_next'])
 
 // Human-readable labels for the FallbackCard header. Tools not present here
 // render their raw toolName as the label.

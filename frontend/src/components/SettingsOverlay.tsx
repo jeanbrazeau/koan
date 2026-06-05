@@ -1,39 +1,60 @@
 import { useState, useEffect } from 'react'
-import { useStore, Installation } from '../store/index'
+import { useStore } from '../store/index'
+import type { ModelRegistryEntry, ProviderStatus } from '../store/index'
 import { tierSummary } from '../utils'
 import * as api from '../api/client'
-import { RunnerInfo } from '../api/client'
+import './SettingsOverlay.css'
 
-// -- Cascade dropdowns helpers ------------------------------------------------
+// -- ProfileForm helpers ------------------------------------------------------
 
-type TierConfig = { runner_type: string; model: string; thinking: string }
+type TierConfig = { provider: string; model: string; thinking: string }
 type TierMap = Record<string, TierConfig>
 
 const TIER_NAMES = ['strong', 'standard', 'cheap'] as const
 
-function getModelsForRunner(runners: RunnerInfo[], rt: string) {
-  return runners.find(r => r.runner_type === rt)?.models ?? []
+/** Distinct provider IDs found in the model registry. */
+function providersInRegistry(registry: ModelRegistryEntry[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const e of registry) {
+    if (!seen.has(e.provider)) {
+      seen.add(e.provider)
+      out.push(e.provider)
+    }
+  }
+  return out
 }
 
-function getThinkingModes(runners: RunnerInfo[], rt: string, model: string) {
-  const models = getModelsForRunner(runners, rt)
-  return models.find(m => m.alias === model)?.thinking_modes ?? []
+/** Registry entries for a given provider. */
+function modelsForProvider(registry: ModelRegistryEntry[], provider: string): ModelRegistryEntry[] {
+  return registry.filter(e => e.provider === provider)
+}
+
+/** Thinking modes for a given (provider, model) pair. */
+function thinkingModesForModel(registry: ModelRegistryEntry[], provider: string, model: string): string[] {
+  return registry.find(e => e.provider === provider && e.model === model)?.thinkingModes ?? []
 }
 
 // -- ProfileForm --------------------------------------------------------------
 
+/**
+ * Form for creating or editing a user profile.
+ *
+ * Sources tier options entirely from modelRegistry (M3): provider dropdown lists
+ * distinct registry providers; model dropdown is filtered by chosen provider;
+ * thinking dropdown comes from the chosen model's thinkingModes. Cascading reset
+ * clears downstream selections when an upstream value changes.
+ */
 function ProfileForm({
   initialName,
-  initialRunnerType,   // best-effort from stored tier string
   isEdit,
-  runners,
+  modelRegistry,
   onSave,
   onCancel,
 }: {
   initialName: string
-  initialRunnerType: string  // pre-populate runner dropdown when editing
   isEdit: boolean
-  runners: RunnerInfo[]
+  modelRegistry: ModelRegistryEntry[]
   onSave: () => void
   onCancel: () => void
 }) {
@@ -41,17 +62,20 @@ function ProfileForm({
   const [tiers, setTiers] = useState<TierMap>(() => {
     const t: TierMap = {}
     for (const tier of TIER_NAMES) {
-      t[tier] = { runner_type: tier === 'strong' ? initialRunnerType : '', model: '', thinking: '' }
+      t[tier] = { provider: '', model: '', thinking: '' }
     }
     return t
   })
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState<string | null>(null)
 
+  const providers = providersInRegistry(modelRegistry)
+
   const setTierField = (tier: string, field: keyof TierConfig, value: string) => {
     setTiers(prev => {
       const updated = { ...prev[tier], [field]: value }
-      if (field === 'runner_type') {
+      // Cascade: changing provider clears model and thinking; changing model clears thinking.
+      if (field === 'provider') {
         updated.model = ''
         updated.thinking = ''
       }
@@ -70,7 +94,7 @@ function ProfileForm({
     const filteredTiers: TierMap = {}
     for (const tier of TIER_NAMES) {
       const t = tiers[tier]
-      if (t.runner_type && t.model) {
+      if (t.provider && t.model) {
         filteredTiers[tier] = t
       }
     }
@@ -105,22 +129,20 @@ function ProfileForm({
       )}
       {TIER_NAMES.map(tier => {
         const t = tiers[tier]
-        const models = getModelsForRunner(runners, t.runner_type)
-        const thinkingModes = getThinkingModes(runners, t.runner_type, t.model)
+        const models = modelsForProvider(modelRegistry, t.provider)
+        const thinkingModes = thinkingModesForModel(modelRegistry, t.provider, t.model)
         return (
           <div key={tier} className="tier-form-row">
             <span className="tier-form-label">{tier}</span>
             <select
               className="model-tier-select"
-              value={t.runner_type}
-              onChange={e => setTierField(tier, 'runner_type', e.target.value)}
+              value={t.provider}
+              onChange={e => setTierField(tier, 'provider', e.target.value)}
               style={{ flex: 1 }}
             >
-              <option value="">-- agent --</option>
-              {runners.map(r => (
-                <option key={r.runner_type} value={r.runner_type}>
-                  {r.runner_type}
-                </option>
+              <option value="">-- provider --</option>
+              {providers.map(p => (
+                <option key={p} value={p}>{p}</option>
               ))}
             </select>
             <select
@@ -128,12 +150,12 @@ function ProfileForm({
               value={t.model}
               onChange={e => setTierField(tier, 'model', e.target.value)}
               style={{ flex: 1 }}
-              disabled={!t.runner_type}
+              disabled={!t.provider}
             >
               <option value="">-- model --</option>
               {models.map(m => (
-                <option key={m.alias} value={m.alias}>
-                  {m.display_name || m.alias}
+                <option key={m.model} value={m.model}>
+                  {m.displayName || m.model}
                 </option>
               ))}
             </select>
@@ -145,10 +167,9 @@ function ProfileForm({
               disabled={!t.model}
             >
               <option value="">-- thinking --</option>
+              <option value="disabled">disabled</option>
               {thinkingModes.map(tm => (
-                <option key={tm} value={tm}>
-                  {tm}
-                </option>
+                <option key={tm} value={tm}>{tm}</option>
               ))}
             </select>
           </div>
@@ -167,143 +188,68 @@ function ProfileForm({
   )
 }
 
-// -- InstallationForm ---------------------------------------------------------
+// -- ProviderCredentials ------------------------------------------------------
 
-function InstallationForm({
-  initialAlias,
-  initialRunnerType,
-  initialBinary,
-  initialExtraArgs,
-  isEdit,
-  allRunners,
-  onSave,
-  onCancel,
-}: {
-  initialAlias: string
-  initialRunnerType: string
-  initialBinary: string
-  initialExtraArgs: string[]
-  isEdit: boolean
-  allRunners: RunnerInfo[]
-  onSave: () => void
-  onCancel: () => void
-}) {
-  const [alias, setAlias] = useState(initialAlias)
-  const [runnerType, setRunnerType] = useState(initialRunnerType)
-  const [binary, setBinary] = useState(initialBinary)
-  const [extraArgs, setExtraArgs] = useState(initialExtraArgs.join(' '))
-  const [saving, setSaving] = useState(false)
-  const [formError, setFormError] = useState<string | null>(null)
+/**
+ * Displays per-provider credential presence and a local Validate action.
+ *
+ * Reads providerStatus from props (sourced from the store's Settings.providerStatus).
+ * Validate calls POST /api/settings/validate-provider which is a local construction
+ * check (no live provider call). Never prompts for or stores secrets.
+ */
+function ProviderCredentials({ providerStatus }: { providerStatus: ProviderStatus[] }) {
+  const [results, setResults] = useState<Record<string, { valid: boolean; reason?: string } | null>>({})
+  const [validating, setValidating] = useState<Record<string, boolean>>({})
 
-  const handleDetect = async () => {
-    if (!runnerType) {
-      setFormError('Select an agent type first')
-      return
-    }
-    const res = await api.detectAgent(runnerType)
-    if (res.path) {
-      setBinary(res.path)
-    } else {
-      setFormError('Binary not found in PATH')
+  const handleValidate = async (provider: string) => {
+    setValidating(prev => ({ ...prev, [provider]: true }))
+    try {
+      const res = await api.validateProvider(provider)
+      setResults(prev => ({ ...prev, [provider]: res }))
+    } finally {
+      setValidating(prev => ({ ...prev, [provider]: false }))
     }
   }
 
-  const handleSave = async () => {
-    if (!alias.trim()) {
-      setFormError('Alias is required')
-      return
-    }
-    const args = extraArgs.trim() ? extraArgs.trim().split(/\s+/) : []
-    setSaving(true)
-    try {
-      const res = isEdit
-        ? await api.updateAgent(alias, {
-            runner_type: runnerType,
-            binary: binary.trim(),
-            extra_args: args,
-          })
-        : await api.createAgent({
-            alias: alias.trim(),
-            runner_type: runnerType,
-            binary: binary.trim(),
-            extra_args: args,
-          })
-      if (res.ok) {
-        onSave()
-      } else {
-        setFormError(res.message ?? 'Failed to save installation')
-      }
-    } finally {
-      setSaving(false)
-    }
+  if (providerStatus.length === 0) {
+    return <div className="so-no-providers">No providers configured.</div>
   }
 
   return (
-    <div className="profile-form">
-      {!isEdit && (
-        <div className="tier-form-row">
-          <span className="tier-form-label">Alias</span>
-          <input
-            className="model-tier-input"
-            style={{ flex: 1 }}
-            placeholder="my-claude"
-            value={alias}
-            onChange={e => setAlias(e.target.value)}
-          />
-        </div>
-      )}
-      <div className="tier-form-row">
-        <span className="tier-form-label">Agent</span>
-        <select
-          className="model-tier-select"
-          style={{ flex: 1 }}
-          value={runnerType}
-          onChange={e => setRunnerType(e.target.value)}
-        >
-          <option value="">-- agent type --</option>
-          {allRunners.map(r => (
-            <option key={r.runner_type} value={r.runner_type}>
-              {r.runner_type}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="tier-form-row">
-        <span className="tier-form-label">Binary</span>
-        <input
-          className="model-tier-input"
-          style={{ flex: 1 }}
-          placeholder="/usr/local/bin/claude"
-          value={binary}
-          onChange={e => setBinary(e.target.value)}
-        />
-        <button
-          className="btn btn-secondary"
-          style={{ padding: '4px 10px', fontSize: 13 }}
-          onClick={handleDetect}
-        >
-          Detect
-        </button>
-      </div>
-      <div className="tier-form-row">
-        <span className="tier-form-label">Extra args</span>
-        <input
-          className="model-tier-input"
-          style={{ flex: 1 }}
-          placeholder="--verbose"
-          value={extraArgs}
-          onChange={e => setExtraArgs(e.target.value)}
-        />
-      </div>
-      {formError && <div className="no-runners-msg">{formError}</div>}
-      <div className="form-actions" style={{ marginTop: 12 }}>
-        <button className="btn btn-secondary" onClick={onCancel} disabled={saving}>
-          Cancel
-        </button>
-        <button className="btn btn-primary" onClick={handleSave} disabled={saving}>
-          {saving ? 'Saving...' : 'Save'}
-        </button>
-      </div>
+    <div className="so-provider-list">
+      {providerStatus.map(ps => {
+        const result = results[ps.provider]
+        const busy = validating[ps.provider] ?? false
+        return (
+          <div key={ps.provider} className="install-row">
+            <div className="install-row-info">
+              <span className="install-row-alias">{ps.provider}</span>
+              {ps.available
+                ? <span className="install-row-badge so-badge-present">credential present</span>
+                : <span className="install-row-badge so-badge-missing">no credential</span>
+              }
+            </div>
+            <span className="install-row-path so-env-keys">
+              {ps.envKeys.join(', ')}
+            </span>
+            <span className="profile-row-actions">
+              <button
+                className="btn btn-secondary"
+                style={{ padding: '4px 10px', fontSize: 13 }}
+                disabled={busy}
+                onClick={() => handleValidate(ps.provider)}
+              >
+                {busy ? 'Checking...' : 'Validate'}
+              </button>
+              {result !== null && result !== undefined && (
+                <span className={result.valid ? 'so-result-valid' : 'so-result-invalid'}>
+                  {result.valid ? 'valid' : (result.reason ?? 'invalid')}
+                </span>
+              )}
+            </span>
+          </div>
+        )
+      })}
     </div>
   )
 }
@@ -313,30 +259,20 @@ function InstallationForm({
 export function SettingsOverlay() {
   const setSettingsOpen = useStore(s => s.setSettingsOpen)
 
-  // Read all config from the store (fed by SSE events — always current)
+  // Read all config from the store (fed by SSE projection events -- always current).
   const profilesDict = useStore(s => s.settings.profiles)
-  const installationsDict = useStore(s => s.settings.installations)
   const scoutConcurrency = useStore(s => s.settings.defaultScoutConcurrency)
+  // M3: provider availability and model registry come from the projection store
+  // (populated by M2 initial events). No separate /api/probe fetch needed.
+  const providerStatus = useStore(s => s.settings.providerStatus)
+  const modelRegistry = useStore(s => s.settings.modelRegistry)
 
   const profiles = Object.values(profilesDict)
-  const installations = Object.values(installationsDict)
-
-  // Probe runner info is not in the projection store (only availability flags
-  // are stored). Fetch it once on open for the profile/installation forms.
-  const [runners, setRunners] = useState<RunnerInfo[]>([])
-  useEffect(() => {
-    api.getProbeInfo().then(data => setRunners(data.runners ?? []))
-  }, [])
-
-  const availableRunners = runners.filter(r => r.available)
 
   // Local UI state for forms
   const [localScoutConcurrency, setLocalScoutConcurrency] = useState(scoutConcurrency)
   const [showNewProfile, setShowNewProfile] = useState(false)
   const [editingProfile, setEditingProfile] = useState<string | null>(null)
-  const [showNewInstallation, setShowNewInstallation] = useState(false)
-  const [editingInstallation, setEditingInstallation] = useState<string | null>(null)
-  const [activeRunnerTab, setActiveRunnerTab] = useState<string | null>(null)
 
   // Sync local scout concurrency when store changes
   useEffect(() => {
@@ -356,32 +292,9 @@ export function SettingsOverlay() {
     // SSE event updates the store automatically
   }
 
-  const handleDeleteInstallation = async (alias: string) => {
-    await api.deleteAgent(alias)
-  }
-
   const handleSaveScoutConcurrency = async () => {
     await api.saveScoutConcurrency(localScoutConcurrency)
   }
-
-  // Group installations by runner type
-  const installationsByType: Record<string, Installation[]> = {}
-  for (const inst of installations) {
-    if (!installationsByType[inst.runnerType]) {
-      installationsByType[inst.runnerType] = []
-    }
-    installationsByType[inst.runnerType].push(inst)
-  }
-  const runnerTypes = Object.keys(installationsByType).sort()
-
-  // Auto-select first tab when runner types arrive
-  const currentTab = activeRunnerTab && runnerTypes.includes(activeRunnerTab)
-    ? activeRunnerTab
-    : runnerTypes[0] ?? null
-  const currentTabInstallations = currentTab ? installationsByType[currentTab] ?? [] : []
-
-  const editingProfileData = editingProfile ? profilesDict[editingProfile] : null
-  const editingInstData = editingInstallation ? installationsDict[editingInstallation] : null
 
   return (
     <div className="settings-overlay">
@@ -435,12 +348,11 @@ export function SettingsOverlay() {
               </div>
             ))}
 
-            {editingProfile && editingProfileData && (
+            {editingProfile && (
               <ProfileForm
                 initialName={editingProfile}
-                initialRunnerType={Object.values(editingProfileData.tiers)[0] ?? ''}
                 isEdit
-                runners={availableRunners}
+                modelRegistry={modelRegistry}
                 onSave={() => setEditingProfile(null)}
                 onCancel={() => setEditingProfile(null)}
               />
@@ -460,117 +372,18 @@ export function SettingsOverlay() {
             ) : (
               <ProfileForm
                 initialName=""
-                initialRunnerType=""
                 isEdit={false}
-                runners={availableRunners}
+                modelRegistry={modelRegistry}
                 onSave={() => setShowNewProfile(false)}
                 onCancel={() => setShowNewProfile(false)}
               />
             )}
 
-            {/* Agent Installations — tabbed by runner type */}
+            {/* Provider Credentials (replaces Agent Installations in M3) */}
             <div className="settings-section-heading" style={{ marginTop: 24 }}>
-              Agent Installations
+              Provider Credentials
             </div>
-
-            {runnerTypes.length > 0 && (
-              <div>
-                {/* Tab bar */}
-                <div className="install-tab-bar">
-                  {runnerTypes.map(rt => (
-                    <button
-                      key={rt}
-                      className={`install-tab${rt === currentTab ? ' install-tab--active' : ''}`}
-                      onClick={() => setActiveRunnerTab(rt)}
-                    >
-                      {rt}
-                    </button>
-                  ))}
-                </div>
-
-                {/* Tab content */}
-                {currentTab && (
-                  <div className="install-tab-content">
-                    {currentTabInstallations.map(inst => {
-                      const isDefault = inst.alias === `${currentTab}-default`
-                      return (
-                        <div
-                          key={inst.alias}
-                          className={`install-row${isDefault ? ' install-row--default' : ''}`}
-                        >
-                          <div className="install-row-info">
-                            <span className="install-row-alias">{inst.alias}</span>
-                            {isDefault && <span className="install-row-badge">default</span>}
-                            {inst.available && <span className="install-row-badge">available</span>}
-                          </div>
-                          <span className="install-row-path">
-                            {inst.binary || '--'}
-                            {inst.extraArgs && inst.extraArgs.length > 0 && ` ${inst.extraArgs.join(' ')}`}
-                          </span>
-                          <span className="profile-row-actions">
-                            <button
-                              className="btn btn-secondary"
-                              style={{ padding: '4px 10px', fontSize: 13 }}
-                              onClick={() => {
-                                setShowNewInstallation(false)
-                                setEditingInstallation(inst.alias)
-                              }}
-                            >
-                              Edit
-                            </button>
-                            {!isDefault && (
-                              <button
-                                className="btn btn-secondary btn-danger"
-                                style={{ padding: '4px 10px', fontSize: 13 }}
-                                onClick={() => handleDeleteInstallation(inst.alias)}
-                              >
-                                Delete
-                              </button>
-                            )}
-                          </span>
-                        </div>
-                      )
-                    })}
-
-                    {editingInstallation && editingInstData && editingInstData.runnerType === currentTab && (
-                      <InstallationForm
-                        initialAlias={editingInstallation}
-                        initialRunnerType={editingInstData.runnerType}
-                        initialBinary={editingInstData.binary}
-                        initialExtraArgs={editingInstData.extraArgs}
-                        isEdit
-                        allRunners={runners}
-                        onSave={() => setEditingInstallation(null)}
-                        onCancel={() => setEditingInstallation(null)}
-                      />
-                    )}
-
-                    {!showNewInstallation ? (
-                      <button
-                        className="install-add-btn"
-                        onClick={() => {
-                          setEditingInstallation(null)
-                          setShowNewInstallation(true)
-                        }}
-                      >
-                        + Add {currentTab} installation
-                      </button>
-                    ) : (
-                      <InstallationForm
-                        initialAlias=""
-                        initialRunnerType={currentTab}
-                        initialBinary=""
-                        initialExtraArgs={[]}
-                        isEdit={false}
-                        allRunners={runners}
-                        onSave={() => setShowNewInstallation(false)}
-                        onCancel={() => setShowNewInstallation(false)}
-                      />
-                    )}
-                  </div>
-                )}
-              </div>
-            )}
+            <ProviderCredentials providerStatus={providerStatus} />
 
             {/* Scout Concurrency */}
             <div className="model-config-section" style={{ marginTop: 24 }}>

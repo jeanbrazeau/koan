@@ -57,7 +57,8 @@ import { Md } from './components/Md'
 import { Notification } from './components/Notification'
 // SettingsOverlay is no longer rendered — replaced by SettingsPage organism
 // import { SettingsOverlay } from './components/SettingsOverlay'
-import { SettingsPage, type Profile as SPProfile, type Installation as SPInstallation } from './components/organisms/SettingsPage'
+// Installation type removed in M4: agent installation concept deleted.
+import { SettingsPage, type Profile as SPProfile } from './components/organisms/SettingsPage'
 import { ReviewPanel } from './components/organisms/ReviewPanel'
 import { SessionsPage } from './components/organisms/SessionsPage'
 import { MemoryRoutes } from './components/organisms/MemoryRoutes'
@@ -93,6 +94,10 @@ function useHeaderData() {
       ? {
           inputTokens: primary.conversation.inputTokens,
           outputTokens: primary.conversation.outputTokens,
+          cacheReadTokens: primary.conversation.cacheReadTokens,
+          cacheWriteTokens: primary.conversation.cacheWriteTokens,
+          totalCostUsd: primary.conversation.totalCostUsd,
+          contextWindowPercent: primary.conversation.contextWindowPercent,
         }
       : undefined,
   }
@@ -731,16 +736,11 @@ const PATH_BY_KEY: Record<string, string> = {
 // ---------------------------------------------------------------------------
 
 function ConnectedSettingsPage() {
+  // Runner/model/thinking options come from the model registry in the projection
+  // store (populated by initial events at startup). M4: installationsDict removed.
   const profilesDict = useStore(s => s.settings.profiles)
-  const installationsDict = useStore(s => s.settings.installations)
   const scoutConcurrency = useStore(s => s.settings.defaultScoutConcurrency)
-  const [probeData, setProbeData] = useState<api.RunnerInfo[]>([])
-
-  useEffect(() => {
-    api.getProbeInfo()
-      .then(data => setProbeData(data.runners))
-      .catch(() => {}) /* probe failure is non-fatal — dropdowns stay empty */
-  }, [])
+  const modelRegistry = useStore(s => s.settings.modelRegistry)
 
   const profiles: SPProfile[] = useMemo(() =>
     Object.values(profilesDict).map(p => ({
@@ -748,37 +748,20 @@ function ConnectedSettingsPage() {
       name: p.name,
       locked: p.readOnly,
       tiers: {
-        /* TODO: model and thinking are not in the store wire format —
-           the backend profile tiers map role → installation alias.
-           We resolve the runner from the installation but model/thinking
-           are managed backend-side and not exposed in SSE state yet. */
-        strong: { runner: installationsDict[p.tiers['strong']]?.runnerType || p.tiers['strong'] || '', model: '', thinking: '' },
-        standard: { runner: installationsDict[p.tiers['standard']]?.runnerType || p.tiers['standard'] || '', model: '', thinking: '' },
-        cheap: { runner: installationsDict[p.tiers['cheap']]?.runnerType || p.tiers['cheap'] || '', model: '', thinking: '' },
+        // M3: tiers are now {provider, model, thinking}; map provider -> runner for SettingsPage.
+        strong:   { runner: p.tiers['strong']?.provider   || '', model: p.tiers['strong']?.model   || '', thinking: p.tiers['strong']?.thinking   || '' },
+        standard: { runner: p.tiers['standard']?.provider || '', model: p.tiers['standard']?.model || '', thinking: p.tiers['standard']?.thinking || '' },
+        cheap:    { runner: p.tiers['cheap']?.provider    || '', model: p.tiers['cheap']?.model    || '', thinking: p.tiers['cheap']?.thinking    || '' },
       },
     })),
-    [profilesDict, installationsDict],
+    [profilesDict],
   )
 
-  const installations: SPInstallation[] = useMemo(() =>
-    Object.values(installationsDict).map(i => ({
-      id: i.alias,
-      alias: i.alias,
-      runner: i.runnerType,
-      binary: i.binary,
-      extraArgs: i.extraArgs.join(' '),
-      isDefault: i.alias.endsWith('-default'),
-      available: i.available,
-    })),
-    [installationsDict],
-  )
-
+  // Source provider/runner options from model registry (M3).
   const runnerTypes = useMemo(() => {
-    // Prefer probe data (includes runners without installations); fall back to installed
-    if (probeData.length > 0) return probeData.map(r => r.runner_type).sort()
-    const types = new Set(Object.values(installationsDict).map(i => i.runnerType))
-    return [...types].sort()
-  }, [probeData, installationsDict])
+    const providers = new Set(modelRegistry.map(e => e.provider))
+    return [...providers].sort()
+  }, [modelRegistry])
 
   const runnerOptions = useMemo(() =>
     runnerTypes.map(r => ({ value: r, label: r })),
@@ -786,72 +769,50 @@ function ConnectedSettingsPage() {
   )
 
   const modelOptionsForRunner = useMemo(() =>
-    (runner: string) => {
-      const info = probeData.find(r => r.runner_type === runner)
-      return info?.models.map(m => ({ value: m.alias, label: m.display_name })) ?? []
-    },
-    [probeData],
+    (runner: string) =>
+      modelRegistry
+        .filter(e => e.provider === runner)
+        .map(e => ({ value: e.model, label: e.displayName || e.model })),
+    [modelRegistry],
   )
 
   const thinkingOptionsForModel = useMemo(() =>
     (runner: string, model: string) => {
-      const info = probeData.find(r => r.runner_type === runner)
-      const modelInfo = info?.models.find(m => m.alias === model)
-      if (modelInfo && modelInfo.thinking_modes.length > 0) {
-        return modelInfo.thinking_modes.map(t => ({ value: t, label: t }))
+      const entry = modelRegistry.find(e => e.provider === runner && e.model === model)
+      if (entry && entry.thinkingModes.length > 0) {
+        return entry.thinkingModes.map(t => ({ value: t, label: t }))
       }
-      // Fallback when no model selected or probe data unavailable
-      return [{ value: 'budget', label: 'budget' }, { value: 'medium', label: 'medium' }, { value: 'high', label: 'high' }]
+      return []
     },
-    [probeData],
+    [modelRegistry],
   )
 
   return (
     <SettingsPage
       profiles={profiles}
       onCreateProfile={async p => {
-        const tiers: Record<string, { runner_type: string; model: string; thinking: string }> = {}
+        // M3: map runner -> provider in the tier payload.
+        const tiers: Record<string, { provider: string; model: string; thinking: string }> = {}
         for (const [k, v] of Object.entries(p.tiers)) {
-          tiers[k] = { runner_type: v.runner, model: v.model, thinking: v.thinking }
+          tiers[k] = { provider: v.runner, model: v.model, thinking: v.thinking }
         }
         const res = await api.createProfile(p.name, tiers)
         if (!res.ok) throw new Error(res.message || 'Failed to create profile')
       }}
       onUpdateProfile={async (id, p) => {
         if (p.tiers) {
-          const tiers: Record<string, { runner_type: string; model: string; thinking: string }> = {}
+          // M3: map runner -> provider in the tier payload.
+          const tiers: Record<string, { provider: string; model: string; thinking: string }> = {}
           for (const [k, v] of Object.entries(p.tiers)) {
-            tiers[k] = { runner_type: v.runner, model: v.model, thinking: v.thinking }
+            tiers[k] = { provider: v.runner, model: v.model, thinking: v.thinking }
           }
           const res = await api.updateProfile(id, tiers)
           if (!res.ok) throw new Error(res.message || 'Failed to update profile')
         }
       }}
       onDeleteProfile={id => api.deleteProfile(id)}
-      installations={installations}
-      runnerTypes={runnerTypes}
-      onCreateInstallation={async inst => {
-        const res = await api.createAgent({
-          alias: inst.alias,
-          runner_type: inst.runner,
-          binary: inst.binary,
-          extra_args: inst.extraArgs ? inst.extraArgs.split(' ').filter(Boolean) : [],
-        })
-        if (!res.ok) throw new Error(res.message || 'Failed to create installation')
-      }}
-      onUpdateInstallation={async (id, inst) => {
-        const res = await api.updateAgent(id, {
-          ...(inst.runner && { runner_type: inst.runner }),
-          ...(inst.binary && { binary: inst.binary }),
-          ...(inst.extraArgs !== undefined && { extra_args: inst.extraArgs.split(' ').filter(Boolean) }),
-        })
-        if (!res.ok) throw new Error(res.message || 'Failed to update installation')
-      }}
-      onDeleteInstallation={id => api.deleteAgent(id)}
-      onDetectBinary={async runner => {
-        const res = await api.detectAgent(runner)
-        return res.path
-      }}
+      // installations/runnerTypes/onCreateInstallation/onUpdateInstallation/
+      // onDeleteInstallation/onDetectBinary removed in M4: installation concept deleted.
       scoutConcurrency={scoutConcurrency}
       onScoutConcurrencyChange={n => api.saveScoutConcurrency(n)}
       runnerOptions={runnerOptions}

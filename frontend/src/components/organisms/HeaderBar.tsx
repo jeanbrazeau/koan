@@ -25,7 +25,14 @@ interface HeaderBarProps {
   currentStep: number
   orchestratorModel?: string
   elapsed?: string
-  usage?: { inputTokens: number; outputTokens: number }
+  usage?: {
+    inputTokens: number
+    outputTokens: number
+    cacheReadTokens: number
+    cacheWriteTokens: number
+    totalCostUsd: number
+    contextWindowPercent: number
+  }
   onSettingsClick?: () => void
 
   // Mode switching
@@ -123,6 +130,10 @@ export function HeaderBar({
               <UsageGauge
                 inputTokens={usage.inputTokens}
                 outputTokens={usage.outputTokens}
+                cacheReadTokens={usage.cacheReadTokens}
+                cacheWriteTokens={usage.cacheWriteTokens}
+                totalCostUsd={usage.totalCostUsd}
+                contextWindowPercent={usage.contextWindowPercent}
               />
             )}
             {elapsed && <span className="hb-elapsed">{elapsed}</span>}

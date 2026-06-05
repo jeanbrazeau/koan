@@ -1,8 +1,9 @@
 /**
- * NewRunForm — standalone form page for starting a new koan run.
- * Reads profiles, installations, and workflows from the store. Workflows
- * are sourced from settings.workflows (populated at server startup via the
- * workflows_listed projection event) rather than hard-coded.
+ * NewRunForm -- standalone form page for starting a new koan run.
+ * Reads profiles and workflows from the store. Workflows are sourced from
+ * settings.workflows (populated at server startup via the workflows_listed
+ * projection event) rather than hard-coded.
+ * M4: installation selection removed; provider credentials gate run start.
  * Used in: landing page when no run is active.
  */
 
@@ -12,7 +13,7 @@ import { useFileAttachment } from '../../hooks/useFileAttachment'
 import * as api from '../../api/client'
 import { SectionLabel } from '../atoms/SectionLabel'
 import { Button } from '../atoms/Button'
-import { StatusDot } from '../atoms/StatusDot'
+// StatusDot removed in M4: installation status indicators deleted with the installation section.
 import { FileChip } from '../atoms/FileChip'
 import './NewRunForm.css'
 
@@ -39,21 +40,18 @@ export function NewRunForm() {
   const [profile, setProfile] = useState('')
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [selectedInstallations, setSelectedInstallations] = useState<Record<string, string>>({})
   const [workflow, setWorkflow] = useState<string>('plan')
   const [projectDir, setProjectDir] = useState('')
   const attach = useFileAttachment()
 
   const profilesDict = useStore(s => s.settings.profiles)
-  const installationsDict = useStore(s => s.settings.installations)
+  // installationsDict removed in M4: installation concept deleted.
   const defaultProfile = useStore(s => s.settings.defaultProfile)
   const workflows = useStore(s => s.settings.workflows)
   const lastCompletion = useStore(s => s.lastCompletion)
   const setLastCompletion = useStore(s => s.setLastCompletion)
 
   const profiles = useMemo(() => Object.values(profilesDict), [profilesDict])
-  const installations = useMemo(() => Object.values(installationsDict), [installationsDict])
-  const hasRunners = installations.some(i => i.available)
 
   useEffect(() => {
     api.getInitialPrompt().then(data => {
@@ -80,46 +78,17 @@ export function NewRunForm() {
     }
   }, [workflows])
 
-  const preflight = useMemo(() => {
-    const sel = profiles.find(p => p.name === profile)
-    if (!sel) return null
-    const requiredTypes = new Set<string>()
-    for (const tierVal of Object.values(sel.tiers)) {
-      if (typeof tierVal === 'string') {
-        const inst = installationsDict[tierVal]
-        if (inst) requiredTypes.add(inst.runnerType)
-        else requiredTypes.add(tierVal)
-      }
-    }
-    const byType: Record<string, { alias: string; binary: string }[]> = {}
-    for (const rt of requiredTypes) {
-      byType[rt] = installations.filter(i => i.runnerType === rt && i.available).map(i => ({ alias: i.alias, binary: i.binary }))
-    }
-    return { types: [...requiredTypes].sort(), byType }
-  }, [profile, profiles, installations, installationsDict])
-
-  useEffect(() => {
-    if (!preflight) { setSelectedInstallations({}); return }
-    const sel: Record<string, string> = {}
-    for (const rt of preflight.types) {
-      const insts = preflight.byType[rt] || []
-      const def = insts.find(i => i.alias === `${rt}-default`) ?? insts[0]
-      if (def) sel[rt] = def.alias
-    }
-    setSelectedInstallations(sel)
-  }, [preflight])
-
-  const installationsReady = preflight ? preflight.types.every(rt => selectedInstallations[rt]) : false
+  // M4: preflight/selectedInstallations removed -- installation concept deleted.
+  // The backend gates run start on provider credential availability.
 
   const handleStart = async () => {
     const trimmed = task.trim()
     if (!trimmed) { setError('Please enter a task description'); return }
     if (!profile) { setError('Please select a profile'); return }
-    if (!installationsReady) { setError('Please select an installation for each required runner type'); return }
     setError(null); setLoading(true)
     try {
       const attachmentIds = attach.fileIds.length > 0 ? attach.fileIds : undefined
-      const result = await api.startRun(trimmed, profile, selectedInstallations, workflow, attachmentIds)
+      const result = await api.startRun(trimmed, profile, undefined, workflow, attachmentIds)
       if (!result.ok) {
         setError(result.message ?? 'Failed to start run')
       } else {
@@ -217,45 +186,19 @@ export function NewRunForm() {
             </select>
           </div>
 
-          {preflight && preflight.types.length > 0 && (
-            <div className="nrf-field">
-              <div className="nrf-field-label">Agent Installations</div>
-              <div className="nrf-agent-rows">
-              {preflight.types.map(rt => {
-                const insts = preflight.byType[rt] || []
-                const selected = selectedInstallations[rt] || ''
-                return (
-                  <div key={rt} className="nrf-agent-row">
-                    <span className="nrf-agent-chip">
-                      <span className="nrf-agent-name">{rt}</span>
-                      <StatusDot status={insts.length > 0 && selected ? 'done' : 'failed'} size="sm" />
-                    </span>
-                    <select className="nrf-real-select nrf-real-select--flex nrf-real-select--sm"
-                      value={selected} onChange={e => setSelectedInstallations(prev => ({ ...prev, [rt]: e.target.value }))}>
-                      <option value="">-- select --</option>
-                      {insts.map(inst => (
-                        <option key={inst.alias} value={inst.alias}>{inst.alias} ({inst.binary})</option>
-                      ))}
-                    </select>
-                    {insts.length === 0 && <span className="nrf-missing">Not detected — configure in Settings</span>}
-                  </div>
-                )
-              })}
-              </div>
-            </div>
-          )}
+          {/* Agent Installations section removed in M4: installation concept deleted. */}
 
         </div>
       </div>
 
       {error && <div className="nrf-error">{error}</div>}
 
+      {/* M4: !hasRunners and !installationsReady guards removed; provider credentials
+          gate run start at the backend (api_start_run checks provider_status). */}
       <Button variant="primary" onClick={handleStart}
-        disabled={!hasRunners || loading || !installationsReady || workflows.length === 0}>
+        disabled={loading || workflows.length === 0}>
         {loading ? 'Starting...' : 'Start Run'}
       </Button>
-
-      {!hasRunners && <div className="nrf-error">No available agent installations. Open Settings to add and configure one.</div>}
     </div>
   )
 }

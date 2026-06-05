@@ -1,9 +1,15 @@
 /**
- * UsageGauge -- compact token-usage readout for the HeaderBar right cluster.
+ * UsageGauge -- compact usage readout for the HeaderBar right cluster.
  *
- * Shows the accumulated input/output token counts for the primary agent's
- * conversation (sourced from the projection's per-agent usage accumulation).
+ * Shows the primary agent's token counts, cost, context-window percent, and
+ * cache hit/write stats, all sourced from the projection's per-agent conversation.
  * Presentational: all data arrives via props, no store access.
+ *
+ * Readouts (each gated on a non-zero check):
+ *   tok   -- input / output token counts
+ *   $     -- total accumulated cost in USD (shown when > 0)
+ *   ctx   -- context-window fill percent (shown when > 0)
+ *   cache -- cache read / write token counts (shown when either > 0)
  *
  * Used in: HeaderBar (workflow mode), beside the orchestrator model + elapsed.
  */
@@ -13,6 +19,10 @@ import './UsageGauge.css'
 interface UsageGaugeProps {
   inputTokens: number
   outputTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  totalCostUsd: number
+  contextWindowPercent: number
 }
 
 /** Compact a token count: 12345 -> "12.3k", 850 -> "850". */
@@ -21,16 +31,61 @@ function fmtTokens(n: number): string {
   return String(n)
 }
 
-export function UsageGauge({ inputTokens, outputTokens }: UsageGaugeProps) {
+/** Format a USD cost: 0.01234 -> "$0.0123", 1.5 -> "$1.50". */
+function fmtCost(usd: number): string {
+  if (usd >= 1) return `$${usd.toFixed(2)}`
+  return `$${usd.toFixed(4)}`
+}
+
+export function UsageGauge({
+  inputTokens,
+  outputTokens,
+  cacheReadTokens,
+  cacheWriteTokens,
+  totalCostUsd,
+  contextWindowPercent,
+}: UsageGaugeProps) {
   const title =
     `${inputTokens.toLocaleString()} input tokens / ` +
-    `${outputTokens.toLocaleString()} output tokens`
+    `${outputTokens.toLocaleString()} output tokens` +
+    (totalCostUsd > 0 ? ` / cost ${fmtCost(totalCostUsd)}` : '') +
+    (contextWindowPercent > 0 ? ` / context ${contextWindowPercent}% full` : '') +
+    ((cacheReadTokens > 0 || cacheWriteTokens > 0)
+      ? ` / cache ${cacheReadTokens.toLocaleString()} read / ${cacheWriteTokens.toLocaleString()} write`
+      : '')
+
   return (
     <span className="ug" title={title}>
       <span className="ug-label">tok</span>
       <span className="ug-val">{fmtTokens(inputTokens)} in</span>
       <span className="ug-sep">/</span>
       <span className="ug-val">{fmtTokens(outputTokens)} out</span>
+
+      {totalCostUsd > 0 && (
+        <>
+          <span className="ug-divider">|</span>
+          <span className="ug-label">cost</span>
+          <span className="ug-cost">{fmtCost(totalCostUsd)}</span>
+        </>
+      )}
+
+      {contextWindowPercent > 0 && (
+        <>
+          <span className="ug-divider">|</span>
+          <span className="ug-label">ctx</span>
+          <span className="ug-ctx">{contextWindowPercent}%</span>
+        </>
+      )}
+
+      {(cacheReadTokens > 0 || cacheWriteTokens > 0) && (
+        <>
+          <span className="ug-divider">|</span>
+          <span className="ug-label">cache</span>
+          <span className="ug-val">{fmtTokens(cacheReadTokens)}</span>
+          <span className="ug-sep">/</span>
+          <span className="ug-val">{fmtTokens(cacheWriteTokens)}</span>
+        </>
+      )}
     </span>
   )
 }

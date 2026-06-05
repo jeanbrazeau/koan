@@ -92,71 +92,41 @@ export async function submitArtifactComment(
   )
 }
 
-// -- Probe -------------------------------------------------------------------
-
-export interface ModelInfo {
-  alias: string
-  display_name: string
-  thinking_modes: string[]
-  tier_hint: string
-}
-
-export interface RunnerInfo {
-  runner_type: string
-  available: boolean
-  binary_path: string | null
-  version: string | null
-  models: ModelInfo[]
-}
-
-export async function getProbeInfo(): Promise<{ runners: RunnerInfo[] }> {
-  return get('/api/probe')
-}
-
 // -- Profiles ----------------------------------------------------------------
 
+/**
+ * Create a new user profile.
+ * tiers: M3 shape -- {tier_name: {provider, model, thinking}}.
+ */
 export async function createProfile(
   name: string,
-  tiers: Record<string, { runner_type: string; model: string; thinking: string }>,
+  tiers: Record<string, { provider: string; model: string; thinking: string }>,
 ) {
   return post<{ ok: boolean; message?: string }>('/api/profiles', { name, tiers })
 }
 
+/**
+ * Update the tiers of an existing user profile.
+ * tiers: M3 shape -- {tier_name: {provider, model, thinking}}.
+ */
 export async function updateProfile(
   name: string,
-  tiers: Record<string, { runner_type: string; model: string; thinking: string }>,
+  tiers: Record<string, { provider: string; model: string; thinking: string }>,
 ) {
   return put<{ ok: boolean; message?: string }>(`/api/profiles/${encodeURIComponent(name)}`, { tiers })
 }
 
+/**
+ * Local construction check for a provider credential.
+ * Calls POST /api/settings/validate-provider; never makes a live model call.
+ * Returns {valid: true} or {valid: false, reason: string}.
+ */
+export async function validateProvider(provider: string): Promise<{ valid: boolean; reason?: string }> {
+  return post('/api/settings/validate-provider', { provider })
+}
+
 export async function deleteProfile(name: string) {
   return del<{ ok: boolean; message?: string }>(`/api/profiles/${encodeURIComponent(name)}`)
-}
-
-// -- Agent installations -----------------------------------------------------
-
-export async function createAgent(params: {
-  alias: string
-  runner_type: string
-  binary: string
-  extra_args: string[]
-}) {
-  return post<{ ok: boolean; message?: string }>('/api/agents', params)
-}
-
-export async function updateAgent(
-  alias: string,
-  params: Partial<{ runner_type: string; binary: string; extra_args: string[] }>,
-) {
-  return put<{ ok: boolean; message?: string }>(`/api/agents/${encodeURIComponent(alias)}`, params)
-}
-
-export async function deleteAgent(alias: string) {
-  return del<{ ok: boolean; message?: string }>(`/api/agents/${encodeURIComponent(alias)}`)
-}
-
-export async function detectAgent(runner_type: string): Promise<{ path: string | null }> {
-  return get(`/api/agents/detect?runner_type=${encodeURIComponent(runner_type)}`)
 }
 
 // -- Settings ----------------------------------------------------------------
