@@ -9,7 +9,8 @@ import asyncio
 import json
 from typing import TYPE_CHECKING, Literal
 
-from fastmcp.exceptions import ToolError
+# Queue-full is a runtime constraint violation raised to the in-process tool core;
+# RuntimeError is appropriate.
 
 from ..state import PendingInteraction
 
@@ -47,7 +48,7 @@ async def enqueue_interaction(
     total = len(app_state.interactions.interaction_queue) + (1 if app_state.interactions.active_interaction else 0)
     cap = app_state.interactions.interaction_queue_max + 1  # 1 active + N queued
     if total >= cap:
-        raise ToolError(
+        raise RuntimeError(
             json.dumps({"error": "interaction_queue_full", "message": "interaction_queue_full"})
         )
 

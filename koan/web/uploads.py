@@ -4,17 +4,25 @@
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import uuid
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import aiofiles
 from mcp.types import ContentBlock, TextContent
-from fastmcp.utilities.types import File, Image
+# Binary/image delivery to multimodal models is out of scope (brief);
+# all runners receive the text notice.
 
 from ..logger import get_logger
 from ..state import UploadRecord, UploadState
+
+# TYPE_CHECKING guard avoids a projections<->uploads runtime import cycle;
+# projections imports uploads for curation payload rendering.
+if TYPE_CHECKING:
+    from ..projections import ActiveCurationBatch
 
 log = get_logger("web.uploads")
 
@@ -153,15 +161,17 @@ def upload_ids_to_blocks(
     state: UploadState,
     run_dir: str | Path,
     upload_ids: list[str],
-    runner_type: str,
+    runner_type: str,  # retained for signature stability; unused after M4 collapse
 ) -> tuple[list[ContentBlock], list[dict]]:
-    """Resolve upload IDs into MCP content blocks and an audit manifest.
+    """Resolve upload IDs into content blocks and an audit manifest.
 
     Files must already be committed to run_dir (endpoints commit on HTTP
-    submission). Missing IDs are skipped with a WARNING log. For
-    runner_type != "claude", the returned block list collapses to a single
-    TextContent notice listing the attached filenames; the manifest is still
-    populated regardless so the audit log records what the user attached.
+    submission). Missing IDs are skipped with a WARNING log.
+
+    Binary/image delivery to multimodal models is out of scope (brief). All
+    runners receive a single TextContent notice listing the attached filenames;
+    the manifest is always populated so the audit log records what the user
+    attached regardless of whether the runner consumed the bytes.
 
     Returns (blocks, manifest) where manifest is a list of dicts with
     {upload_id, filename, size, content_type, path}.
@@ -196,25 +206,66 @@ def upload_ids_to_blocks(
         for rec in records
     ]
 
-    # Claude receives actual file content; other runners get a text notice.
-    # Keeping the manifest unconditional ensures the audit log always reflects
-    # what the user attached, regardless of whether the runner consumed the bytes.
-    if runner_type == "claude":
-        blocks: list[ContentBlock] = []
-        for rec in records:
-            if rec.content_type.startswith("image/"):
-                blocks.append(Image(path=str(rec.path)).to_image_content())
-            else:
-                blocks.append(File(path=str(rec.path)).to_resource_content())
-    else:
-        names = ", ".join(rec.filename for rec in records)
-        blocks = [TextContent(
-            type="text",
-            text=(
-                f"[{len(records)} attachment(s) omitted: file content blocks "
-                f"are delivered only to Claude orchestrators. "
-                f"Attached: {names}]"
-            ),
-        )]
+    # All runners receive the text notice. Binary/image delivery to multimodal
+    # models is deferred (brief); the manifest ensures the audit log is complete.
+    names = ", ".join(rec.filename for rec in records)
+    blocks: list[ContentBlock] = [TextContent(
+        type="text",
+        text=(
+            f"[{len(records)} attachment(s): binary content delivery is out of "
+            f"scope for the in-process path. Attached: {names}]"
+        ),
+    )]
+
+    return blocks, manifest
+
+
+def _render_curation_payload(
+    batch: "ActiveCurationBatch",
+    decisions: list[dict],
+    uploads: UploadState,
+    run_dir: str,
+    runner_type: str,
+) -> tuple[list[ContentBlock], list[dict]]:
+    """Render a curation payload into MCP content blocks and an audit manifest.
+
+    Block 0 is always the JSON blob (preserves json.loads(result[0].text) parse
+    in the orchestrator). Per-decision attachment sections follow as separate
+    blocks so the orchestrator receives file content adjacent to each decision.
+
+    Moved from mcp_endpoint.py during the MCP-transport removal.
+    """
+    by_id = {p.id: p for p in batch.proposals}
+    items = []
+    for d in decisions:
+        pid = d.get("proposal_id", "")
+        p = by_id.get(pid)
+        if p is None:
+            continue
+        items.append({
+            "proposal_id": pid,
+            "op": p.op,
+            "seq": p.seq,
+            "type": p.type,
+            "title": p.title,
+            "decision": d.get("decision", "rejected"),
+            "feedback": d.get("feedback", ""),
+        })
+    payload_json = {"batch_id": batch.batch_id, "decisions": items}
+
+    blocks: list[ContentBlock] = [TextContent(type="text", text=json.dumps(payload_json, indent=2))]
+    manifest: list[dict] = []
+
+    # Append per-decision attachment sections after the JSON blob.
+    # The label block preserves adjacency between context and attachments
+    # so the orchestrator can correlate files with the decision they annotate.
+    for d in decisions:
+        attach_ids = d.get("attachments") or []
+        if attach_ids:
+            pid = d.get("proposal_id", "?")
+            blocks.append(TextContent(type="text", text=f"-- Attachments for proposal {pid} --"))
+            bs, ms = upload_ids_to_blocks(uploads, run_dir, attach_ids, runner_type)
+            blocks.extend(bs)
+            manifest.extend(ms)
 
     return blocks, manifest

@@ -28,20 +28,19 @@ from starlette.responses import StreamingResponse
 from ..artifacts import list_artifacts
 from ..run_state import atomic_write_json
 from ..lib.task_json import current_workflow, make_initial_workflow_history
-from ..probe import ProbeResult
 from ..projections import _primary_agent_id
 from ..state import ChatMessage
-from ..types import AgentInstallation, Profile, ProfileTier
+from ..types import ModelSpec, Profile, ProfileTier, ProviderStatus, ModelRegistryEntry
 from .interactions import activate_next_interaction
 from ..events import (
     build_questions_answered,
-    build_probe_completed,
+    # build_probe_completed removed in M4: CLI binary probe deleted.
+    # build_installation_created/modified/removed removed in M4: installation concept deleted.
+    build_provider_status_listed,
+    build_model_registry_listed,
     build_run_cleared,
     build_run_started,
     build_steering_queued,
-    build_installation_created,
-    build_installation_modified,
-    build_installation_removed,
     build_profile_created,
     build_profile_modified,
     build_profile_removed,
@@ -114,36 +113,52 @@ def _render_age(iso_str: str) -> str:
 
 # -- Profile validation -------------------------------------------------------
 
-def _validate_profile_tiers(tiers_raw: dict, probe_results: list[ProbeResult]) -> str | None:
-    by_runner: dict[str, ProbeResult] = {pr.runner_type: pr for pr in probe_results}
+def _validate_profile_tiers(
+    tiers_raw: dict,
+    provider_status: list[ProviderStatus],
+    model_registry: list[ModelRegistryEntry],
+) -> str | None:
+    """Validate profile tier dicts against the provider-credential model and model registry.
+
+    M3: tiers now carry {provider, model, thinking} (not runner_type). Validates:
+      - tier value is a dict
+      - provider is in provider_status and available
+      - (provider, model) exists in model_registry
+      - thinking is in that entry's thinking_modes (or "disabled" which is always valid)
+
+    Returns an error string on the first failure, else None.
+    """
+    by_provider: dict[str, ProviderStatus] = {ps.provider: ps for ps in provider_status}
+    # Index registry by (provider, model) -> thinking_modes for O(1) lookup.
+    registry_thinking: dict[tuple[str, str], list[str]] = {
+        (e.provider, e.model): e.thinking_modes for e in model_registry
+    }
+    registry_pairs: frozenset[tuple[str, str]] = frozenset(registry_thinking)
+
     for tier_name, tier_val in tiers_raw.items():
         if not isinstance(tier_val, dict):
             return f"tier '{tier_name}' must be an object"
 
-        rt = tier_val.get("runner_type", "")
-        model = tier_val.get("model", "")
-        thinking = tier_val.get("thinking", "disabled")
+        provider = tier_val.get("provider", "")
+        if not isinstance(provider, str) or not provider:
+            return f"tier '{tier_name}' requires a non-empty 'provider'"
 
-        if not isinstance(rt, str) or not rt:
-            return f"tier '{tier_name}' requires a non-empty 'runner_type'"
+        model = tier_val.get("model", "")
         if not isinstance(model, str) or not model:
             return f"tier '{tier_name}' requires a non-empty 'model'"
-        if not isinstance(thinking, str) or not thinking:
-            return f"tier '{tier_name}' requires a non-empty 'thinking'"
 
-        pr = by_runner.get(rt)
-        if pr is None or not pr.available:
-            return f"runner_type '{rt}' is not available"
+        ps = by_provider.get(provider)
+        if ps is None or not ps.available:
+            return f"provider '{provider}' is not available"
 
-        model_aliases = {m.alias for m in pr.models}
-        if model not in model_aliases:
-            return f"model '{model}' not found for runner '{rt}'"
+        if (provider, model) not in registry_pairs:
+            return f"model '{model}' for provider '{provider}' not found in registry"
 
-        for m in pr.models:
-            if m.alias == model:
-                if thinking not in m.thinking_modes:
-                    return f"thinking mode '{thinking}' not supported by model '{model}'"
-                break
+        thinking = tier_val.get("thinking", "disabled")
+        modes = registry_thinking.get((provider, model), [])
+        # "disabled" is always valid; non-disabled modes must be in the registry's list.
+        if thinking != "disabled" and thinking not in modes:
+            return f"thinking mode '{thinking}' not supported for {provider}/{model}"
 
     return None
 
@@ -321,7 +336,7 @@ async def api_start_run(r: Request) -> Response:
     log.debug("start-run task payload: %s", truncate_payload(task))
 
     # Block when no provider credentials are available (env-credential model).
-    if not any(pr.available for pr in st.runner_config.probe_results):
+    if not any(ps.available for ps in st.runner_config.provider_status):
         return JSONResponse(
             {"error": "no_providers",
              "message": "No provider credentials found. Set a provider API key "
@@ -426,7 +441,8 @@ async def api_start_run(r: Request) -> Response:
             # additional_dirs from app_state.run directly via driver_main, not here.
             "additional_dirs": st.run.additional_dirs,
             # Debug breadcrumb: the IDs passed on start-run. Not the delivery path;
-            # delivery uses RunState.start_attachments in koan_complete_step.
+            # the in-process loop no longer consumes start_attachments (the MCP
+            # handler that did was removed in M1).
             "attachments": attachments,
         },
     )
@@ -1104,13 +1120,28 @@ def _serialize_model_info(m) -> dict:
     }
 
 
-def _serialize_probe_result(pr: ProbeResult) -> dict:
+def _serialize_provider_status(ps: ProviderStatus) -> dict:
+    """Serialize ProviderStatus to a wire dict for API and event payloads.
+
+    Replaces _serialize_probe_result from M2; carrier is env-credential
+    availability only (no binary path, version, or model list).
+    """
     return {
-        "runner_type": pr.runner_type,
-        "available": pr.available,
-        "binary_path": pr.binary_path,
-        "version": pr.version,
-        "models": [_serialize_model_info(m) for m in pr.models],
+        "provider": ps.provider,
+        "available": ps.available,
+        "env_keys": ps.env_keys,
+    }
+
+
+def _serialize_model_registry_entry(e: ModelRegistryEntry) -> dict:
+    """Serialize ModelRegistryEntry to a wire dict for the model_registry_listed event."""
+    return {
+        "provider": e.provider,
+        "model": e.model,
+        "display_name": e.display_name,
+        "context_window": e.context_window,
+        "thinking_modes": e.thinking_modes,
+        "tier_hint": e.tier_hint,
     }
 
 
@@ -1132,36 +1163,52 @@ def _serialize_profile(p: Profile, read_only: bool) -> dict:
     }
 
 
-def _provider_probe_results(st: AppState) -> list[ProbeResult]:
-    """Report provider availability from env credentials (env-credential model,
-    replacing CLI-binary probing). A provider is available when its credential
-    env vars resolve; a koan ProviderAuth entry's env_keys override the default.
-    ProbeResult.runner_type carries the provider name here."""
+def _provider_probe_results(st: AppState) -> list[ProviderStatus]:
+    """Derive provider availability from env credentials (env-credential model).
+
+    Returns a ProviderStatus per known provider; available is True when all
+    required credential env vars are present. env_keys carries the var NAMES
+    checked (never values). Replaces the legacy CLI-binary probe from M2.
+    """
     from ..agents.adapter import DEFAULT_PROVIDER_ENV_KEYS, provider_available
-    cfg_keys = {pa.provider: pa.env_keys for pa in st.runner_config.config.provider_auth}
-    providers = set(DEFAULT_PROVIDER_ENV_KEYS) | set(cfg_keys)
+    cfg_keys: dict[str, list[str]] = {pa.provider: pa.env_keys for pa in st.runner_config.config.provider_auth}
+    providers = sorted(set(DEFAULT_PROVIDER_ENV_KEYS) | set(cfg_keys))
     return [
-        ProbeResult(runner_type=p, available=provider_available(p, cfg_keys.get(p)))
-        for p in sorted(providers)
+        ProviderStatus(
+            provider=p,
+            available=provider_available(p, cfg_keys.get(p)),
+            env_keys=cfg_keys.get(p) or DEFAULT_PROVIDER_ENV_KEYS.get(p, []),
+        )
+        for p in providers
     ]
 
 
 async def _refresh_probe_state(st: AppState, broadcast: bool = True) -> None:
-    """Refresh provider availability + built-in profiles (env-credential model).
+    """Refresh provider availability, built-in profiles, and model registry.
 
-    The CLI-binary probe + auto-created installations are retired: provider
-    availability now comes from credential env vars (_provider_probe_results),
-    and the built-in profiles are static provider specs (compute_builtin_profiles
-    ignores its argument). No config mutation -- nothing to persist here.
+    The CLI-binary probe is retired. Provider availability comes from credential
+    env vars (_provider_probe_results); built-in profiles are static Gemini specs
+    (compute_builtin_profiles takes no argument from M2); model_registry is built
+    from MODEL_CAPABILITIES + genai-prices bundled snapshot. No config mutation.
     """
     from ..agents.registry import compute_builtin_profiles
+    from ..agents.model_catalog import build_model_registry
 
-    st.runner_config.builtin_profiles = compute_builtin_profiles([])
-    st.runner_config.probe_results = _provider_probe_results(st)
+    st.runner_config.builtin_profiles = compute_builtin_profiles()
+    st.runner_config.provider_status = _provider_probe_results(st)
+    st.runner_config.model_registry = build_model_registry()
 
     if broadcast:
-        _avail = {pr.runner_type: pr.available for pr in st.runner_config.probe_results}
-        st.projection_store.push_event("probe_completed", build_probe_completed(_avail))
+        # M4: probe_completed event removed; installation fold cases deleted.
+        # Push provider_status and model_registry via the M2 channel.
+        st.projection_store.push_event(
+            "provider_status_listed",
+            build_provider_status_listed([_serialize_provider_status(ps) for ps in st.runner_config.provider_status]),
+        )
+        st.projection_store.push_event(
+            "model_registry_listed",
+            build_model_registry_listed([_serialize_model_registry_entry(e) for e in st.runner_config.model_registry]),
+        )
         for bp in st.runner_config.builtin_profiles.values():
             tiers = _serialize_profile(bp, True)["tiers"]
             st.projection_store.push_event(
@@ -1175,14 +1222,23 @@ def _push_initial_config_events(st: AppState) -> None:
 
     Called after _refresh_probe_state(broadcast=False) so all state is ready.
     Emits one event per config fact so the snapshot captures complete config.
-    Includes a workflows_listed event at the end that populates Settings.workflows
-    from the WORKFLOWS registry -- static for the process lifetime.
+    Includes workflows_listed, provider_status_listed, and model_registry_listed
+    events so Settings.* fields are uniformly populated from the fold.
     """
     store = st.projection_store
 
-    # Provider availability (env-credential model; keyed by provider name).
-    _avail = {pr.runner_type: pr.available for pr in st.runner_config.probe_results}
-    store.push_event("probe_completed", build_probe_completed(_avail))
+    # M4: probe_completed event removed; installation fold cases deleted.
+    # M2: provider availability via ProviderStatus (Settings.provider_status).
+    store.push_event(
+        "provider_status_listed",
+        build_provider_status_listed([_serialize_provider_status(ps) for ps in st.runner_config.provider_status]),
+    )
+
+    # M2: model registry (Settings.model_registry).
+    store.push_event(
+        "model_registry_listed",
+        build_model_registry_listed([_serialize_model_registry_entry(e) for e in st.runner_config.model_registry]),
+    )
 
     # Profiles (built-in first, then user-defined)
     for bp in st.runner_config.builtin_profiles.values():
@@ -1242,7 +1298,7 @@ async def api_probe(r: Request) -> Response:
     st = _app_state(r)
     if r.query_params.get("refresh", "") in ("1", "true"):
         await _refresh_probe_state(st)
-    runners = [_serialize_probe_result(pr) for pr in st.runner_config.probe_results]
+    runners = [_serialize_provider_status(ps) for ps in st.runner_config.provider_status]
     balanced = st.runner_config.builtin_profiles.get("balanced")
     balanced_json = _serialize_profile(balanced, True) if balanced else None
     return JSONResponse({"runners": runners, "balanced_profile": balanced_json})
@@ -1257,6 +1313,13 @@ async def api_profiles_list(r: Request) -> Response:
 
 
 async def api_profiles_create(r: Request) -> Response:
+    """Create a user-defined profile.
+
+    Accepts {name, tiers: {tier_name: {provider, model, thinking}}}. Tiers are
+    validated against provider_status (credential availability) and model_registry
+    ((provider, model) must be a catalogued entry). Each tier is stored as a
+    ProfileTier backed by a ModelSpec; context_window is resolved from the registry.
+    """
     body = await r.json()
     name = body.get("name", "")
     tiers_raw = body.get("tiers", {})
@@ -1283,20 +1346,31 @@ async def api_profiles_create(r: Request) -> Response:
             {"error": "validation_error", "message": "tiers must be an object"},
             status_code=422,
         )
-    err = _validate_profile_tiers(tiers_raw, st.runner_config.probe_results)
+    err = _validate_profile_tiers(tiers_raw, st.runner_config.provider_status, st.runner_config.model_registry)
     if err is not None:
         return JSONResponse(
             {"error": "validation_error", "message": err},
             status_code=422,
         )
 
+    # Build registry lookup for context_window resolution.
+    ctx_by_pair: dict[tuple[str, str], int] = {
+        (e.provider, e.model): e.context_window for e in st.runner_config.model_registry
+    }
     tiers = {}
     for tier_name, tier_val in tiers_raw.items():
+        provider = tier_val.get("provider", "")
+        model = tier_val.get("model", "")
+        thinking = tier_val.get("thinking", "disabled")
+        context_window = ctx_by_pair.get((provider, model), 0)
         tiers[tier_name] = ProfileTier(
-                runner_type=tier_val.get("runner_type", ""),
-                model=tier_val.get("model", ""),
-                thinking=tier_val.get("thinking", "disabled"),
+            model=ModelSpec(
+                provider=provider,
+                model=model,
+                thinking=thinking,
+                context_window=context_window,
             )
+        )
 
     new_profile = Profile(name=name, tiers=tiers)
     st.runner_config.config.profiles.append(new_profile)
@@ -1308,6 +1382,11 @@ async def api_profiles_create(r: Request) -> Response:
 
 
 async def api_profiles_update(r: Request) -> Response:
+    """Update the tiers of an existing user-defined profile.
+
+    Accepts {tiers: {tier_name: {provider, model, thinking}}}. Same validation
+    as api_profiles_create; tiers are rebuilt from ModelSpec on each update.
+    """
     name = r.path_params["name"]
     if name in _app_state(r).runner_config.builtin_profiles:
         return JSONResponse(
@@ -1331,16 +1410,26 @@ async def api_profiles_update(r: Request) -> Response:
             {"error": "validation_error", "message": "tiers must be an object"},
             status_code=422,
         )
-    err = _validate_profile_tiers(tiers_raw, st.runner_config.probe_results)
+    err = _validate_profile_tiers(tiers_raw, st.runner_config.provider_status, st.runner_config.model_registry)
     if err is not None:
         return JSONResponse({"error": "validation_error", "message": err}, status_code=422)
 
+    ctx_by_pair: dict[tuple[str, str], int] = {
+        (e.provider, e.model): e.context_window for e in st.runner_config.model_registry
+    }
     new_tiers = {}
     for tier_name, tier_val in tiers_raw.items():
+        provider = tier_val.get("provider", "")
+        model = tier_val.get("model", "")
+        thinking = tier_val.get("thinking", "disabled")
+        context_window = ctx_by_pair.get((provider, model), 0)
         new_tiers[tier_name] = ProfileTier(
-            runner_type=tier_val.get("runner_type", ""),
-            model=tier_val.get("model", ""),
-            thinking=tier_val.get("thinking", "disabled"),
+            model=ModelSpec(
+                provider=provider,
+                model=model,
+                thinking=thinking,
+                context_window=context_window,
+            )
         )
     target.tiers = new_tiers
 
@@ -1381,149 +1470,78 @@ async def api_profiles_delete(r: Request) -> Response:
     return JSONResponse({"ok": True})
 
 
-# -- Agent installation endpoints ---------------------------------------------
+# -- Provider validation endpoint ---------------------------------------------
 
-async def api_agents_list(r: Request) -> Response:
-    st = _app_state(r)
-    installations = [
-        {
-            "alias": inst.alias,
-            "runner_type": inst.runner_type,
-            "binary": inst.binary,
-            "extra_args": inst.extra_args,
-        }
-        for inst in st.runner_config.config.agent_installations
-    ]
-    return JSONResponse({"installations": installations})
+async def api_validate_provider(r: Request) -> Response:
+    """Local construction check for a provider credential.
 
+    POST {provider: str}. Picks a registry entry for the provider (preferring
+    tier_hint=="strong", else first), checks credential availability via
+    provider_available (env-credential model), then constructs the pydantic-ai
+    Model object via build_model inside a try/except AgentError. This is a local
+    construction check only -- no live provider call is made.
 
-async def api_agents_create(r: Request) -> Response:
+    Returns {"valid": True} on success or {"valid": False, "reason": str} on
+    failure (missing credential, AgentError, or provider not in registry).
+    """
     body = await r.json()
-    alias = body.get("alias", "")
-    runner_type = body.get("runner_type", "")
-    binary = body.get("binary", "")
-    extra_args = body.get("extra_args", [])
-
-    if not isinstance(alias, str) or not alias.strip():
+    provider = body.get("provider", "")
+    if not isinstance(provider, str) or not provider:
         return JSONResponse(
-            {"error": "validation_error", "message": "alias is required"},
-            status_code=422,
-        )
-    if not isinstance(runner_type, str) or not runner_type.strip():
-        return JSONResponse(
-            {"error": "validation_error", "message": "runner_type is required"},
-            status_code=422,
-        )
-    if not isinstance(binary, str) or not binary.strip():
-        return JSONResponse(
-            {"error": "validation_error", "message": "binary is required"},
+            {"valid": False, "reason": "provider is required"},
             status_code=422,
         )
 
     st = _app_state(r)
-    if any(inst.alias == alias for inst in st.runner_config.config.agent_installations):
+    # Pick one registry entry for this provider (strong-tier preferred, else first).
+    entries = [e for e in st.runner_config.model_registry if e.provider == provider]
+    if not entries:
         return JSONResponse(
-            {"error": "validation_error", "message": f"alias '{alias}' already exists"},
+            {"valid": False, "reason": f"no registry entry for provider '{provider}'"},
             status_code=422,
         )
-
-    if not isinstance(extra_args, list):
-        extra_args = []
-
-    clean_args = [str(a) for a in extra_args]
-    st.runner_config.config.agent_installations.append(AgentInstallation(
-        alias=alias, runner_type=runner_type, binary=binary,
-        extra_args=clean_args,
-    ))
-    from ..config import save_koan_config
-    await save_koan_config(st.runner_config.config)
-    st.projection_store.push_event(
-        "installation_created",
-        build_installation_created(alias, runner_type, binary, clean_args),
+    entry = next((e for e in entries if e.tier_hint == "strong"), entries[0])
+    spec = ModelSpec(
+        provider=provider,
+        model=entry.model,
+        thinking="disabled",
+        context_window=entry.context_window,
     )
-    return JSONResponse({"ok": True})
+
+    # Credential check first: a missing credential must always report invalid,
+    # independent of build_model's internal error path, to give a clear message.
+    from ..agents.adapter import provider_available, build_model
+    from ..agents.base import AgentError
+    if not provider_available(provider):
+        return JSONResponse({"valid": False, "reason": f"no credential for {provider}"})
+
+    try:
+        build_model(spec)
+        return JSONResponse({"valid": True})
+    except AgentError as e:
+        return JSONResponse({"valid": False, "reason": e.diagnostic.message})
 
 
-async def api_agents_update(r: Request) -> Response:
-    alias = r.path_params["alias"]
-    st = _app_state(r)
-    target = None
-    for inst in st.runner_config.config.agent_installations:
-        if inst.alias == alias:
-            target = inst
-            break
-    if target is None:
-        return JSONResponse({"error": "not_found", "message": f"installation '{alias}' not found"}, status_code=404)
-
-    body = await r.json()
-    if "binary" in body:
-        target.binary = body["binary"]
-    if "runner_type" in body:
-        target.runner_type = body["runner_type"]
-    if "extra_args" in body:
-        ea = body["extra_args"]
-        target.extra_args = [str(a) for a in ea] if isinstance(ea, list) else []
-
-    from ..config import save_koan_config
-    await save_koan_config(st.runner_config.config)
-    st.projection_store.push_event(
-        "installation_modified",
-        build_installation_modified(target.alias, target.runner_type, target.binary, target.extra_args),
-    )
-    return JSONResponse({"ok": True})
-
-
-async def api_agents_delete(r: Request) -> Response:
-    alias = r.path_params["alias"]
-    st = _app_state(r)
-    idx = None
-    for i, inst in enumerate(st.runner_config.config.agent_installations):
-        if inst.alias == alias:
-            idx = i
-            break
-    if idx is None:
-        return JSONResponse({"error": "not_found", "message": f"installation '{alias}' not found"}, status_code=404)
-
-    st.runner_config.config.agent_installations.pop(idx)
-
-    from ..config import save_koan_config
-    await save_koan_config(st.runner_config.config)
-    st.projection_store.push_event("installation_removed", build_installation_removed(alias))
-    return JSONResponse({"ok": True})
-
-
-async def api_agents_detect(r: Request) -> Response:
-    runner_type = r.query_params.get("runner_type", "")
-    if not runner_type:
-        return JSONResponse(
-            {"error": "validation_error", "message": "runner_type query parameter is required"},
-            status_code=422,
-        )
-    result = shutil.which(runner_type)
-    return JSONResponse({"path": result})
+# /api/agents (GET) removed in M4: api_agents_list deleted; installation concept
+# fully removed. All prior installation endpoints were removed in M3.
 
 
 # -- Settings JSON endpoints --------------------------------------------------
 
 async def api_settings_body(r: Request) -> Response:
+    """Return the settings page payload.
+
+    M3: installations array removed (installation concept deleted; config shim
+    and projection field stay until Milestone 4). Response is {profiles, scoutConcurrency}.
+    """
     st = _app_state(r)
 
     profiles = [_serialize_profile(bp, True) for bp in st.runner_config.builtin_profiles.values()]
     for p in st.runner_config.config.profiles:
         profiles.append(_serialize_profile(p, False))
 
-    installations = []
-    for inst in st.runner_config.config.agent_installations:
-        installations.append({
-            "alias": inst.alias,
-            "runner_type": inst.runner_type,
-            "binary": inst.binary,
-            "extra_args": inst.extra_args,
-        })
-
     return JSONResponse({
         "profiles": profiles,
-        "installations": installations,
         "scoutConcurrency": st.runner_config.config.scout_concurrency,
     })
 
@@ -1535,7 +1553,7 @@ async def api_settings_profile_form(r: Request) -> Response:
     is_edit = r.query_params.get("edit", "0") == "1"
 
     available_runners = [
-        _serialize_probe_result(pr) for pr in st.runner_config.probe_results if pr.available
+        _serialize_provider_status(ps) for ps in st.runner_config.provider_status if ps.available
     ]
 
     tiers: dict = {}
@@ -1553,35 +1571,6 @@ async def api_settings_profile_form(r: Request) -> Response:
         "isEdit": is_edit,
     })
 
-
-async def api_settings_installation_form(r: Request) -> Response:
-    st = _app_state(r)
-
-    alias = r.query_params.get("alias", "")
-    is_edit = r.query_params.get("edit", "0") == "1"
-
-    # Use ALL runners, not just available ones
-    all_runners = [_serialize_probe_result(pr) for pr in st.runner_config.probe_results]
-
-    runner_type = ""
-    binary = ""
-    extra_args: list = []
-    if is_edit and alias:
-        for inst in st.runner_config.config.agent_installations:
-            if inst.alias == alias:
-                runner_type = inst.runner_type
-                binary = inst.binary
-                extra_args = inst.extra_args
-                break
-
-    return JSONResponse({
-        "alias": alias,
-        "runnerType": runner_type,
-        "binary": binary,
-        "extraArgs": extra_args,
-        "allRunners": all_runners,
-        "isEdit": is_edit,
-    })
 
 
 async def api_settings_scout_concurrency(r: Request) -> Response:
@@ -1665,26 +1654,16 @@ async def api_sessions_delete(r: Request) -> Response:
 
 # -- App factory --------------------------------------------------------------
 
-def _build_mcp(app_state: AppState):
-    from .mcp_endpoint import build_mcp_asgi_app
-    wrapper, inner = build_mcp_asgi_app(app_state)
-    # Stash the inner StarletteWithLifespan so the parent lifespan can
-    # enter it (StreamableHTTPSessionManager needs its task-group running).
-    wrapper._mcp_inner = inner  # type: ignore[attr-defined]
-    return wrapper
-
-
 def create_app(app_state: AppState) -> Starlette:
-    # Build the MCP sub-app early so we can wire its lifespan.
-    mcp_app = _build_mcp(app_state)
+    # /mcp removed in M1: tools run in-process via the koan FunctionToolset.
+    # No MCP sub-app to build or wire a lifespan for.
 
     @asynccontextmanager
     async def lifespan(app):
         """Manage server-lifetime resources for the Starlette application.
 
         Startup: initialise upload state, refresh probes, push initial config
-        events, optionally open the browser, then enter the MCP sub-app
-        lifespan so the StreamableHTTPSessionManager task-group is running.
+        events, optionally open the browser.
         Shutdown: terminate active agent processes and release the upload
         tempdir.  Driver tasks are NOT created here; they are spawned
         per-run by api_start_run.
@@ -1707,10 +1686,7 @@ def create_app(app_state: AppState) -> Starlette:
 
             asyncio.create_task(_open_browser())
 
-        # Enter the fastmcp app's lifespan so the
-        # StreamableHTTPSessionManager task-group is running.
-        async with mcp_app._mcp_inner.lifespan(app):  # type: ignore[attr-defined]
-            yield
+        yield
 
         # -- Shutdown: cancel in-process subagent tasks ------------------------
         # In-process executor/scout tasks (M6) are cancelled first so their
@@ -1723,36 +1699,15 @@ def create_app(app_state: AppState) -> Starlette:
             await asyncio.gather(*tasks.values(), return_exceptions=True)
             log.info("shutdown: in-process subagent tasks cancelled")
 
-        # -- Shutdown: kill all active agent processes -------------------------
-        procs = dict(app_state._active_processes)
-        if procs:
-            log.info("shutdown: terminating %d active agent(s)…", len(procs))
-            for aid, proc in procs.items():
-                try:
-                    proc.terminate()
-                except ProcessLookupError:
-                    pass  # already dead
-
-            # Give agents a few seconds to exit cleanly
-            async def _wait_proc(aid: str, proc: asyncio.subprocess.Process) -> None:
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=5.0)
-                except asyncio.TimeoutError:
-                    log.warning("shutdown: agent %s did not exit in time, killing", aid)
-                    try:
-                        proc.kill()
-                    except ProcessLookupError:
-                        pass
-
-            await asyncio.gather(*[_wait_proc(a, p) for a, p in procs.items()])
-            log.info("shutdown: all agents stopped")
+        # M4: _active_processes shutdown block removed -- the legacy CLI subprocess
+        # registration path is deleted; in-process agents have no subprocess to kill.
 
         # Clean up the upload tempdir after all agents have stopped so any
         # in-flight request that still holds a record path has time to finish.
         shutdown_upload_state(app_state.uploads)
 
     routes = [
-        Mount("/mcp", app=mcp_app),
+        # /mcp removed: tools run in-process via the koan FunctionToolset.
         Route("/api/start-run", api_start_run, methods=["POST"]),
         Route("/api/run/clear", api_run_clear, methods=["POST"]),
         Route("/api/start-run/preflight", api_start_run_preflight, methods=["GET"]),
@@ -1775,15 +1730,11 @@ def create_app(app_state: AppState) -> Starlette:
         Route("/api/profiles", api_profiles_create, methods=["POST"]),
         Route("/api/profiles/{name}", api_profiles_update, methods=["PUT"]),
         Route("/api/profiles/{name}", api_profiles_delete, methods=["DELETE"]),
-        Route("/api/agents", api_agents_list, methods=["GET"]),
-        Route("/api/agents", api_agents_create, methods=["POST"]),
-        Route("/api/agents/detect", api_agents_detect, methods=["GET"]),
-        Route("/api/agents/{alias}", api_agents_update, methods=["PUT"]),
-        Route("/api/agents/{alias}", api_agents_delete, methods=["DELETE"]),
+        # /api/agents removed in M4: installation concept fully deleted.
         Route("/api/settings/body", api_settings_body, methods=["GET"]),
         Route("/api/settings/scout-concurrency", api_settings_scout_concurrency, methods=["PUT"]),
         Route("/api/settings/profile-form", api_settings_profile_form, methods=["GET"]),
-        Route("/api/settings/installation-form", api_settings_installation_form, methods=["GET"]),
+        Route("/api/settings/validate-provider", api_validate_provider, methods=["POST"]),
         Route("/api/initial-prompt", api_initial_prompt, methods=["GET"]),
         Route("/api/sessions", api_sessions_list, methods=["GET"]),
         Route("/api/sessions/{run_id}", api_sessions_delete, methods=["DELETE"]),
