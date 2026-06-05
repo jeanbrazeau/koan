@@ -1,20 +1,17 @@
 # Agent Protocol, AgentOptions, AgentDiagnostic, and AgentError.
 # Public API for the koan.agents package.
 #
-# StreamEvent lives in koan.runners.base (it is the long-standing
-# runner-to-driver contract). It is NOT imported here at module level to
-# avoid a circular import: codex.py and gemini.py import AgentDiagnostic
-# from this module, and if this module imported from koan.runners.* it would
-# trigger koan/runners/__init__.py which loads codex/gemini before this
-# module finishes initializing. Callers import StreamEvent directly from
-# koan.runners.base.
+# M4: AgentInstallation, ModelInfo, list_models, mcp_url, available_tools,
+# allowed_tools, and installation removed -- the legacy CLI/SDK agent path is
+# deleted; the in-process PydanticAI path uses model_spec directly.
+# StreamEvent lives in koan.agents.events (relocated from koan.runners.base).
 
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, AsyncIterator, Protocol, runtime_checkable
 
-from ..types import AgentInstallation, ModelInfo, SubagentRole, ThinkingMode
+from ..types import SubagentRole, ThinkingMode
 
 if TYPE_CHECKING:
     from .events import StreamEvent
@@ -27,9 +24,9 @@ class AgentDiagnostic:
     """Structured diagnostic emitted when an agent fails at any lifecycle stage.
 
     Fields:
-        code: machine-readable error code (e.g. bootstrap_failure, binary_not_found)
-        agent: agent type name -- 'claude', 'codex', 'gemini', or 'fake' in tests
-        stage: lifecycle stage where the failure occurred (connect, spawn, stream, handshake)
+        code: machine-readable error code (e.g. bootstrap_failure)
+        agent: agent type name -- 'pydantic_ai' or 'fake' in tests
+        stage: lifecycle stage where the failure occurred (spawn, stream, handshake)
         message: human-readable description
         details: optional free-form dict for extra context
     """
@@ -59,26 +56,27 @@ class AgentError(RuntimeError):
 class AgentOptions:
     """All configuration needed to run one agent for its full lifetime.
 
-    Constructed by spawn_subagent from the resolved profile, role, run state,
-    and MCP server URL. Consumed once by Agent.run(); never mutated.
+    Constructed by spawn_subagent from the resolved profile, role, and run
+    state. Consumed once by Agent.run(); never mutated.
+
+    M4: mcp_url, available_tools, allowed_tools, and installation removed --
+    the HTTP MCP transport and CLI/SDK agent path are deleted. PydanticAIAgent
+    reads model_spec directly and has no use for these fields.
 
     Fields:
         role: subagent role (orchestrator, executor, scout)
-        agent_id: UUID string used in the MCP URL query string
-        model: model alias resolved by the registry (e.g. 'sonnet', 'gpt-5')
+        agent_id: UUID string identifying this agent instance
+        model: model id resolved from the active profile's ModelSpec
         thinking: thinking mode (disabled / low / medium / high / xhigh)
         system_prompt: role-specific system prompt
-        boot_prompt: one-sentence boot directive (step-first protocol)
-        mcp_url: full HTTP MCP URL including ?agent_id= query string
-        available_tools: Claude-side tool whitelist (--tools flag)
-        allowed_tools: auto-approved subset (--allowedTools flag)
-        project_dir: project root directory; mounted as --add-dir for Claude
-        run_dir: koan run directory; mounted as --add-dir for Claude
+        project_dir: project root directory
+        run_dir: koan run directory
         additional_dirs: extra directories requested at run start
-        cwd: working directory for the spawned subprocess
-        permission_mode: 'acceptEdits' for Claude; ignored by other runners
-        installation: resolved binary path and extra_args
+        cwd: working directory context
         extras: per-agent-class escape hatch for implementation-specific overrides
+
+    boot_prompt removed in M6: the loop bootstrap calls _step_phase_handshake_core
+    directly as the first turn's prompt; no one-sentence boot directive is needed.
     """
 
     role: SubagentRole
@@ -86,16 +84,10 @@ class AgentOptions:
     model: str | None
     thinking: ThinkingMode | None
     system_prompt: str
-    boot_prompt: str
-    mcp_url: str
-    available_tools: list[str] = field(default_factory=list)
-    allowed_tools: list[str] = field(default_factory=list)
     project_dir: str = ""
     run_dir: str = ""
     additional_dirs: list[str] = field(default_factory=list)
     cwd: str = ""
-    permission_mode: str = "acceptEdits"
-    installation: AgentInstallation | None = None
     extras: dict[str, Any] = field(default_factory=dict)
 
 
@@ -105,62 +97,40 @@ class AgentOptions:
 class Agent(Protocol):
     """Contract every agent implementation must satisfy.
 
-    An agent manages the full lifetime of one model process or SDK client.
-    The driver calls run(options) once per agent lifetime and iterates the
-    returned async iterator until it terminates. The iterator terminates when
-    the agent reaches a terminal signal (success or failure).
+    An agent manages the full lifetime of one in-process model run.
+    spawn_subagent calls run(options) once per agent lifetime and iterates
+    the returned async iterator until it terminates.
 
-    Unsupported primitives raise NotImplementedError. This is the explicit
-    contract: callers that wish to interrupt or compact must be prepared
-    for NotImplementedError if the underlying agent does not support it.
+    Unsupported primitives raise NotImplementedError. Callers that wish to
+    interrupt or compact must be prepared for NotImplementedError.
 
-    The subprocess-shaped members (register_process / exit_code /
-    stderr_output) were dropped in the M9 rip-out: the in-process PydanticAI
-    path has no subprocess, and spawn_subagent now derives success/failure from
-    a raised AgentError (or the handshake check), not from a process exit code.
+    M4: list_models removed -- the probe path that called it is deleted.
+    The in-process path resolves the model catalog via model_catalog.py, not
+    by shelling out to a binary.
     """
 
-    name: str  # 'claude', 'codex', 'gemini', or 'fake' in tests
+    name: str  # 'pydantic_ai' or 'fake' in tests
 
     async def run(self, options: AgentOptions) -> AsyncIterator[StreamEvent]:
         """Run the agent and stream events until the terminal signal.
 
-        The iterator yields StreamEvents in the same vocabulary as today's
-        koan/runners -- tool_start, tool_input_delta, tool_stop, token_delta,
-        thinking, assistant_text, tool_result, turn_complete. Downstream
-        consumers (spawn_subagent's event fan-out) do not care which agent
+        Yields StreamEvents in the 8-type vocabulary (tool_start, tool_input_delta,
+        tool_stop, token_delta, thinking, assistant_text, tool_result, turn_complete).
+        Downstream consumers (spawn_subagent's event fan-out) do not care which agent
         class produced the event.
-
-        The iterator terminates when the agent's underlying transport reaches
-        a terminal signal (ResultMessage on the SDK side, EOF on the subprocess
-        side). After termination, exit_code and stderr_output are populated.
         """
         ...
 
     async def interrupt(self) -> None:
         """Interrupt the agent's current generation.
 
-        Raises NotImplementedError on agents that do not support interruption
-        (CommandLineAgent, and -- in M1 -- the interim Claude adapter).
-        ClaudeSDKAgent (M2) will implement this by calling ClaudeSDKClient.interrupt().
+        Raises NotImplementedError when the agent does not support interruption.
         """
         ...
 
     async def compact(self) -> None:
         """Trigger a context compaction.
 
-        Raises NotImplementedError everywhere in M1 and on CommandLineAgent.
-        The Claude Agent SDK does not yet expose a programmatic compact() surface;
-        when it does, ClaudeSDKAgent (M2+) will implement this.
-        """
-        ...
-
-    @classmethod
-    def list_models(cls, installation: AgentInstallation) -> list[ModelInfo]:
-        """Return the model list for the given installation.
-
-        Classmethod -- called by the probe path without instantiating a full
-        agent (which for command-line agents would require spawning a process).
-        Claude returns a hardcoded list; codex and gemini shell out to the binary.
+        Raises NotImplementedError when the agent does not support compaction.
         """
         ...

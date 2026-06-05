@@ -1,10 +1,10 @@
-# Public API for koan.agents -- the Agent abstraction (Protocol) and its
-# implementations. The CommandLineAgent wraps Runner instances from
-# koan.runners; ClaudeSDKAgent wraps the Claude Agent SDK.
+# Public API for koan.agents -- the Agent abstraction (Protocol) and the
+# PydanticAI in-process implementation.
+#
+# M4: ClaudeSDKAgent and CommandLineAgent removed -- the CLI/SDK agent path is
+# deleted. The only implementation is PydanticAIAgent (koan/agents/pydantic_ai.py).
 
 from .base import Agent, AgentDiagnostic, AgentError, AgentOptions
-from .claude import ClaudeSDKAgent
-from .command_line import CommandLineAgent
 from .registry import AgentRegistry, compute_balanced_profile, compute_builtin_profiles
 
 __all__ = [
@@ -12,8 +12,6 @@ __all__ = [
     "AgentDiagnostic",
     "AgentError",
     "AgentOptions",
-    "ClaudeSDKAgent",
-    "CommandLineAgent",
     "AgentRegistry",
     "compute_balanced_profile",
     "compute_builtin_profiles",

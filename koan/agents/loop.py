@@ -183,6 +183,69 @@ def assemble_resume_prompt(
     return turn_prompt, manifest
 
 
+# -- Turn-outcome resolver -----------------------------------------------------
+
+
+async def resolve_turn_outcome(
+    agent_state: "AgentState",
+    app_state: "AppState",
+) -> "tuple[str, str | None]":
+    """Determine what happens after each turn ends (the End node is reached).
+
+    Returns one of three outcomes:
+      ("inject", prompt)    -- inject prompt as the next turn's user message;
+                               either a new phase's step-1 guidance (step==0)
+                               or the next within-phase step's guidance.
+      ("handback", None)    -- primary agent, phase steps exhausted; the caller
+                               falls through to the yield_started / park / resume
+                               hand-back block.
+      ("terminate", None)   -- non-primary agent (scout/executor), steps exhausted;
+                               the caller returns.
+
+    Position-based rule:
+      - step==0 means a koan_set_phase (or koan_set_workflow) this turn reset the
+        counter, or we are entering the agent's initial phase. Run the step-0->1
+        handshake to deliver the new phase's first step.
+      - Otherwise, validate the current step; re-inject it on a non-empty error.
+      - If the next step exists, inject its guidance.
+      - If no next step remains, hand back (primary) or terminate (non-primary).
+
+    Function-local imports of the step-machine cores avoid a module-level import
+    cycle: koan_tools imports from subagent (indirectly via events/state), while
+    loop.py is imported by pydantic_ai.py which is imported by subagent.py.
+    """
+    phase_module = agent_state.phase_module
+    ctx = agent_state.phase_ctx
+
+    # Phase-transition case: step==0 means the phase just changed (or initial entry).
+    # Run the handshake to deliver the new phase's step-1 guidance.
+    if agent_state.step == 0:
+        from ..tools.koan_tools import _step_phase_handshake_core
+        prompt = await _step_phase_handshake_core(agent_state, app_state)
+        return ("inject", prompt)
+
+    # Completion gate: validate the step the agent just finished.
+    # A non-empty error re-injects the same step so the agent can correct.
+    err = phase_module.validate_step_completion(agent_state.step, ctx)
+    if err:
+        from ..phases.format_step import format_step
+        guidance = phase_module.step_guidance(agent_state.step, ctx)
+        return ("inject", f"{err}\n\n{format_step(guidance)}")
+
+    # Advance: ask the phase module for the next step.
+    next_step = phase_module.get_next_step(agent_state.step, ctx)
+    if next_step is None:
+        # Steps exhausted: primary agents hand back to the user; non-primary terminate.
+        if agent_state.is_primary:
+            return ("handback", None)
+        return ("terminate", None)
+
+    # Normal within-phase advancement: inject the next step's guidance.
+    from ..tools.koan_tools import _step_within_phase_core
+    prompt = await _step_within_phase_core(agent_state, app_state, phase_module, ctx, next_step)
+    return ("inject", prompt)
+
+
 # -- Multi-turn loop -----------------------------------------------------------
 
 
@@ -195,18 +258,28 @@ async def run_agent_loop(
 ) -> AsyncIterator[StreamEvent]:
     """Drive the multi-turn agent loop, yielding StreamEvents for spawn_subagent.
 
-    Each iteration is one agent.iter() run (one "turn"). The loop terminates
-    when:
-      - app_state.run.workflow_done is True (after koan_set_phase("done")), OR
-      - agent_state.is_primary is False (scouts/executors run one turn and exit).
+    Each iteration is one agent.iter() run (one "turn"). The loop uses a
+    per-step-turn model: each turn delivers exactly one step's work, and ending
+    a turn (the End node) triggers resolve_turn_outcome which determines what
+    happens next.
+
+    Bootstrap: before the while loop, _step_phase_handshake_core runs the step
+    0->1 handshake for the initial phase. The returned guidance string is the
+    first turn's prompt. This replaces the removed boot-directive tool call.
 
     At each turn end (End node):
-      - If workflow_done: terminate.
-      - If is_primary: terminal-text hand-back -- emit yield_started, park on
-        yield_future (resolved by api_chat), drain user messages, and re-run with
-        the user message as the next prompt. Under yolo, synthesize the prompt
-        from _directed_yolo_response or _yolo_yield_response without parking.
-      - Else (scout/executor): terminate.
+      - Mark first_turn_completed (idempotent; the bootstrap-failure signal).
+      - If workflow_done (set by koan_set_phase("done")): terminate.
+      - Call resolve_turn_outcome(agent_state, app_state):
+          "inject"   -> set turn_prompt = payload and continue to the next turn.
+          "terminate" -> non-primary agent, steps exhausted; return.
+          "handback"  -> primary agent, steps exhausted; fall through to the
+                         yield_started / park / resume hand-back block.
+
+    Ending a turn mid-phase advances to the next step (resolver injects it).
+    Only step-exhaustion for a primary agent reaches the hand-back.
+    The hand-back block sources suggestions from koan_suggest_next if recorded,
+    falling back to build_phase_suggestions.
 
     Steering injection: after each CallToolsNode completes, drain_and_render_steering
     is called. Non-empty result is injected via agent_run.enqueue() which delivers
@@ -221,7 +294,7 @@ async def run_agent_loop(
         pai_agent: The pydantic-ai Agent instance (already constructed with
                    toolsets, capabilities, and model settings).
         deps: ToolDeps(app_state, agent_state) -- passed to agent.iter(deps=).
-        options: AgentOptions carrying boot_prompt, system_prompt, and role.
+        options: AgentOptions carrying system_prompt and role.
         app_state: Live AppState for interaction state and projection events.
         agent_state: AgentState for history, is_primary, and identity.
 
@@ -243,8 +316,11 @@ async def run_agent_loop(
 
     from .events import StreamEvent
 
-    # First turn uses the boot_prompt; subsequent turns use the user's reply.
-    turn_prompt: str | None = options.boot_prompt
+    # Bootstrap: run the step-0->1 handshake to build the first turn's prompt.
+    # This sets agent_state.step=1, runs memory injection, and prepends
+    # PHASE_ROLE_CONTEXT -- replacing the removed boot-directive tool call.
+    from ..tools.koan_tools import _step_phase_handshake_core
+    turn_prompt: str = await _step_phase_handshake_core(agent_state, app_state)
 
     while True:
         # Pass accumulated history so the model has full conversation context.
@@ -368,27 +444,45 @@ async def run_agent_loop(
             # Persist the full conversation so the next turn has complete context.
             agent_state.message_history = list(agent_run.all_messages())
 
+        # Mark first turn completed -- idempotent; the bootstrap-failure signal
+        # that replaces the removed first-tool-call handshake.
+        agent_state.first_turn_completed = True
+
         # Termination check: workflow completed via koan_set_phase("done").
         if app_state.run.workflow_done:
             return
 
-        # Non-primary agents (scouts/executors) run exactly one turn and exit.
-        # They do not park; their result is the final_response in agent_state.
-        if not agent_state.is_primary:
+        # Invoke the turn-outcome resolver. Ending a turn mid-phase advances
+        # to the next step (inject); only step-exhaustion for a primary agent
+        # reaches the hand-back; non-primary terminates at exhaustion.
+        outcome, payload = await resolve_turn_outcome(agent_state, app_state)
+
+        if outcome == "inject":
+            # Next step's guidance ready: re-enter the loop with it as the prompt.
+            turn_prompt = payload  # type: ignore[assignment]
+            continue
+
+        if outcome == "terminate":
+            # Non-primary agent (scout/executor) -- steps exhausted. Return cleanly.
             return
 
+        # outcome == "handback": primary agent, phase steps exhausted.
+        # Fall through to the hand-back block below.
+
         # Primary orchestrator: terminal-text hand-back.
-        # Emit yield_started so the UI renders the hand-back card, with the
-        # structured next-phase suggestions derived from the workflow (M7.5 --
-        # restores the YieldPanel options koan_yield used to carry, without
-        # requiring the model to call a tool at the hand-back).
+        # Source suggestions from koan_suggest_next if recorded, falling back to
+        # the deterministic workflow-derived list. Clear the recorded suggestions
+        # after consuming them so stale data cannot bleed into the next hand-back.
         from ..events import build_yield_started
         from ..lib.workflows import build_phase_suggestions
         workflow = app_state.run.workflow
+        recorded = app_state.interactions.next_suggestions
         suggestions = (
-            build_phase_suggestions(workflow, app_state.run.phase)
-            if workflow is not None else []
+            recorded if recorded
+            else (build_phase_suggestions(workflow, app_state.run.phase) if workflow is not None else [])
         )
+        app_state.interactions.next_suggestions = None  # clear after consume
+
         app_state.projection_store.push_event(
             "yield_started",
             build_yield_started(suggestions),
@@ -398,12 +492,13 @@ async def run_agent_loop(
         if app_state.server.yolo:
             # Yolo mode: synthesize the next user message instead of parking.
             # Directed mode steers toward the next phase in the sequence; plain
-            # yolo picks from the yield suggestions (none here, so "proceed").
+            # yolo picks from the resolved suggestions so orchestrator-authored
+            # commands are honored even in yolo.
             directed = app_state.server.directed_phases
             if directed is not None:
                 turn_prompt = _directed_yolo_response(directed, app_state.run.phase)
             else:
-                turn_prompt = _yolo_yield_response(None)
+                turn_prompt = _yolo_yield_response(suggestions)
         else:
             # Interactive mode: park on yield_future until api_chat resolves it.
             # Reentry guard: if a prior yield is somehow still pending (should not

@@ -8,23 +8,20 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from ..logger import get_logger
-from ..probe import ProbeResult
 from ..types import (
     BUILTIN_PROFILE_NAMES,
     ROLE_MODEL_TIER,
-    CachingPolicy,
     ModelSpec,
     ModelTier,
     Profile,
     ProfileTier,
     ThinkingMode,
 )
-from .base import Agent, AgentDiagnostic, AgentError
-from .command_line import CommandLineAgent
+from .base import AgentDiagnostic, AgentError
+# CommandLineAgent removed in M4; get_agent deleted.
 
 if TYPE_CHECKING:
     from ..config import KoanConfig
-    from ..state import AppState
     from ..types import SubagentRole
 
 log = get_logger("agent_registry")
@@ -40,9 +37,12 @@ _GEMINI_TIER_SPECS: dict[ModelTier, tuple[str, ThinkingMode, int]] = {
     # (model_id, thinking, context_window). IDs must be valid google-GLA model
     # names: versioned names take no "-latest" suffix (gemini-2.5-pro, not
     # gemini-2.5-pro-latest -> 404); only unversioned names do (gemini-flash-lite-latest).
-    "strong":   ("gemini-2.5-pro",            "high",     1_000_000),
-    "standard": ("gemini-2.5-flash",          "medium",   1_000_000),
-    "cheap":    ("gemini-flash-lite-latest",  "disabled", 1_000_000),
+    # Note: the cheap tier uses "gemini-2.5-flash-lite" (versioned, resolves in
+    # genai-prices snapshot) rather than "gemini-flash-lite-latest" (unversioned alias
+    # that does not appear in the genai-prices catalog); both are valid GLA model names.
+    "strong":   ("gemini-2.5-pro",        "high",     1_000_000),
+    "standard": ("gemini-2.5-flash",      "medium",   1_000_000),
+    "cheap":    ("gemini-2.5-flash-lite", "disabled", 1_000_000),
 }
 
 _TIER_DEFAULT_THINKING: dict[ModelTier, ThinkingMode] = {
@@ -69,61 +69,16 @@ def _best_supported_thinking(
 # -- AgentRegistry -------------------------------------------------------------
 
 class AgentRegistry:
-    """Resolves agent configuration and constructs Agent instances for a role.
+    """Resolves agent configuration for a role.
 
-    Replaces RunnerRegistry from koan/runners/registry.py. Post-M1 the primary
-    resolution path is resolve_model_spec (provider-based). get_agent is
-    orphaned pending the M2 rewire.
+    M4: get_agent deleted -- the legacy CLI/SDK agent path is removed; spawn_subagent
+    always constructs a PydanticAIAgent directly. resolve_model_spec remains as the
+    primary resolution path.
     """
 
-    def get_agent(
-        self,
-        runner_type: str,
-        subagent_dir: str,
-        app_state: AppState | None = None,
-    ) -> Agent:
-        """Construct and return an Agent for the given runner_type.
-
-        Orphaned after the M1 config reshape -- the legacy spawn path is rewired
-        to PydanticAIAgent in M2 and this method is deleted at the M9 rip-out.
-        Retained so tests that inject agent_impl directly still compile.
-
-        Raises AgentError with code 'unknown_runner_type' for unrecognized types.
-        Raises AgentError with code 'missing_app_state' when claude is requested
-        without app_state.
-        """
-        # M2 seam: this branch constructs the legacy SDK/CLI agents. Once M2 is
-        # complete PydanticAIAgent is used instead and this method is deleted.
-        if runner_type == "claude":
-            from .claude import ClaudeSDKAgent  # lazy -- avoids circular import
-            if app_state is None:
-                raise AgentError(AgentDiagnostic(
-                    code="missing_app_state",
-                    agent="claude",
-                    stage="get_agent",
-                    message="ClaudeSDKAgent requires app_state for the PostToolUse hook closure.",
-                ))
-            return ClaudeSDKAgent(subagent_dir=subagent_dir, app_state=app_state)
-        elif runner_type == "codex":
-            from ..runners.codex import CodexRunner  # lazy -- avoids circular import
-            runner = CodexRunner()
-        elif runner_type == "gemini":
-            from ..runners.gemini import GeminiRunner  # lazy -- avoids circular import
-            runner = GeminiRunner(subagent_dir=subagent_dir)
-        else:
-            raise AgentError(AgentDiagnostic(
-                code="unknown_runner_type",
-                agent=runner_type,
-                stage="get_agent",
-                message=f"Unknown runner type: {runner_type}",
-            ))
-        return CommandLineAgent(runner=runner, subagent_dir=subagent_dir)
-
-    # get_installation removed -- binary detection retired; provider credentials
-    # resolve in koan/agents/adapter.py.
-
-    # resolve_installation removed -- binary detection retired; provider credentials
-    # resolve in koan/agents/adapter.py.
+    # get_agent removed in M4: CLI/SDK agent path deleted; PydanticAIAgent is
+    # always used. get_installation and resolve_installation removed in M1/M4:
+    # binary detection retired; provider credentials resolve in adapter.py.
 
     def resolve_model_spec(
         self,
@@ -208,19 +163,19 @@ _GEMINI_FRONTIER_SPECS: dict[ModelTier, tuple[str, ThinkingMode, int]] = {
 }
 
 
-def compute_builtin_profiles(probe_results: list[ProbeResult]) -> dict[str, Profile]:
+def compute_builtin_profiles() -> dict[str, Profile]:
     """Compute all built-in profiles (balanced, frontier) as static Gemini ModelSpec profiles.
 
-    probe_results vestigial -- runner probing is retired; provider profiles are
-    static. Param kept until the M8 settings rework removes probe_results entirely.
+    Provider profiles are static -- runner probing is retired. The vestigial
+    probe_results parameter is removed as part of the M2 ProviderStatus rename;
+    callers that passed probe_results should be updated to call with no argument.
     """
-    # probe_results ignored: provider profiles are static Gemini specs now.
     profiles: dict[str, Profile] = {}
     profiles["balanced"] = _compute_balanced()
     profiles["frontier"] = _compute_fixed("frontier", _GEMINI_FRONTIER_SPECS)
     return profiles
 
 
-def compute_balanced_profile(probe_results: list[ProbeResult]) -> Profile:
+def compute_balanced_profile() -> Profile:
     """DEPRECATED: use compute_builtin_profiles instead."""
-    return compute_builtin_profiles(probe_results)["balanced"]
+    return compute_builtin_profiles()["balanced"]

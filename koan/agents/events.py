@@ -49,7 +49,8 @@ class StreamEvent:
 # Tool names registered in koan's MCP server / in-process koan toolset. The
 # projection fold uses this set to select ToolKoanEntry for any koan tool call.
 KOAN_MCP_TOOLS: frozenset[str] = frozenset({
-    "koan_complete_step",
+    # The step-advancement tool was removed in M6; end-of-turn is the signal.
+    "koan_suggest_next",
     "koan_set_phase",
     "koan_request_scouts",
     "koan_ask_question",
