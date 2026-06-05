@@ -513,9 +513,9 @@ Once the retrieval index is available (Milestone 3+), the curation
 step can use `koan_search` to find related entries before
 classifying, making duplicate detection more reliable.
 
-### MCP tools for memory operations
+### Memory operation tools
 
-The orchestrator interacts with memory through three MCP tools.
+The orchestrator interacts with memory through three in-process tools.
 Individual entry reading uses the orchestrator's native filesystem
 access (the entries are plain markdown).
 
@@ -733,10 +733,11 @@ provides the _what to look for_ dimension.
 
 The second input is **recent artifacts and context** that provide
 the _where to look_ dimension -- the topical anchor. The anchor
-is composed from: the task description, all `.md` files in the
-run directory sorted by mtime ascending, and the prior phase's
-summary (captured automatically on the first `koan_yield` of
-each phase). The cheap model combines topic (from the
+is composed from: the task description, then all `.md` files in
+the run directory sorted by mtime ascending (chronological order
+puts the most recent artifact last, where attention is strongest;
+`brief.md` written by intake serves as the de facto initiative
+anchor). The cheap model combines topic (from the
 artifacts/context) with intent (from the directive) to produce
 well-formed queries.
 
@@ -786,8 +787,8 @@ should declare a directive.
 
 The design above maps to the following code locations:
 
-- **Attachment point**: `_step_phase_handshake` in
-  `koan/web/mcp_endpoint.py`, executed on the step 0 -> 1 transition of
+- **Attachment point**: `_step_phase_handshake_core` in
+  `koan/tools/koan_tools.py`, executed on the step 0 -> 1 transition of
   every orchestrator phase.
 - **Directive location**: `PhaseBinding.retrieval_directive` in
   `koan/lib/workflows.py`. The directive is a static, human-authored
@@ -795,15 +796,10 @@ The design above maps to the following code locations:
   for that phase (the curation phase uses an empty string because
   `koan_memory_status` already surfaces the full entry listing).
 - **Anchor composition**: `_compose_rag_anchor()` in
-  `koan/web/mcp_endpoint.py`. Order is task description, then all
-  `*.md` files in the run directory sorted by mtime ascending, then
-  `Run.phase_summaries[prior_phase]`.
-- **Summary capture**: The orchestrator's last assistant text preceding
-  the first `koan_yield` of a phase is captured into
-  `Run.phase_summaries[phase]` via the `phase_summary_captured` event.
-  Subsequent yields in the same phase do not overwrite. Projection
-  code: `_extract_last_orchestrator_text()` in
-  `koan/web/mcp_endpoint.py`.
+  `koan/tools/koan_tools.py`. Order is task description, then all
+  `*.md` files in the run directory sorted by mtime ascending.
+  `brief.md` (written by intake) is the de facto initiative anchor;
+  it appears among the run-dir markdown files sorted by mtime.
 - **Rendering**: `render_injection_block()` in
   `koan/memory/retrieval/rag.py` produces a `## Relevant memory`
   markdown block. Phase modules (intake, plan-spec, plan-review,

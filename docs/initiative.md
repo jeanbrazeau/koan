@@ -142,7 +142,7 @@ applies rewrite-or-loop-back semantics: internal findings (the producer
 should have caught these from material already in scope) are corrected
 directly in the producer's artifact via `koan_artifact_write`; new-files
 findings (catching these would have required loading material the producer
-did not have access to) are surfaced via `koan_yield` with the producer
+did not have access to) are surfaced at the hand-back with the producer
 phase recommended for loop-back. For `tech-plan.md`, the reviewer surfaces
 internal corrections via `koan_artifact_write` and yields; the user advances
 to `milestone-spec` when the architecture is acceptable, or back to

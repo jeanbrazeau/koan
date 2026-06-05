@@ -1,5 +1,13 @@
 # PydanticAI Migration -- Status & Remaining Plan
 
+> **Migration complete (2026-06-05).** All milestones (M1-M7) landed on
+> `migrate/pydantic-ai`. The in-process PydanticAI loop, end-of-turn control
+> loop (`resolve_turn_outcome`), `koan_suggest_next`, provider-credential
+> settings, usage gauges (cost / context-window-% / cache), and documentation
+> sweep are all done. Suite: green. `tsc --noEmit`: clean.
+
+
+
 **Branch:** `migrate/pydantic-ai` (9 commits on top of `master`)
 **Source run:** `~/.koan/runs/1780450413-662fc093` (initiative workflow)
 **Last updated:** 2026-06-04

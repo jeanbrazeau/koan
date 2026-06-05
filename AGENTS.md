@@ -23,15 +23,15 @@ verification checklist.
 
 Spoke documents:
 
-- [docs/agent-protocol.md](docs/agent-protocol.md) -- Agent Protocol, AgentOptions, ClaudeSDKAgent / CommandLineAgent, steering hook integration, HTTP MCP transport choice
+- [docs/agent-protocol.md](docs/agent-protocol.md) -- Agent Protocol, AgentOptions, PydanticAIAgent, steering integration, provider adapter
 - [docs/subagents.md](docs/subagents.md) -- spawn lifecycle, task manifest, step-first workflow, permissions
 - [docs/initiative.md](docs/initiative.md) -- initiative workflow contract, band hierarchy, gating
-- [docs/ipc.md](docs/ipc.md) -- HTTP MCP tool calls, blocking interactions, scout spawning, koan_yield blocking
+- [docs/ipc.md](docs/ipc.md) -- in-process tool calls, blocking interactions, scout spawning, terminal-text hand-back
 - [docs/state.md](docs/state.md) -- driver/LLM boundary, run state, orchestrator state
 - [docs/intake-loop.md](docs/intake-loop.md) -- two-step intake design, prompt engineering
 - [docs/phase-trust.md](docs/phase-trust.md) -- phase trust model, verification boundaries, adversarial review
 - [docs/projections.md](docs/projections.md) -- versioned event log, fold function, projection shape, SSE protocol, version-negotiated catch-up
-- [docs/token-streaming.md](docs/token-streaming.md) -- runner stdout parsing, SSE delta path
+- [docs/token-streaming.md](docs/token-streaming.md) -- in-process StreamEvent delta path, SSE bridge
 - [docs/milestones.md](docs/milestones.md) -- milestone soundness criteria, sizing heuristics, grounding requirements
 - [docs/workflow-phases.md](docs/workflow-phases.md) -- phase taxonomy across all workflows, producer-validator pairing
 
@@ -41,6 +41,12 @@ Spoke documents:
 
 The six core invariants (see architecture.md for full detail + pitfalls):
 
+**Provider credential model:** Provider availability is `ProviderStatus`
+(env-key presence). There is no binary probe. The all-providers model registry
+(`ModelRegistryEntry`) is built from the genai-prices bundled snapshot joined
+with a koan-owned capability table in `koan/agents/model_catalog.py`. Cost
+derivation uses `price_for_usage` against the bundled snapshot only.
+
 ## 1. File Boundary
 
 LLMs write **markdown files only**. The driver maintains **JSON state files**
@@ -49,38 +55,38 @@ both worlds.
 
 ## 2. Step-First Workflow Pattern (critical)
 
-The orchestrator is a single long-lived CLI process (`claude`, `codex`, or
-`gemini`) that runs the entire workflow. It connects to the driver's HTTP MCP
-endpoint at `http://localhost:{port}/mcp?agent_id={id}` and receives tools via
-MCP. The driver handles all tool logic in-process.
+The orchestrator runs as an asyncio task inside the single backend process.
+Tools are in-process `FunctionToolset`s composed per (role, phase) via
+`compose_toolset` in `koan/tools/tool_policy.py`. There is no boot prompt and
+no step-advance tool call.
 
-**The first thing the orchestrator does is call `koan_complete_step`.** The
-spawn prompt contains _only_ this directive. The tool returns step 1
-instructions. This establishes the calling pattern before the LLM sees complex
-instructions.
+**Step 1 guidance is injected as the first turn prompt.** The loop
+(`run_agent_loop` in `koan/agents/loop.py`) bootstraps by calling
+`_step_phase_handshake_core` to obtain step 1 guidance and injects it as
+the initial user turn. A **turn-outcome resolver** (`resolve_turn_outcome`)
+runs at each end-of-turn (terminal-text turn with no outstanding tool calls):
 
 ```
-Boot prompt:  "You are a koan orchestrator agent. Call koan_complete_step to receive your instructions."
-     | LLM calls koan_complete_step (step 0 -> 1 transition)
-Tool returns:  Step 1 instructions (phase role context + task details)
-     | LLM does work...
-     | LLM calls koan_complete_step
-Tool returns:  Step 2 instructions (or phase-boundary response)
+Loop injects step 1 guidance as first turn prompt
+     | Agent does work, calls tools as needed
+     | Agent ends turn in terminal text (no outstanding tool call)
+Resolver fires:
+  - completion gate fails  -> re-inject the same step
+  - more steps remain      -> inject next step guidance
+  - steps exhausted, primary agent -> hand back to user
+  - steps exhausted, non-primary   -> terminate
 ```
 
-When a phase ends, `koan_complete_step` returns a **non-blocking** response
-telling the orchestrator to summarize and call `koan_yield`. `koan_yield` is
-the generic conversation primitive — it blocks until the user sends a message,
-then returns that message as the tool result. The orchestrator calls `koan_yield`
-repeatedly for multi-turn conversation, then calls `koan_set_phase` to commit
-the transition. Passing `koan_set_phase("done")` ends the workflow (tombstone).
-The step counter resets to 0 on each `koan_set_phase` call, then advances to 1
-on the next `koan_complete_step`. Phase-specific role context (`SYSTEM_PROMPT`)
-is injected into that step-1 response.
+At the phase boundary, the primary agent calls `koan_suggest_next` to record
+the suggested next steps, then ends its turn in terminal text. The loop surfaces
+the text and suggestions and parks awaiting the user. The user's reply resumes
+the loop. The agent then calls `koan_set_phase` to commit the transition.
+Passing `koan_set_phase("done")` ends the workflow (tombstone).
 
-Step progression is normally linear within a phase, but phase modules may
-override `get_next_step()` to implement non-linear flows. See
-[docs/intake-loop.md](docs/intake-loop.md).
+Phase-specific role context (`SYSTEM_PROMPT`) is prepended to the step 1
+guidance at the top of the first turn. Step progression is normally linear
+within a phase, but phase modules may override `get_next_step()` to implement
+non-linear flows. See [docs/intake-loop.md](docs/intake-loop.md).
 
 Executor subagents are spawned by the orchestrator via `koan_request_executor`.
 Scout subagents are spawned via `koan_request_scouts`.
@@ -96,11 +102,10 @@ The driver still:
 - Validates every phase transition (`is_valid_transition()` in the tool handler)
 - Updates `run-state.json` atomically
 - Emits projection events
-- Enforces the permission fence
 
 The driver does **not** decide which phase runs next. Invalid phase strings
-raise `ToolError`; valid transitions are committed. All routing decisions flow
-through typed tool parameters, not free text.
+raise a domain exception; valid transitions are committed. All routing decisions
+flow through typed tool parameters, not free text.
 
 `is_valid_transition(workflow, from_phase, to_phase)` checks that `to_phase` is
 in the active workflow's `available_phases` and is not equal to `from_phase`.
@@ -109,20 +114,15 @@ required successors.
 
 ## 4. Default-Deny Permissions
 
-Two enforcement layers restrict what tools each agent can use:
+Capability restriction is **construction-time**, not call-time.
+`compose_toolset(policy, role, phase)` in `koan/tools/tool_policy.py` builds
+the allowed tool vocabulary once per (role, phase) before the agent's loop
+starts. Disallowed tools never enter the model's context; the model cannot
+call what it cannot see. The allowlist tables (`ROLE_PERMISSIONS` and the
+universal read/memory sets) live in `tool_policy.py` and are the single source
+of truth.
 
-1. **CLI tool whitelist** (`CLAUDE_TOOL_WHITELISTS` in `subagent.py`) --
-   controls which built-in tools exist in the model's context. Unlisted tools
-   are not presented to the model; it cannot call them. Agents should not have
-   access to tools they are never intended to need.
-2. **MCP permission fence** (`check_permission()` in `permissions.py`) --
-   gates koan MCP tool calls per role and phase. Unknown roles and tools are
-   blocked.
-
-The fence also supports step-level gating: `write` and `edit` are blocked
-during brief-generation step 1 (the read step).
-
-**CLI tool whitelists (per agent type):**
+**Per-role built-in tool vocabulary** (composed via `compose_toolset`):
 
 | Role         | Built-in tools                                                           |
 | ------------ | ------------------------------------------------------------------------ |
@@ -130,20 +130,13 @@ during brief-generation step 1 (the read step).
 | executor     | `Read`, `Write`, `Edit`, `Bash`, `Glob`, `Grep`                          |
 | scout        | `Read`, `Bash`, `Glob`, `Grep`                                           |
 
-The same per-role list is passed as both Claude's `--tools` (visible vocabulary)
-and `--allowedTools` (auto-approved subset); the two fields are kept identical by
-design. The MCP namespace pattern `mcp__koan__*` is additionally appended to
-`--allowedTools` so koan MCP tool calls auto-approve. See
-`_build_claude_tool_lists` in `koan/subagent.py`.
-
-**MCP permission fence -- orchestrator tool availability by phase:**
+**Orchestrator koan tool vocabulary** (composed per phase from `ROLE_PERMISSIONS`):
 
 | Tool                                                                              | Available phases                                                                                                                                                                         |
 | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `koan_complete_step`                                                              | All phases                                                                                                                                                                               |
+| `koan_suggest_next`                                                               | All phases (orchestrator only; records hand-back suggestions before the terminal-text turn)                                                                                              |
 | `koan_set_phase`                                                                  | All phases (blocked mid-story during execution); accepts `"done"` as tombstone                                                                                                           |
 | `koan_set_workflow`                                                               | All phases (matches `koan_set_phase`); accepts any registered workflow name; always lands at the new workflow's `initial_phase`                                                          |
-| `koan_yield`                                                                      | All phases                                                                                                                                                                               |
 | `koan_ask_question`                                                               | All phases                                                                                                                                                                               |
 | `koan_request_scouts`                                                             | `intake`, `core-flows`, `tech-plan-spec`, `tech-plan-review`, `ticket-breakdown`, `cross-artifact-validation`, `plan-spec`, `plan-review`, `milestone-spec`, `milestone-review`, `frame` |
 | `koan_request_executor`                                                           | `execution`, `execute`                                                                                                                                                                   |
@@ -161,10 +154,10 @@ design. The MCP namespace pattern `mcp__koan__*` is additionally appended to
 
 ## 5. Need-to-Know Prompts
 
-Boot prompt is one sentence. System prompt is minimal (orchestrator identity
-only). Phase-specific role context arrives via step 1 guidance after
-`koan_set_phase` is called -- the orchestrator doesn't know its next role until
-`koan_complete_step` tells it.
+There is no boot prompt. The system prompt is minimal (orchestrator identity
+only). Phase-specific role context (`SYSTEM_PROMPT`) is prepended to step 1
+guidance and injected as the first turn prompt by `run_agent_loop`. The agent
+does not receive its role context until the loop starts the first turn.
 
 Each workflow provides a `phase_guidance` injection for the phases it defines.
 This injection appears at the top of step 1 guidance and sets workflow-specific
@@ -182,12 +175,7 @@ scout subagents each get their own directory per the standard contract:
 | `state.json`   | Parent (audit projection)                                                | Available for debugging        | What has been done |
 | `events.jsonl` | Parent (audit log)                                                       | Available for replay           | Full event history |
 
-The `mcp_url` field in `task.json` tells the child where to connect for tool
-calls. No structured configuration flows through CLI flags. The spawn command
-carries the directory path and the MCP config pointing at the driver's HTTP
-endpoint.
-
-The `task.json` for every subagent includes `run_dir` — the path to the current
+The `task.json` for every subagent includes `run_dir` -- the path to the current
 workflow run directory (`~/.koan/runs/<id>/`).
 
 The orchestrator `task.json` carries `workflow_history` (an append-only list of

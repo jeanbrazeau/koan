@@ -41,8 +41,8 @@ natural point to review the summary and discuss next steps.
 
 The Gather step combines what was previously three separate activities
 (reading the conversation, orienting in the codebase, and dispatching scouts)
-into a single `koan_complete_step` cycle. This avoids the latency and context
-re-derivation overhead of artificially separating them.
+into a single turn. This avoids the latency and context re-derivation overhead
+of artificially separating them.
 
 The step has a **5-file budget** for initial exploration: project root listing,
 orientation files (README.md, AGENTS.md, CLAUDE.md), and files the conversation
@@ -93,9 +93,11 @@ established in M3.
 
 ## Phase Boundary
 
-After step 3 completes, `get_next_step()` returns `None`, which triggers the
-phase boundary. The orchestrator presents suggested next phases with
-descriptions, and asks the user what to do next.
+After step 3 completes, `get_next_step()` returns `None`. The turn-outcome
+resolver detects that steps are exhausted for a primary agent and triggers the
+phase-boundary hand-back. The orchestrator calls `koan_suggest_next` with the
+suggested next phases and then ends its turn in terminal text. The loop parks
+awaiting the user.
 
 ```python
 def get_next_step(step, ctx):
@@ -115,14 +117,14 @@ mechanisms that address specific failure modes.
 ### MARP (Maximizing Operations per Step)
 
 The three-step structure applies the MARP principle: maximize operations
-per `koan_complete_step` call while minimizing planning or meta-reasoning
-steps. Each step does real work across multiple activities rather than
-artificially separating them into sequential tool calls. Gather combines
-reading, orientation, and scout dispatch in a single step. Deepen combines
-scout result processing, direct file verification, and iterative dialogue.
-Summarize is a distinct step rather than being folded into Deepen so the
-synthesis work is focused and the `brief.md` artifact write is the terminal
-act of the phase (see [Step 3: Summarize](#step-3-summarize) above).
+per turn while minimizing planning or meta-reasoning steps. Each step does
+real work across multiple activities rather than artificially separating them
+into sequential turns. Gather combines reading, orientation, and scout dispatch
+in a single turn. Deepen combines scout result processing, direct file
+verification, and iterative dialogue. Summarize is a distinct step rather than
+being folded into Deepen so the synthesis work is focused and the `brief.md`
+artifact write is the terminal act of the phase (see
+[Step 3: Summarize](#step-3-summarize) above).
 
 ### Iterative deepening through dialogue
 

@@ -115,7 +115,8 @@ The frame phase produces no fixed artifact. At exit, the agent asks the
 user what artifact shape, if any, is appropriate. Whatever is chosen is
 written then, not before.
 
-The dominant tool-call shape is `koan_yield` for open-ended conversation,
+The dominant tool-call shape is terminal-text turns for open-ended conversation
+(the loop parks after each hand-back and resumes on the user's reply),
 supplemented by `koan_search`, `koan_reflect`, and `koan_ask_question` to
 surface prior context and clarify intent. `koan_request_scouts`, `bash`,
 and direct file reading (Read / Grep / Glob) are available and used for
@@ -198,7 +199,7 @@ interactions and exit conditions, `koan_artifact_view` for upstream
 artifacts, and `koan_artifact_write` for the terminal `core-flows.md`
 write. Scout dispatch is rarely warranted because the work is about
 externally visible behavior rather than codebase structure; the
-permission fence allows it but prompt discipline should discourage it.
+construction-time composed toolset (`compose_toolset`) allows it but prompt discipline should discourage it.
 
 The termination condition is the writing of `core-flows.md` followed by
 yield. The contract boundary is that core-flows must not include
@@ -267,8 +268,8 @@ the suppression decisions match the threshold rules in
 
 Internal findings are corrected directly in `tech-plan.md` via
 `koan_artifact_write` per the rewrite-or-loop-back rule; new-files
-findings are surfaced via `koan_yield` with `tech-plan-spec` recommended
-for loop-back. The phase yields after evaluation; the user's phase-switch
+findings are surfaced by ending the turn (terminal-text hand-back) with
+`tech-plan-spec` recommended for loop-back. The phase yields after evaluation; the user's phase-switch
 decision (forward to `milestone-spec` or back to `tech-plan-spec`) is the
 implicit acceptance moment, mirroring plan-review and milestone-review.
 
@@ -282,8 +283,8 @@ verify architectural claims about integration points (scouts are sanctioned
 and encouraged in this phase -- unlike plan-review, mechanical accuracy is
 not the concern; integration-point claims must be verified now, before
 milestone decomposition assumes them); `koan_artifact_write` for internal-
-finding corrections; and `koan_yield` to surface the review outcome and
-next-phase suggestions.
+finding corrections; and a terminal-text hand-back to surface the review
+outcome and next-phase suggestions.
 
 The contract boundary is that tech-plan-review must not introduce
 architectural decisions of its own. It stress-tests and confirms but
@@ -387,16 +388,17 @@ this because the underlying transition rule is any-to-any except
 self-transition; the workflow's `transitions` dict only encodes the
 suggested defaults, not constraints.
 
-## Permission fence implications
+## Toolset composition implications
 
-The new phases need entries in the MCP permission fence at
-`koan/lib/permissions.py`. The `_ORCHESTRATOR_SCOUT_PHASES` frozenset
+New phases need entries in the toolset allowlist tables at
+`koan/tools/tool_policy.py`. The `_ORCHESTRATOR_SCOUT_PHASES` frozenset
 lists `core-flows`, `tech-plan-spec`, `tech-plan-review`, and `frame`
 (the legacy bare `tech-plan` entry was replaced by the spec/review pair).
 The `frame` phase is included in both `_ORCHESTRATOR_SCOUT_PHASES` and
 `_ORCHESTRATOR_BASH_PHASES` to support bug hunting and troubleshooting,
 which require codebase investigation via scouts, bash, and direct file
-reading.
+reading. `compose_toolset` consults these frozensets when building the
+tool vocabulary for a given (role, phase) pair.
 
 ## Producer-and-acceptance summary
 

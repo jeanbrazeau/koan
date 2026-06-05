@@ -8,7 +8,8 @@ how review phases apply rewrite-or-loop-back semantics to producer artifacts.
 Review phases apply **rewrite-or-loop-back** semantics. For each finding, the
 reviewer classifies it as internal or new-files-needed; internal findings are
 fixed in place by issuing `koan_artifact_write` against the producer's artifact;
-new-files findings surface via `koan_yield` with the producer phase recommended.
+new-files findings surface at the phase-boundary hand-back with the producer
+phase recommended.
 
 All other phases trust the chain. Re-verification outside designated review
 phases is the "intrinsic self-correction" anti-pattern and is explicitly
@@ -37,8 +38,8 @@ given the files the producer already loaded?** The producer's loaded context is:
 If yes -> **internal** -> fix in place via `koan_artifact_write`.
 
 If no (catching this would require loading files the producer did not open) ->
-**new-files-needed** -> surface via `koan_yield` with the producer phase
-recommended. The producer re-runs with the new files in scope.
+**new-files-needed** -> surface at the phase-boundary hand-back with the
+producer phase recommended. The producer re-runs with the new files in scope.
 
 Mixed: fix internal findings in place AND recommend loop-back for the
 new-files findings. The producer sees the partially-rewritten artifact plus
@@ -72,7 +73,7 @@ the outstanding findings.
 - The designated adversarial verifier for milestone decomposition.
 - **Applies rewrite-or-loop-back** against `milestones.md`:
   - Internal findings -> `koan_artifact_write(filename="milestones.md", ...)`
-  - New-files findings -> `koan_yield` with `milestone-spec` recommended
+  - New-files findings -> hand back with `milestone-spec` recommended
 - When rewriting, MUST preserve all `[done]` Outcome sections intact.
 - **Compound-risk framing**: a missed issue here is inherited by every
   subsequent plan-spec and executor session.
@@ -91,7 +92,7 @@ the outstanding findings.
 - The designated adversarial verifier for implementation plans. Trusts nobody.
 - **Applies rewrite-or-loop-back** against the plan artifact:
   - Internal findings -> `koan_artifact_write(filename="<plan_artifact>", ...)`
-  - New-files findings -> `koan_yield` with `plan-spec` recommended
+  - New-files findings -> hand back with `plan-spec` recommended
 - Plan artifact filename: `plan.md` in plan workflow; `plan-milestone-N.md` in
   milestones workflow.
 
@@ -128,15 +129,15 @@ the outstanding findings.
 
 The permission model uses **role-level grant + prompt discipline**:
 
-| Layer               | Mechanism                                          |
-|---------------------|----------------------------------------------------|
-| Role-level grant    | `koan_artifact_write` granted to `orchestrator`    |
-|                     | role unconditionally (landed in M1)                |
-| Prompt discipline   | Each review phase is instructed to rewrite only    |
-|                     | its own producer's artifact                        |
-| Per-filename scoping| Rejected in M4 as over-engineering; no evidence    |
-|                     | of drift; simpler design; maintenance cost without |
-|                     | proportionate benefit                              |
+| Layer               | Mechanism                                             |
+|---------------------|-------------------------------------------------------|
+| Role-level grant    | `koan_artifact_write` composed into the `orchestrator`|
+|                     | toolset unconditionally via `compose_toolset`          |
+| Prompt discipline   | Each review phase is instructed to rewrite only       |
+|                     | its own producer's artifact                           |
+| Per-filename scoping| Rejected as over-engineering; no evidence of drift;   |
+|                     | simpler design; maintenance cost without proportionate|
+|                     | benefit                                               |
 
 The orchestrator role covers all review phases (plan-review, milestone-review,
 exec-review). The M1 grant is sufficient. Adding a `write_allowlist` field to
@@ -154,7 +155,7 @@ plan-spec ----> plan.md
     v
 plan-review  -- classifies each finding:
     |              internal -> koan_artifact_write(plan.md, corrected)
-    |              new-files -> koan_yield(suggest plan-spec loop-back)
+    |              new-files -> hand back (suggest plan-spec loop-back)
     v
 execute ----> koan_request_executor(["brief.md", "plan.md"])
     |
@@ -162,7 +163,7 @@ execute ----> koan_request_executor(["brief.md", "plan.md"])
 exec-review  -- runs verification commands
     |          -- classifies each deviation:
     |              internal -> koan_artifact_write(plan.md, corrected)
-    |              new-files -> koan_yield(suggest plan-spec)
+    |              new-files -> hand back (suggest plan-spec)
     |          -- (no milestones.md UPDATE in plan workflow)
     v
 curation
@@ -179,14 +180,14 @@ milestone-spec (CREATE) ----> milestones.md
     v
 [milestone-review]  -- classifies each finding:
     |                   internal -> koan_artifact_write(milestones.md, revised)
-    |                   new-files -> koan_yield(suggest milestone-spec)
+    |                   new-files -> hand back (suggest milestone-spec)
     v
 plan-spec ----> plan-milestone-N.md   (reads prior Outcome sections)
     |
     v
 [plan-review]  -- classifies each finding:
     |              internal -> koan_artifact_write(plan-milestone-N.md, corrected)
-    |              new-files -> koan_yield(suggest plan-spec loop-back)
+    |              new-files -> hand back (suggest plan-spec loop-back)
     v
 execute ----> koan_request_executor(["brief.md", "plan-milestone-N.md", "milestones.md"])
     |
@@ -199,11 +200,11 @@ exec-review  -- runs verification commands
     |              advance next [pending] -> [in-progress]
     |              adjust remaining sketches
     |
-    +---> [if milestones remain] koan_yield(suggest plan-spec) -> LOOP
+    +---> [if milestones remain] hand back (suggest plan-spec) -> LOOP
     |
-    +---> [if all done/skipped] koan_yield(suggest curation)
+    +---> [if all done/skipped] hand back (suggest curation)
     |
-    +---> [if graph needs revision] koan_yield(suggest milestone-spec RE-DECOMPOSE)
+    +---> [if graph needs revision] hand back (suggest milestone-spec RE-DECOMPOSE)
 ```
 
 ## Open questions

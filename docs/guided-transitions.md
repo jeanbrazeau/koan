@@ -7,16 +7,18 @@ field that controls how the orchestrator exits the phase:
 
 - **`next_phase = "some-phase"`** -- auto-advance. The orchestrator calls
   `koan_set_phase("some-phase")` directly after summarizing what was accomplished.
-  No `koan_yield` is needed; the workflow advances without user input.
+  No hand-back is needed; the workflow advances without user input.
 
-- **`next_phase = None`** -- full yield. The orchestrator calls `koan_yield`
-  with structured suggestions and waits for the user to confirm direction before
-  calling `koan_set_phase`.
+- **`next_phase = None`** -- hand back to the user. The orchestrator calls
+  `koan_suggest_next(suggestions=[...])` to record the suggested options, then
+  ends its turn in terminal text. The loop parks and awaits the user's reply
+  before the orchestrator can call `koan_set_phase`.
 
-Auto-advance is guidance, not enforcement. The orchestrator may call `koan_yield`
-instead of `koan_set_phase` when exceptional circumstances warrant user direction
-(see Override discipline below). The default promotes smooth forward progress on
-the happy path; overrides surface when findings demand it.
+Auto-advance is guidance, not enforcement. The orchestrator may hand back
+instead of calling `koan_set_phase` directly when exceptional circumstances
+warrant user direction (see Override discipline below). The default promotes
+smooth forward progress on the happy path; overrides surface when findings
+demand it.
 
 ## Per-workflow transition tables
 
@@ -26,32 +28,32 @@ the happy path; overrides surface when findings demand it.
 | ------------- | ------------- | --------------------------------------------------------------------------------- |
 | `intake`      | `plan-spec`   | auto-advance                                                                      |
 | `plan-spec`   | `plan-review` | auto-advance                                                                      |
-| `plan-review` | `None`        | full yield (orchestrator picks `plan-spec` for loop-back or `execute` to proceed) |
+| `plan-review` | `None`        | hand back (orchestrator picks `plan-spec` for loop-back or `execute` to proceed)  |
 | `execute`     | `exec-review` | auto-advance                                                                      |
-| `exec-review` | `None`        | full yield (orchestrator picks `curation` to proceed or `plan-spec` to loop back) |
-| `curation`    | `None`        | terminal yield -- workflow ends here                                              |
+| `exec-review` | `None`        | hand back (orchestrator picks `curation` to proceed or `plan-spec` to loop back)  |
+| `curation`    | `None`        | terminal hand-back -- workflow ends here                                          |
 
 ### Milestones workflow
 
 | Phase              | `next_phase`     | Behaviour                                                                                   |
 | ------------------ | ---------------- | ------------------------------------------------------------------------------------------- |
 | `intake`           | `milestone-spec` | auto-advance                                                                                |
-| `milestone-spec`   | `plan-spec`      | auto-advance (CREATE-mode default; orchestrator may yield to milestone-review if warranted) |
-| `milestone-review` | `None`           | full yield (orchestrator picks `milestone-spec` for revision or `plan-spec` to proceed)     |
-| `plan-spec`        | `plan-review`    | auto-advance                                                                                |
-| `plan-review`      | `None`           | full yield (orchestrator picks `plan-spec` for loop-back or `execute` to proceed)           |
-| `execute`          | `exec-review`    | auto-advance                                                                                |
-| `exec-review`      | `None`           | full yield (orchestrator picks `milestone-spec` loop, `plan-spec`, or `curation`)           |
-| `curation`         | `None`           | terminal yield -- workflow ends here                                                        |
+| `milestone-spec`   | `plan-spec`      | auto-advance (CREATE-mode default; orchestrator may hand back to milestone-review if warranted) |
+| `milestone-review` | `None`           | hand back (orchestrator picks `milestone-spec` for revision or `plan-spec` to proceed)         |
+| `plan-spec`        | `plan-review`    | auto-advance                                                                                    |
+| `plan-review`      | `None`           | hand back (orchestrator picks `plan-spec` for loop-back or `execute` to proceed)                |
+| `execute`          | `exec-review`    | auto-advance                                                                                    |
+| `exec-review`      | `None`           | hand back (orchestrator picks `milestone-spec` loop, `plan-spec`, or `curation`)               |
+| `curation`         | `None`           | terminal hand-back -- workflow ends here                                                        |
 
-## The trampoline and its removal
+## Step progression history
 
 **Pre-M3:** when `get_next_step` returned `None`, the `koan_complete_step` handler
 called `format_phase_complete(phase, suggested_phases, descriptions)`. This rendered
 a "Phase Complete" banner telling the orchestrator to summarize and call `koan_yield`.
 The orchestrator then called `koan_yield` and the user directed the next phase.
 
-**Post-M3:** the directive moved into each phase module's last-step
+**Post-M3 / pre-M6:** the directive moved into each phase module's last-step
 `step_guidance()` return value, carried in the `invoke_after` field of
 `StepGuidance`. Each last step calls:
 
@@ -61,29 +63,23 @@ invoke_after=terminal_invoke(ctx.next_phase, ctx.suggested_phases)
 
 The `terminal_invoke(next_phase, suggested_phases) -> str` helper (in
 `koan/phases/format_step.py`) renders either the auto-advance directive or the
-full-yield directive depending on whether `next_phase` is bound. Because
-`invoke_after` is rendered at the bottom of the step guidance by `format_step()`,
-the LLM receives the directive at the same recency position as the former
-`DEFAULT_INVOKE` footer.
+hand-back directive depending on whether `next_phase` is bound. The directive
+lands at the recency position (end of step text) via `format_step()`.
 
-The `koan_complete_step` phase-boundary branch became a defensive fallback:
-
-```
-if next_step is None:
-    # nudge the orchestrator back to koan_set_phase or koan_yield
-    return "This phase has no further steps. The directive at the end of your
-            prior step's guidance instructed you to call koan_set_phase or
-            koan_yield -- follow that directive now."
-```
-
-The LLM should never land here after M3 -- the `invoke_after` directive fires
-before `koan_complete_step` is called at all. The fallback catches accidental
-calls gracefully rather than crashing.
+**Post-M6 (current):** `koan_complete_step` is removed. The turn-outcome
+resolver (`resolve_turn_outcome` in `koan/agents/loop.py`) drives step
+progression at each end-of-turn. The phase-boundary case is: steps exhausted
+for a primary agent means hand back to the user. The orchestrator's last step
+instructs it to call `koan_suggest_next` with structured suggestions and then
+end its turn in terminal text; the resolver detects the step exhaustion and
+parks the loop awaiting the user. `format_step()` still formats step guidance
+with the directive last for recency reinforcement, but no tool call is required
+to advance -- ending the turn is the signal.
 
 ## Override discipline
 
-The orchestrator may call `koan_yield` instead of `koan_set_phase` (even when
-`next_phase` is bound) when any of the following apply:
+The orchestrator may hand back to the user instead of calling `koan_set_phase`
+directly (even when `next_phase` is bound) when any of the following apply:
 
 1. An exceptional finding has surfaced that the user must direct (e.g.,
    exec-review reveals a fundamental flaw requiring a scope change beyond
@@ -93,21 +89,21 @@ The orchestrator may call `koan_yield` instead of `koan_set_phase` (even when
    is the right target, not plan-spec).
 3. The user asked mid-phase to redirect the workflow.
 
-This is intentionally soft -- prompt discipline rather than fence enforcement.
-Review phases (`plan-review`, `milestone-review`, `exec-review`) are always
-`next_phase=None` precisely because their outcome is inherently variable;
-auto-advance would bypass the signal they exist to surface.
+This is intentionally soft -- prompt discipline rather than vocabulary
+enforcement. Review phases (`plan-review`, `milestone-review`, `exec-review`)
+are always `next_phase=None` precisely because their outcome is inherently
+variable; auto-advance would bypass the signal they exist to surface.
 
 ## The `directed_phases` interaction
 
-`directed_phases` (yolo mode, set by the eval harness) short-circuits `koan_yield`
-to a fixed phase sequence so eval runs do not pause for user input. It is
-independent of `next_phase`:
+`directed_phases` (yolo mode, set by the eval harness) short-circuits the
+phase-boundary hand-back to a fixed phase sequence so eval runs do not pause
+for user input. It is independent of `next_phase`:
 
-- A phase with `next_phase` bound calls `koan_set_phase` directly -- it never
-  reaches the yield handler and is unaffected by `directed_phases`.
-- A phase with `next_phase=None` calls `koan_yield`, which may be short-circuited
-  by `directed_phases` to the next configured phase.
+- A phase with `next_phase` bound calls `koan_set_phase` directly -- the
+  resolver auto-advances and `directed_phases` has no effect.
+- A phase with `next_phase=None` reaches a hand-back; the loop's yolo handler
+  reads `directed_phases` and builds an auto-response rather than parking.
 
 Both regimes work correctly with the other present.
 

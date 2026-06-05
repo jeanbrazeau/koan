@@ -54,7 +54,7 @@ held in memory for the duration of a workflow run.
 
 | Event | Payload | `agent_id` |
 |-------|---------|-----------|
-| `run_started` | `{profile, installations, scout_concurrency}` | `None` |
+| `run_started` | `{profile, scout_concurrency}` | `None` |
 | `workflow_selected` | `{workflow}` | `None` |
 | `phase_started` | `{phase}` | `None` |
 | `agent_spawned` | `{agent_id, role, label, model, is_primary, started_at_ms}` | set |
@@ -66,11 +66,11 @@ held in memory for the duration of a workflow run.
 | `yield_started` | `{suggestions: [{id, label, command}, ...]}` | set (primary) |
 | `yield_cleared` | `{}` | `None` |
 
-`yield_started` is emitted by `koan_yield` when the orchestrator yields to the
-user for conversation. The fold appends a `YieldEntry` to the agent's
-conversation and sets `run.active_yield`. `yield_cleared` removes
-`run.active_yield`; it is emitted by `koan_set_phase` (any transition,
-including `"done"`) and implicitly by `phase_started` and
+`yield_started` is emitted by `run_agent_loop` when the turn-outcome resolver
+parks a primary agent at a phase-boundary hand-back. The fold appends a
+`YieldEntry` to the agent's conversation and sets `run.active_yield`.
+`yield_cleared` removes `run.active_yield`; it is emitted by `koan_set_phase`
+(any transition, including `"done"`) and implicitly by `phase_started` and
 `workflow_completed`.
 
 `run_started` is emitted by `api_start_run` before the driver begins. It
@@ -99,9 +99,9 @@ not carry `is_primary` — the fold looks up the agent in `run.agents`.
 | `stream_cleared` | `{}` | set |
 
 `tool_called` and the typed tool events (`tool_read`, `tool_bash`, etc.) are
-mutually exclusive for any given tool invocation. The runner's stream parser
+mutually exclusive for any given tool invocation. The in-process event fan-out
 emits a typed event when it can extract structured metadata (file path, command,
-pattern). It falls back to `tool_called` for unknown or custom MCP tools. The
+pattern). It falls back to `tool_called` for unknown or custom koan tools. The
 fold never receives both for the same `call_id`.
 
 `tool_called` and `tool_completed` are paired by `call_id` (UUID). `in_flight`
@@ -149,19 +149,19 @@ for each difference.
 
 | Event | Payload |
 |-------|---------|
-| `probe_completed` | `{results: {alias: available_bool, ...}}` |
-| `installation_created` | `{alias, runner_type, binary, extra_args}` |
-| `installation_modified` | `{alias, runner_type, binary, extra_args}` |
-| `installation_removed` | `{alias}` |
+| `provider_status_listed` | `{providers: [{provider, available, env_keys}]}` |
+| `model_registry_listed` | `{models: [{provider, model, display_name, context_window, thinking_modes, tier_hint}]}` |
 | `profile_created` | `{name, read_only, tiers}` |
 | `profile_modified` | `{name, read_only, tiers}` |
 | `profile_removed` | `{name}` |
 | `default_profile_changed` | `{name}` |
 | `default_scout_concurrency_changed` | `{value}` |
 
-`probe_completed` carries availability flags by installation alias, not a full
-runner list. The fold uses this to set `installation.available` on each known
-installation in `settings.installations`.
+`provider_status_listed` is emitted at server start via `_push_initial_config_events`.
+The fold sets `settings.provider_status` from this event. `model_registry_listed`
+sets `settings.model_registry`; the frontend `ProfileForm` sources its
+tier/model/thinking options from this list. There is no binary probe; provider
+availability is determined by env-key presence only.
 
 ---
 
@@ -205,7 +205,8 @@ The JSON output and all patch paths are camelCase (`pendingThinking`,
 ```
 Projection
 ├── settings: Settings
-│   ├── installations: dict[str, Installation]   # alias → Installation
+│   ├── provider_status: list[ProviderStatus]    # per-provider env-key presence
+│   ├── model_registry: list[ModelRegistryEntry] # all-providers model catalog
 │   ├── profiles: dict[str, Profile]             # name → Profile
 │   ├── default_profile: str
 │   └── default_scout_concurrency: int
@@ -219,48 +220,63 @@ Projection
 │   │       ├── pending_thinking: str
 │   │       ├── pending_text: str
 │   │       ├── is_thinking: bool
-│   │       ├── input_tokens: int
-│   │       └── output_tokens: int
+│   │       ├── input_tokens: int                # fact: accumulated per agent_exited
+│   │       ├── output_tokens: int               # fact: accumulated per agent_exited
+│   │       ├── cache_read_tokens: int           # fact: accumulated per agent_exited
+│   │       ├── cache_write_tokens: int          # fact: accumulated per agent_exited
+│   │       ├── total_cost_usd: float            # derived in fold (genai-prices mapping)
+│   │       └── context_window_percent: float    # derived in fold (tokens / context_window)
 │   ├── focus: Focus | None                      # discriminated union of 2 variants
 │   ├── artifacts: dict[str, ArtifactInfo]       # path → ArtifactInfo
 │   ├── completion: CompletionInfo | None
 │   ├── steering: list[SteeringMessage]          # pending user feedback shown above chat
-│   └── active_yield: ActiveYield | None         # non-None while koan_yield is blocking
+│   └── active_yield: ActiveYield | None         # non-None while loop is parked at hand-back
 └── notifications: list[Notification]
 ```
 
 ### Settings
 
 ```python
-class Installation(KoanBaseModel):
-    alias: str           # unique key: "claude-default", "claude-fast"
-    runner_type: str     # "claude" | "codex" | "gemini"
-    binary: str          # resolved path: "/usr/local/bin/claude"
-    extra_args: list[str] = []
-    available: bool = False   # probe result: binary exists and responds
+class ProviderStatus(KoanBaseModel):
+    provider: str          # "google" | "anthropic" | "openai" | "bedrock"
+    available: bool        # all required env keys present
+    env_keys: list[str]    # env var NAMES checked -- never values
+
+class ModelRegistryEntry(KoanBaseModel):
+    provider: str
+    model: str
+    display_name: str
+    context_window: int
+    thinking_modes: list[str]
+    tier_hint: str | None  # "strong" | "standard" | "cheap"
+
+class ProfileTierWire(KoanBaseModel):
+    provider: str
+    model: str
+    thinking: str | None
 
 class Profile(KoanBaseModel):
     name: str
     read_only: bool = False
-    tiers: dict[str, str] = {}    # role → installation alias
+    tiers: dict[str, ProfileTierWire] = {}   # tier name -> {provider, model, thinking}
 
 class Settings(KoanBaseModel):
-    installations: dict[str, Installation] = {}
+    provider_status: list[ProviderStatus] = []
+    model_registry: list[ModelRegistryEntry] = []
     profiles: dict[str, Profile] = {}
     default_profile: str = "balanced"
     default_scout_concurrency: int = 8
 ```
 
-`Settings` represents what is *available* — it persists across runs to
+`Settings` represents what is *available* -- it persists across runs to
 `~/.koan/config.json` and describes the user's configured environment.
-`available` on `Installation` is ephemeral — re-probed each server start.
+Provider availability is env-key presence only; no binary probe is performed.
 
 ### Run configuration
 
 ```python
 class RunConfig(KoanBaseModel):
-    profile: str                    # which profile was selected
-    installations: dict[str, str]   # role → installation alias for this run
+    profile: str           # which profile was selected
     scout_concurrency: int
 ```
 
@@ -396,9 +412,9 @@ ConversationEntry = Annotated[
 ]
 ```
 
-`YieldEntry` is appended to the conversation when the orchestrator calls
-`koan_yield`. It records the suggestions the orchestrator offered at that
-yield point, providing a historical record of what options were presented.
+`YieldEntry` is appended to the conversation when the orchestrator hands back
+at a phase boundary (the terminal-text turn). It records the suggestions offered
+at that hand-back point, providing a historical record of what options were presented.
 
 ### Focus — discriminated union
 
@@ -435,7 +451,7 @@ class Suggestion(KoanBaseModel):
     command: str = ""   # pre-filled into chat input when pill is clicked
 
 class ActiveYield(KoanBaseModel):
-    # Live view of the last yield point — non-None while koan_yield is blocking.
+    # Live view of the last hand-back — non-None while the loop is parked at the hand-back.
     # Cleared by yield_cleared, phase_started, and workflow_completed.
     suggestions: list[Suggestion] = []
 
@@ -931,13 +947,13 @@ would require eviction logic that creates edge cases for what a reconnecting
 client receives in a snapshot. Koan is one-shot — the server shuts down after
 the workflow completes — so accumulation is bounded by run duration.
 
-### Why MCP tool calls are authoritative over stdout
+### Why koan tool calls are authoritative over stream events
 
-When a subagent calls a koan MCP tool, the call appears twice: as an MCP
-request (structured, complete) and in the runner's stdout stream
-(runner-specific format, possibly truncated). The MCP endpoint has full
-structured data. Stdout events are filtered to exclude koan MCP tool names
-(`koan_*`, `mcp__koan*`); only agent-native tools are sourced from stdout.
+When an agent calls a koan tool, the call appears twice: as a structured
+in-process call (complete, typed) and as a `StreamEvent` from the agent loop
+(which carries summary text). The tool core has the full structured data.
+`StreamEvent`s are filtered to exclude koan tool names (`koan_*`); only
+built-in file/bash tools are sourced from stream events.
 
 ### Why `build_artifact_diff` uses diff events, not a full list
 
