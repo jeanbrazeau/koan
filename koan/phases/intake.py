@@ -358,7 +358,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "milestone's Outcome (milestones workflow) or as a chat note (plan",
                 "workflow), not by silently rewriting brief.md.",
             ],
-            # terminal_invoke replaces the trailing koan_complete_step instruction;
+            # terminal_invoke supplies the phase-boundary invoke_after;
             # auto-advance target is bound per workflow at the PhaseBinding level.
             invoke_after=terminal_invoke(ctx.next_phase, ctx.suggested_phases),
         )

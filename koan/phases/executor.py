@@ -61,7 +61,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "",
             "Do NOT write code in this step.",
             "",
-            "Call `koan_complete_step` with a comprehension summary:",
+            "End your turn with a comprehension summary:",
             "- What you will change and in what order",
             "- Files affected",
             "- Any ambiguities or concerns (do not block on these -- note them)",
@@ -95,7 +95,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "Do NOT write a plan file. This is your reasoning made visible for the",
                 "audit trail, communicated as a regular response.",
                 "",
-                "Call `koan_complete_step` with your approach summary.",
+                "End your turn to advance to the next step.",
             ],
         )
 
@@ -139,7 +139,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "",
                 "## Deviation report",
                 "",
-                "Your `koan_complete_step` call must include a structured deviation report:",
+                "Your final turn must include a structured deviation report:",
                 "- **Implemented as planned**: what was done exactly as the plan specified",
                 "- **Deviations**: what changed from the plan and why",
                 "- **Unanticipated decisions**: choices you made that the plan did not specify",
@@ -148,7 +148,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "If there were no deviations, state that explicitly: 'No deviations -- all",
                 "steps implemented as planned.'",
                 "",
-                "Call `koan_complete_step` with this deviation report.",
+                "End your turn with this deviation report.",
             ],
         )
 

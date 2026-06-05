@@ -91,7 +91,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "## What to verify",
             "",
             "1. Read the executor's deviation report from the conversation context (the final",
-            "   koan_complete_step response from the execute phase).",
+            "   message from the execute phase).",
             "2. Read the plan artifact and note what was planned.",
             "3. Run verification commands to confirm the executor's claims:",
             "   - Build or compile the project if applicable.",
@@ -101,7 +101,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "",
             "Do NOT write an assessment yet. Verify first.",
             "",
-            "Call `koan_complete_step` with a verification summary:",
+            "End your turn with a verification summary:",
             "- What verification commands you ran and their results",
             "- Which planned goals appear met vs. incomplete",
         ])
@@ -188,7 +188,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "",
                 "The workflow guidance above specifies what to do after this assessment.",
             ],
-            # terminal_invoke replaces the trailing koan_complete_step instruction.
+            # terminal_invoke supplies the phase-boundary invoke_after.
             # next_phase=None: exec-review outcome requires user direction.
             invoke_after=terminal_invoke(ctx.next_phase, ctx.suggested_phases),
         )

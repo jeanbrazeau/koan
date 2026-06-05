@@ -282,7 +282,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "",
                 "## After reporting",
             ],
-            # terminal_invoke replaces the trailing koan_complete_step instruction.
+            # terminal_invoke supplies the phase-boundary invoke_after.
             # next_phase=None: review findings determine whether to loop back to
             # plan-spec or proceed; user direction is required.
             invoke_after=terminal_invoke(ctx.next_phase, ctx.suggested_phases),

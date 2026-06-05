@@ -138,7 +138,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "  docstring. Format follows the surrounding file convention; presence is",
             "  required, style is not.",
             "",
-            "Call `koan_complete_step` with an analysis summary:",
+            "End your turn with an analysis summary:",
             "- Overall approach (2-3 sentences)",
             "- Files that will be modified",
             "- Key decisions and rationale",
@@ -204,7 +204,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "Do NOT use Write or Edit -- those tools are not available in"
                 " this phase.",
             ],
-            # terminal_invoke replaces the trailing koan_complete_step instruction.
+            # terminal_invoke supplies the phase-boundary invoke_after.
             # auto-advance target (plan-review) is bound per workflow at PhaseBinding.
             invoke_after=terminal_invoke(ctx.next_phase, ctx.suggested_phases),
         )

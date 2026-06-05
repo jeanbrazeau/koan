@@ -200,7 +200,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "",
             "---",
             "",
-            "Call `koan_complete_step` with:",
+            "End your turn with:",
             "- Mode (CREATE or RE-DECOMPOSE)",
             "- CREATE: proposed milestone list with rough sketches and file/module scope",
             "- RE-DECOMPOSE: what changed and why, proposed adjustments to [pending]/[in-progress] milestones",

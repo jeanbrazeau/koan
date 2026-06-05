@@ -1,12 +1,15 @@
 # Step prompt assembly -- formats StepGuidance into strings returned to the LLM.
 #
-# format_step()          -- normal step guidance with WHEN DONE footer
+# format_step()          -- normal step guidance with WHEN DONE footer;
+#                           the footer tells the agent to end its turn once the
+#                           step's work is done -- end-of-turn advances to the
+#                           next step automatically via the loop resolver.
 # terminal_invoke()      -- invoke_after footer for the last step of a phase;
 #                           auto-advance (koan_set_phase) or hand back to the
-#                           user depending on whether next_phase is bound
+#                           user depending on whether next_phase is bound.
 # format_user_messages()  -- formats buffered user messages for delivery to the
-#                            LLM when the loop resumes after a hand-back
-# format_steering_messages() -- formats steering queue for inline delivery
+#                            LLM when the loop resumes after a hand-back.
+# format_steering_messages() -- formats steering queue for inline delivery.
 
 from __future__ import annotations
 
@@ -20,12 +23,18 @@ if TYPE_CHECKING:
 
 
 DEFAULT_INVOKE = (
-    "WHEN DONE: Call koan_complete_step to advance to the next step.\n"
-    "Do NOT call this tool until the work described in this step is finished."
+    "WHEN DONE: end your turn once this step's work is complete -- a turn that"
+    " ends with no further tool call advances you to the next step automatically."
+    " Do not end your turn until the step's work is done."
 )
 
 
 def format_step(g: StepGuidance) -> str:
+    """Format a StepGuidance into a string delivered to the LLM as the turn prompt.
+
+    Appends g.invoke_after when provided, or DEFAULT_INVOKE (the end-of-turn
+    advances model) when not. The step title and instructions are preserved verbatim.
+    """
     header = f"{g.title}\n{'=' * len(g.title)}\n\n"
     body = "\n".join(g.instructions)
     invoke = g.invoke_after if g.invoke_after is not None else DEFAULT_INVOKE
@@ -143,8 +152,7 @@ def terminal_invoke(next_phase: str | None, suggested_phases: list[str]) -> str:
             "   message (do NOT call a tool) -- ending your turn hands control back\n"
             "   to the user, who will reply with how to proceed.\n"
             "\n"
-            "Do NOT call koan_complete_step at the phase boundary -- the directive\n"
-            "above is the terminal action."
+            "The directive above is the terminal action for this phase."
         )
 
     # next_phase is None -- hand back to the user with the next-phase options
@@ -165,6 +173,5 @@ def terminal_invoke(next_phase: str | None, suggested_phases: list[str]) -> str:
         "3. Once the user confirms a direction, call `koan_set_phase(<phase>)` (or\n"
         '   `koan_set_phase("done")` to end the workflow).\n'
         "\n"
-        "Do NOT call koan_complete_step at the phase boundary -- ending your turn\n"
-        "is the terminal action."
+        "Ending your turn is the terminal action for this phase."
     )

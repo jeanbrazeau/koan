@@ -78,7 +78,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "  Include: key findings from plan-review, user clarifications received,",
             "  constraints emphasized by the user. Keep it concise.",
             "",
-            "Call `koan_complete_step` with the composed call parameters (artifacts list",
+            "End your turn with the composed call parameters (artifacts list",
             "and instructions text) so they appear in the audit trail before execution.",
         ])
         return StepGuidance(title=STEP_NAMES[1], instructions=lines)
@@ -105,7 +105,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "- If succeeded: summarize what was implemented.",
                 "- If failed: relay the failure and suggest next steps (re-run, plan revision, etc.).",
             ],
-            # terminal_invoke replaces the trailing koan_complete_step instruction.
+            # terminal_invoke supplies the phase-boundary invoke_after.
             # auto-advance target (exec-review) is bound per workflow at PhaseBinding.
             invoke_after=terminal_invoke(ctx.next_phase, ctx.suggested_phases),
         )

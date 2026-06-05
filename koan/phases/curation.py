@@ -297,7 +297,7 @@ def _tools_this_step_block(current_step: int) -> list[str]:
             "   against existing entries when classifying.",
             "3. Source-gathering tools authorized by your directive (scouts, doc",
             "   reads, `koan_ask_question`, walking your conversation history).",
-            "4. `koan_complete_step` -- LAST, after you have a candidate list.",
+            "4. End your turn -- LAST, after you have a candidate list.",
             "</tools_this_step>",
         ]
     if current_step == 2:
@@ -311,7 +311,7 @@ def _tools_this_step_block(current_step: int) -> list[str]:
             "2. `koan_memorize`       -- write approved ADD / UPDATE entries.",
             "3. `koan_forget`         -- delete approved DEPRECATE entries.",
             "4. `koan_memory_status`  -- call ONCE at the end to verify your writes.",
-            "5. `koan_complete_step`  -- LAST, after the anticipatory check passes.",
+            "5. End your turn -- LAST, after the anticipatory check passes.",
             "</tools_this_step>",
         ]
     return []
@@ -418,11 +418,11 @@ def _step_1_inventory(ctx: PhaseContext) -> StepGuidance:
         "A numbered candidate list. This becomes the input to step 2's",
         "memorize loop.",
         "",
-        "Do NOT call `koan_complete_step` until you have at least one",
+        "Do NOT end your turn until you have at least one",
         "candidate with classification ADD, UPDATE, or DEPRECATE.",
         "Exception: if the source genuinely contains no novel knowledge,",
         "state that explicitly (\"all candidates were NOOPs because X\") and",
-        "then complete the step.",
+        "then end your turn.",
     ]
     return StepGuidance(title=STEP_NAMES[1], instructions=instructions)
 
@@ -846,8 +846,8 @@ def _step_2_memorize(ctx: PhaseContext) -> StepGuidance:
         "",
         "## Anticipatory tool-call check (BEFORE the wrap-up)",
         "",
-        "After all batches have been processed, before you call",
-        "`koan_complete_step`, verify:",
+        "After all batches have been processed, before you end your turn, verify:",
+        "",
         "",
         "- Did you call `koan_memorize` at least once for the ADD /",
         "  UPDATE items on your step 1 candidate list?",
@@ -871,7 +871,7 @@ def _step_2_memorize(ctx: PhaseContext) -> StepGuidance:
         "   `{added: N, updated: N, deprecated: N, noop: N}`",
         "   plus a one-line note on anything deferred for a future run.",
     ]
-    # terminal_invoke replaces the trailing koan_complete_step wrap-up instruction.
+    # terminal_invoke supplies the phase-boundary hand-back invoke_after.
     # Curation is always a terminal phase (next_phase=None); the invoke_after
     # renders the full-yield path so the orchestrator can signal workflow end.
     return StepGuidance(

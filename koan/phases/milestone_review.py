@@ -121,7 +121,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
             "5. Estimate sizing: roughly how many files does each milestone touch?",
             "   Would the resulting plan likely exceed 30 steps?",
             "",
-            "Call `koan_complete_step` with a verification summary:",
+            "End your turn with a verification summary:",
             "- What you verified (files opened, boundaries checked)",
             "- Ownership overlaps found (if any)",
             "- Sizing estimates per milestone",
@@ -195,7 +195,7 @@ def step_guidance(step: int, ctx: PhaseContext) -> StepGuidance:
                 "",
                 "The workflow guidance above specifies where to go next.",
             ],
-            # terminal_invoke replaces the trailing koan_complete_step instruction.
+            # terminal_invoke supplies the phase-boundary invoke_after.
             # next_phase=None: review outcome requires user direction.
             invoke_after=terminal_invoke(ctx.next_phase, ctx.suggested_phases),
         )
