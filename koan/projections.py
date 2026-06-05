@@ -86,16 +86,17 @@ EventType = Literal[
     "artifact_modified",
     "artifact_removed",
     # Settings
-    "probe_completed",
-    "installation_created",
-    "installation_modified",
-    "installation_removed",
+    # probe_completed / installation_* removed in M4: installation concept and
+    # CLI binary probe deleted; provider credentials are the availability model.
     "profile_created",
     "profile_modified",
     "profile_removed",
     "default_profile_changed",
     "default_scout_concurrency_changed",
     "workflows_listed",
+    # M2: provider availability + model catalog initial events
+    "provider_status_listed",
+    "model_registry_listed",
     # Memory curation — orchestrator blocked in koan_memory_propose
     "memory_curation_started",
     "memory_curation_cleared",
@@ -345,6 +346,14 @@ class Conversation(KoanBaseModel):
     is_thinking: bool = False              # True while thinking deltas are arriving
     input_tokens: int = 0                  # accumulated from agent_step_advanced usage
     output_tokens: int = 0
+    # M5: cache token facts (folded from turn_complete RequestUsage, cumulative sums).
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    # M5: derived fields -- computed in the fold, not recorded as event facts.
+    # total_cost_usd: genai-prices bundled snapshot via price_for_usage (cumulative tokens).
+    # context_window_percent: latest request's input / context_window, clamped 0-100.
+    total_cost_usd: float = 0.0
+    context_window_percent: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -380,6 +389,10 @@ class Agent(KoanBaseModel):
     label: str = ""
     model: str | None = None
     is_primary: bool = False
+    # M5: provider + context_window carried from agent_spawned so the fold can
+    # derive cost and context-window percent without live config lookups.
+    provider: str | None = None
+    context_window: int = 0
 
     # Lifecycle — state machine: queued → running → done | failed
     status: Literal["queued", "running", "done", "failed"] = "queued"
@@ -400,19 +413,59 @@ class Agent(KoanBaseModel):
 # Settings and run configuration
 # ---------------------------------------------------------------------------
 
-class Installation(KoanBaseModel):
-    """A configured LLM CLI installation."""
-    alias: str
-    runner_type: str
-    binary: str
-    extra_args: list[str] = []
-    available: bool = False                # probe result: binary exists and responds
+# Installation model removed in M4: the agent installation concept is deleted.
+# CLI binary configurations are replaced by provider credential availability.
+
+class ProfileTierWire(KoanBaseModel):
+    """Wire representation of one profile tier slot.
+
+    Carries the provider/model/thinking triple that _serialize_profile emits and
+    that api_profiles_create/update accepts. Replaces the old role->alias string.
+    """
+
+    provider: str
+    model: str
+    thinking: str = "disabled"
+
 
 class Profile(KoanBaseModel):
-    """Maps roles to installations for a workflow run."""
+    """Maps tier names to model selections for a workflow run.
+
+    tiers changed from dict[str,str] (role->alias) to dict[str,ProfileTierWire]
+    in M3 when profile CRUD moved from the installation model to ModelSpec.
+    """
+
     name: str
     read_only: bool = False
-    tiers: dict[str, str] = {}             # role → installation alias
+    tiers: dict[str, ProfileTierWire] = {}
+
+class ProviderStatusWire(KoanBaseModel):
+    """Wire representation of ProviderStatus pushed by the provider_status_listed event.
+
+    Payload shape: {providers: [{provider, available, env_keys}, ...]}.
+    Fold sets Settings.provider_status from the providers list.
+    """
+
+    provider: str
+    available: bool
+    env_keys: list[str] = []
+
+
+class ModelRegistryEntryWire(KoanBaseModel):
+    """Wire representation of ModelRegistryEntry pushed by the model_registry_listed event.
+
+    Payload shape: {models: [{provider, model, display_name, context_window,
+    thinking_modes, tier_hint}, ...]}.
+    Fold sets Settings.model_registry from the models list.
+    """
+
+    provider: str
+    model: str
+    display_name: str
+    context_window: int
+    thinking_modes: list[str] = []
+    tier_hint: str | None = None
+
 
 class Settings(KoanBaseModel):
     """Top-level projection settings populated at server startup.
@@ -420,17 +473,27 @@ class Settings(KoanBaseModel):
     workflows is static for the process lifetime: it is populated once by the
     workflows_listed initial event and never updated after that. It is placed
     here (rather than on Run) so the frontend can read it before any run starts.
+
+    provider_status and model_registry (M2) are populated by initial events pushed
+    from _push_initial_config_events; they follow the same Settings-channel pattern
+    as workflows_listed (not a new HTTP endpoint).
+
+    M4: installations removed -- the agent installation concept is deleted;
+    provider credentials are the availability model.
     """
-    installations: dict[str, Installation] = {}   # alias → Installation
-    profiles: dict[str, Profile] = {}             # name → Profile
+    profiles: dict[str, Profile] = {}             # name -> Profile
     default_profile: str = "balanced"
     default_scout_concurrency: int = 8
     workflows: list[WorkflowInfo] = []            # populated once by workflows_listed at startup
+    # M2: provider availability (replaces probe_completed for the settings surface)
+    provider_status: list[ProviderStatusWire] = []
+    # M2: all-providers model registry (source for profile form options in M3)
+    model_registry: list[ModelRegistryEntryWire] = []
 
 class RunConfig(KoanBaseModel):
     """Resolved configuration frozen at run start."""
     profile: str
-    installations: dict[str, str] = {}     # role → installation alias
+    # installations removed in M4: agent installation concept deleted.
     scout_concurrency: int = 8
 
 
@@ -707,7 +770,63 @@ def _update_agent_conversation(run: Run, agent_id: str, new_conv: Conversation, 
 # RENDERABLE_KOAN_TOOLS removed in M1: every koan MCP tool now follows the
 # same lifecycle (tool_request -> tool_input_delta -> tool_result) and
 # produces ToolKoanEntry. Selection happens in the fold's tool_request case
-# by membership in KOAN_MCP_TOOLS (imported from koan.runners.base).
+# by membership in KOAN_MCP_TOOLS (imported from koan.agents.events).
+
+
+def _derive_usage(conv: "Conversation", agent: "Agent", usage: dict) -> "Conversation":
+    """Accumulate cache token facts and derive cost + context-window percent.
+
+    Called from both agent_exited and agent_step_advanced usage blocks so the
+    derivation logic is in one place (mirrors the existing input/output dual-fold
+    pattern). cache_read/write_tokens are folded facts (cumulative sums from the
+    usage dict). total_cost_usd and context_window_percent are derived values:
+    they are never recorded as event facts and belong entirely to the fold.
+
+    Fold-safety contract:
+    - price_for_usage is imported lazily (bundled snapshot only; no network).
+    - try/except around price_for_usage: keeps the prior cost on any failure
+      (e.g. unresolvable model, missing provider) rather than raising.
+    - context_window_percent is only computed when agent.context_window > 0
+      to avoid zero-division.
+    """
+    # Accumulate cache token facts (cumulative sums).
+    new_cache_read = conv.cache_read_tokens + usage.get("cache_read_tokens", 0)
+    new_cache_write = conv.cache_write_tokens + usage.get("cache_write_tokens", 0)
+
+    conv = conv.model_copy(update={
+        "input_tokens": conv.input_tokens + usage.get("input_tokens", 0),
+        "output_tokens": conv.output_tokens + usage.get("output_tokens", 0),
+        "cache_read_tokens": new_cache_read,
+        "cache_write_tokens": new_cache_write,
+    })
+
+    # Derive total_cost_usd from the updated cumulative totals.
+    # Wrapped in try/except so an unresolvable model never raises in the fold.
+    if agent.provider and agent.model:
+        try:
+            from .agents.model_catalog import price_for_usage
+            total_cost = float(price_for_usage(
+                agent.provider,
+                agent.model,
+                conv.input_tokens,
+                conv.output_tokens,
+                conv.cache_read_tokens,
+                conv.cache_write_tokens,
+            ))
+            conv = conv.model_copy(update={"total_cost_usd": total_cost})
+        except Exception:
+            # Keep the prior total_cost_usd on failure (e.g. unknown model).
+            pass
+
+    # Derive context_window_percent from the most recent turn's input tokens.
+    # last_input_tokens is overwritten each turn (not summed) so it reflects
+    # current context fullness rather than a double-counted cumulative sum.
+    if agent.context_window > 0:
+        last_input = usage.get("last_input_tokens", 0)
+        percent = round(min(100.0, last_input / agent.context_window * 100), 1)
+        conv = conv.model_copy(update={"context_window_percent": percent})
+
+    return conv
 
 
 # ---------------------------------------------------------------------------
@@ -853,6 +972,8 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                         "role": payload.get("role", existing.role),
                         "label": payload.get("label", existing.label),
                         "model": payload.get("model", existing.model),
+                        "provider": payload.get("provider"),
+                        "context_window": payload.get("context_window", 0),
                     })
                 else:
                     # New agent (primary agents are always new)
@@ -864,6 +985,8 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                         is_primary=is_primary,
                         status="running",
                         started_at_ms=payload.get("started_at_ms", 0),
+                        provider=payload.get("provider"),
+                        context_window=payload.get("context_window", 0),
                     )
 
                 new_run = projection.run.model_copy(update={"agents": new_agents})
@@ -901,13 +1024,12 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                 usage = payload.get("usage")
                 status: Literal["done", "failed"] = "failed" if error or exit_code != 0 else "done"
 
-                # Accumulate final usage into conversation
+                # Accumulate final usage into conversation and derive cost/context%.
+                # _derive_usage handles input/output/cache accumulation and
+                # derives total_cost_usd + context_window_percent in one call.
                 new_conv = agent.conversation
                 if usage:
-                    new_conv = new_conv.model_copy(update={
-                        "input_tokens": new_conv.input_tokens + usage.get("input_tokens", 0),
-                        "output_tokens": new_conv.output_tokens + usage.get("output_tokens", 0),
-                    })
+                    new_conv = _derive_usage(new_conv, agent, usage)
 
                 new_agent = agent.model_copy(update={
                     "status": status,
@@ -1806,12 +1928,11 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                         )],
                     })
 
-                # Accumulate token usage from step
+                # Accumulate token usage from step (including cache facts and
+                # derived cost/context%). agent_step_advanced carries no usage today
+                # so this is a defensive no-op consistent with agent_exited's pattern.
                 if usage:
-                    new_conv = new_conv.model_copy(update={
-                        "input_tokens": new_conv.input_tokens + usage.get("input_tokens", 0),
-                        "output_tokens": new_conv.output_tokens + usage.get("output_tokens", 0),
-                    })
+                    new_conv = _derive_usage(new_conv, agent, usage)
 
                 return projection.model_copy(update={
                     "run": _update_agent_conversation(projection.run, agent_id, new_conv,
@@ -1884,67 +2005,23 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
 
             # ── Settings ──────────────────────────────────────────────────
 
-            case "probe_completed":
-                # Payload: {results: {alias: bool, ...}}
-                results: dict[str, bool] = payload.get("results", {})
-                new_insts = dict(projection.settings.installations)
-                for alias, available in results.items():
-                    if alias in new_insts:
-                        new_insts[alias] = new_insts[alias].model_copy(update={"available": available})
-                new_settings = projection.settings.model_copy(update={"installations": new_insts})
-                return projection.model_copy(update={"settings": new_settings})
-
-            case "installation_created":
-                alias = payload.get("alias", "")
-                inst = Installation(
-                    alias=alias,
-                    runner_type=payload.get("runner_type", ""),
-                    binary=payload.get("binary", ""),
-                    extra_args=payload.get("extra_args", []),
-                    available=False,  # availability set by probe_completed
-                )
-                new_insts = dict(projection.settings.installations)
-                new_insts[alias] = inst
-                new_settings = projection.settings.model_copy(update={"installations": new_insts})
-                return projection.model_copy(update={"settings": new_settings})
-
-            case "installation_modified":
-                alias = payload.get("alias", "")
-                existing = projection.settings.installations.get(alias)
-                available = existing.available if existing else False
-                inst = Installation(
-                    alias=alias,
-                    runner_type=payload.get("runner_type", ""),
-                    binary=payload.get("binary", ""),
-                    extra_args=payload.get("extra_args", []),
-                    available=available,  # preserve probe result
-                )
-                new_insts = dict(projection.settings.installations)
-                new_insts[alias] = inst
-                new_settings = projection.settings.model_copy(update={"installations": new_insts})
-                return projection.model_copy(update={"settings": new_settings})
-
-            case "installation_removed":
-                alias = payload.get("alias", "")
-                new_insts = {k: v for k, v in projection.settings.installations.items() if k != alias}
-                new_settings = projection.settings.model_copy(update={"installations": new_insts})
-                return projection.model_copy(update={"settings": new_settings})
+            # probe_completed / installation_* fold cases removed in M4:
+            # installation concept and CLI binary probe deleted.
 
             case "profile_created":
                 name = payload.get("name", "")
-                # tiers in the projection are stored as dict[str, str] (role → alias).
-                # The payload tiers may be nested dicts from the old ProfileTier structure
-                # or simple string values from the new structure. Normalise to str.
                 raw_tiers = payload.get("tiers", {})
-                tiers: dict[str, str] = {}
+                # M3: tiers are now nested {provider, model, thinking} dicts emitted
+                # by _serialize_profile. Construct ProfileTierWire from each dict;
+                # skip non-dict values rather than coercing to avoid silent type errors.
+                tiers: dict[str, ProfileTierWire] = {}
                 for role, val in raw_tiers.items():
-                    if isinstance(val, str):
-                        tiers[role] = val
-                    elif isinstance(val, dict):
-                        # Legacy: extract alias or runner_type as a best-effort fallback
-                        tiers[role] = val.get("alias", val.get("runner_type", str(val)))
-                    else:
-                        tiers[role] = str(val)
+                    if isinstance(val, dict):
+                        tiers[role] = ProfileTierWire(
+                            provider=val.get("provider", ""),
+                            model=val.get("model", ""),
+                            thinking=val.get("thinking", "disabled"),
+                        )
                 profile = Profile(
                     name=name,
                     read_only=payload.get("read_only", False),
@@ -1958,14 +2035,15 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
             case "profile_modified":
                 name = payload.get("name", "")
                 raw_tiers = payload.get("tiers", {})
+                # M3: same shape as profile_created -- nested {provider, model, thinking}.
                 tiers = {}
                 for role, val in raw_tiers.items():
-                    if isinstance(val, str):
-                        tiers[role] = val
-                    elif isinstance(val, dict):
-                        tiers[role] = val.get("alias", val.get("runner_type", str(val)))
-                    else:
-                        tiers[role] = str(val)
+                    if isinstance(val, dict):
+                        tiers[role] = ProfileTierWire(
+                            provider=val.get("provider", ""),
+                            model=val.get("model", ""),
+                            thinking=val.get("thinking", "disabled"),
+                        )
                 profile = Profile(
                     name=name,
                     read_only=payload.get("read_only", False),
@@ -2006,6 +2084,40 @@ def fold(projection: Projection, event: VersionedEvent) -> Projection:
                     except Exception:
                         log.warning("fold workflows_listed: skipping malformed entry %r", entry)
                 new_settings = projection.settings.model_copy(update={"workflows": new_workflows})
+                return projection.model_copy(update={"settings": new_settings})
+
+            case "provider_status_listed":
+                # Payload: {providers: [{provider, available, env_keys}, ...]}.
+                # Replaces probe_completed as the canonical provider-availability signal in M2.
+                raw_providers = payload.get("providers", [])
+                new_ps = [
+                    ProviderStatusWire(
+                        provider=p.get("provider", ""),
+                        available=p.get("available", False),
+                        env_keys=p.get("env_keys", []),
+                    )
+                    for p in raw_providers
+                ]
+                new_settings = projection.settings.model_copy(update={"provider_status": new_ps})
+                return projection.model_copy(update={"settings": new_settings})
+
+            case "model_registry_listed":
+                # Payload: {models: [{provider, model, display_name, context_window,
+                # thinking_modes, tier_hint}, ...]}.
+                # Populates the all-providers model catalog in the Settings projection.
+                raw_models = payload.get("models", [])
+                new_mr = [
+                    ModelRegistryEntryWire(
+                        provider=m.get("provider", ""),
+                        model=m.get("model", ""),
+                        display_name=m.get("display_name", ""),
+                        context_window=m.get("context_window", 0),
+                        thinking_modes=m.get("thinking_modes", []),
+                        tier_hint=m.get("tier_hint"),
+                    )
+                    for m in raw_models
+                ]
+                new_settings = projection.settings.model_copy(update={"model_registry": new_mr})
                 return projection.model_copy(update={"settings": new_settings})
 
             case "yield_started":

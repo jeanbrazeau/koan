@@ -35,6 +35,11 @@ def build_workflow_selected(workflow: str) -> dict:
 
 
 def build_agent_spawned(agent: AgentState) -> dict:
+    """Build agent_spawned event payload.
+
+    Carries provider and context_window alongside identity so the projection
+    fold can derive cost and context-window percent without live lookups.
+    """
     return {
         "agent_id": agent.agent_id,
         "role": agent.role,
@@ -42,6 +47,8 @@ def build_agent_spawned(agent: AgentState) -> dict:
         "model": agent.model,
         "is_primary": agent.is_primary,
         "started_at_ms": int(agent.started_at.timestamp() * 1000),
+        "provider": agent.provider,
+        "context_window": agent.context_window,
     }
 
 
@@ -246,40 +253,31 @@ def build_yield_started(suggestions: list[dict]) -> dict:
 
 # -- Configuration event builders ---------------------------------------------
 
-def build_probe_completed(results: dict[str, bool]) -> dict:
-    """Build probe_completed payload.
+# build_probe_completed removed in M4: CLI binary probe and installation concept
+# deleted; provider credential availability uses build_provider_status_listed.
+
+def build_provider_status_listed(providers: list[dict]) -> dict:
+    """Build provider_status_listed payload.
 
     Args:
-        results: mapping of installation alias → available (bool).
+        providers: list of {provider, available, env_keys} dicts -- one per known
+                   provider; env_keys carries the env var NAMES checked (never values).
     """
-    return {"results": results}
+    return {"providers": providers}
 
 
-def build_installation_created(
-    alias: str, runner_type: str, binary: str, extra_args: list[str],
-) -> dict:
-    return {
-        "alias": alias,
-        "runner_type": runner_type,
-        "binary": binary,
-        "extra_args": extra_args,
-    }
+def build_model_registry_listed(models: list[dict]) -> dict:
+    """Build model_registry_listed payload.
+
+    Args:
+        models: list of {provider, model, display_name, context_window,
+                thinking_modes, tier_hint} dicts -- one per MODEL_CAPABILITIES entry.
+    """
+    return {"models": models}
 
 
-def build_installation_modified(
-    alias: str, runner_type: str, binary: str, extra_args: list[str],
-) -> dict:
-    return {
-        "alias": alias,
-        "runner_type": runner_type,
-        "binary": binary,
-        "extra_args": extra_args,
-    }
-
-
-def build_installation_removed(alias: str) -> dict:
-    return {"alias": alias}
-
+# build_installation_created/modified/removed removed in M4: installation
+# concept deleted; no callers remain after app.py cleanup.
 
 def build_profile_created(name: str, read_only: bool, tiers: dict) -> dict:
     return {"name": name, "read_only": read_only, "tiers": tiers}

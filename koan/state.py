@@ -16,9 +16,8 @@ def _utcnow() -> datetime:
     return datetime.now(timezone.utc)
 
 from .config import KoanConfig
-from .probe import ProbeResult
 from .projections import ProjectionStore
-from .types import WorkflowPhase, Profile, SubagentRole
+from .types import WorkflowPhase, Profile, ProviderStatus, ModelRegistryEntry, SubagentRole
 
 
 @dataclass
@@ -55,9 +54,15 @@ class AgentState:
     phase_module: Any = None
     phase_ctx: Any = None
     event_log: Any = None
-    handshake_observed: bool = False
+    # Set by run_agent_loop once the first turn reaches the End node -- the
+    # bootstrap signal that replaces the removed first-tool-call handshake.
+    first_turn_completed: bool = False
     pending_tool: asyncio.Future | None = None
     model: str | None = None
+    # provider and context_window feed the fold's cost + context-window derivation.
+    # Set from model_spec at spawn time; None/0 when agent_impl is injected in tests.
+    provider: str | None = None
+    context_window: int = 0
     token_count: dict = field(default_factory=lambda: {"sent": 0, "received": 0})
     final_response: str = ""
     is_primary: bool = True
@@ -97,9 +102,10 @@ class RunState:
     # Additional working directories beyond project_dir, populated from --add-dir flags.
     additional_dirs: list[str] = field(default_factory=list)
     run_installations: dict[str, str] = field(default_factory=dict)
-    # Upload IDs attached at start-run time, consumed exactly once by the
-    # orchestrator's first koan_complete_step and then cleared. Not persisted
-    # to run-state.json; task.json carries the IDs as a debug breadcrumb.
+    # Upload IDs attached at start-run time. The in-process path no longer
+    # consumes start_attachments (the consuming MCP handler was removed in M1);
+    # the field is retained but unused. task.json carries the IDs as a debug
+    # breadcrumb only.
     start_attachments: list[str] = field(default_factory=list)
     # Handle for the per-run driver coroutine task. Authoritative source of
     # truth for the "is a run active?" guard in api_start_run; done() means
@@ -114,6 +120,11 @@ class InteractionState:
     interaction_queue_max: int = 8
     user_message_buffer: list[ChatMessage] = field(default_factory=list)
     yield_future: asyncio.Future | None = None
+    # Orchestrator-authored hand-back suggestions recorded by koan_suggest_next.
+    # Consumed and cleared by the loop at the phase-boundary hand-back.
+    # build_phase_suggestions is the fallback when None (koan_suggest_next never
+    # called for this hand-back).
+    next_suggestions: list[dict] | None = None
     # Separate future for koan_memory_propose -- same isolation rationale as
     # the removed artifact_review_future (koan_artifact_propose is gone in M5).
     memory_propose_future: asyncio.Future | None = None
@@ -143,9 +154,20 @@ class UploadState:
 
 @dataclass
 class RunnerConfigState:
+    """Mutable server-side runner and provider configuration state.
+
+    provider_status replaces the legacy probe_results (ProbeResult list) from M2.
+    model_registry is additive -- populated at startup alongside provider_status
+    and surfaced to the frontend via Settings projection initial events.
+    """
+
     config: KoanConfig = field(default_factory=KoanConfig)
     builtin_profiles: dict[str, Profile] = field(default_factory=dict)
-    probe_results: list[ProbeResult] = field(default_factory=list)
+    # M2: renamed from probe_results; type changed from list[ProbeResult] to
+    # list[ProviderStatus]. Every reader migrated in this change to avoid boot crash.
+    provider_status: list[ProviderStatus] = field(default_factory=list)
+    # M2: all-providers model registry sourced from MODEL_CAPABILITIES + genai-prices.
+    model_registry: list[ModelRegistryEntry] = field(default_factory=list)
     config_write_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
@@ -203,12 +225,8 @@ class AppState:
     server: ServerConfig = field(default_factory=ServerConfig)
     projection_store: ProjectionStore = field(default_factory=ProjectionStore)
     agents: dict[str, AgentState] = field(default_factory=dict)
-    # Track running subprocess handles so shutdown can kill them.
-    # (Legacy CLI runners only; PydanticAIAgent registers no process.
-    # Removed with the rip-out in M9.)
-    _active_processes: dict[str, asyncio.subprocess.Process] = field(
-        default_factory=dict, repr=False,
-    )
+    # _active_processes removed in M4: the legacy CLI subprocess registration
+    # path is deleted; in-process PydanticAI agents have no subprocess to track.
     # Track in-flight in-process subagent asyncio tasks (executor/scouts spawned
     # via the in-process koan_request_* tools, M6) so shutdown can cancel them.
     _active_tasks: dict[str, "asyncio.Task"] = field(

@@ -33,14 +33,8 @@ class KoanConfig:
     active_profile: str = "balanced"
     scout_concurrency: int = 8
 
-    @property
-    def agent_installations(self) -> list:
-        """Compatibility shim -- agent_installations replaced by provider_auth in M1.
-
-        koan/web/app.py settings endpoints still reference this field; they are reworked
-        in M8 to use provider_auth. Returns empty list so app startup does not crash.
-        """
-        return []
+    # agent_installations compat-shim removed in M4: all callers migrated to
+    # provider_auth in M1/M3; api_agents_list deleted in M4.
 
 
 # -- Write lock (lazily initialized) ------------------------------------------

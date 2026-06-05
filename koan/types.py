@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 WorkflowPhase = Literal[
-    # Legacy workflow phases (kept as dead code; no active workflow uses these)
+    # Active workflow phases
     "intake",
     "brief-generation",
     "core-flows",
@@ -21,6 +21,8 @@ WorkflowPhase = Literal[
     "execute",
     # Curation (memory maintenance) -- reusable across workflows
     "curation",
+    # M4: legacy phase literals kept to avoid breaking state.py WorkflowPhase
+    # annotation until the phase taxonomy is revisited in M6/M7.
 ]
 
 SubagentRole = Literal[
@@ -51,12 +53,44 @@ DEFAULT_MAX_RETRIES = 2
 ThinkingMode = Literal["disabled", "low", "medium", "high", "xhigh", "max"]
 
 
+# ModelInfo removed in M4: the CLI binary probe that populated it is deleted.
+# The all-providers model catalog uses ModelRegistryEntry (koan/types.py) and
+# koan/agents/model_catalog.py instead.
+
+
+# -- Provider availability and model registry (M2) ----------------------------
+# Defined before ProfileTier (book order: dependencies before use).
+
+
 @dataclass
-class ModelInfo:
-    alias: str
+class ProviderStatus:
+    """Credential-based provider availability; replaces ProbeResult's availability role.
+
+    Carries which env vars were checked (by name, never value) and whether all
+    required keys were present. ProbeResult / probe.py stay defined-but-unused
+    until Milestone 4.
+    """
+
+    provider: str
+    available: bool
+    env_keys: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ModelRegistryEntry:
+    """One entry in the all-providers model catalog, surfaced via Settings projection.
+
+    Describes a curated (provider, model) pair with capability annotations.
+    Sources: model lists and context_window from genai-prices bundled snapshot;
+    thinking_modes and tier_hint from the koan capability table in model_catalog.py.
+    """
+
+    provider: str
+    model: str
     display_name: str
-    thinking_modes: frozenset[ThinkingMode]
-    tier_hint: ModelTier | None
+    context_window: int
+    thinking_modes: list[ThinkingMode] = field(default_factory=list)
+    tier_hint: ModelTier | None = None
 
 
 # -- Provider config types (M1: config schema reshape) ------------------------
@@ -112,14 +146,8 @@ class Profile:
 BUILTIN_PROFILE_NAMES: frozenset[str] = frozenset({"balanced", "frontier"})
 
 
-# Vestigial -- consumed by the legacy ClaudeSDKAgent/CommandLineAgent path and probe.py;
-# removed at the M9 rip-out. The new config path uses ProviderAuth.
-@dataclass
-class AgentInstallation:
-    alias: str
-    runner_type: str
-    binary: str
-    extra_args: list[str] = field(default_factory=list)
+# AgentInstallation removed in M4: the legacy CLI/SDK agent path is deleted.
+# Provider credentials use ProviderAuth.
 
 
 ROLE_MODEL_TIER: dict[SubagentRole, ModelTier] = {
@@ -130,12 +158,5 @@ ROLE_MODEL_TIER: dict[SubagentRole, ModelTier] = {
     "executor": "standard",
 }
 
-# Superseded by the provider adapter's per-provider thinking mapping;
-# retained until the legacy claude path is removed at M9.
-ROLE_EFFORT: dict[SubagentRole, ThinkingMode] = {
-    "intake": "max",
-    "scout": "medium",
-    "orchestrator": "max",
-    "planner": "max",
-    "executor": "medium",
-}
+# ROLE_EFFORT removed in M4: superseded by the provider adapter's per-provider
+# thinking mapping. Only ROLE_MODEL_TIER (above) remains for tier resolution.

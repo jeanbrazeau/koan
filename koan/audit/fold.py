@@ -81,12 +81,10 @@ def fold(s: Projection, e: AuditEvent) -> Projection:
         return base
 
     if kind == "tool_call":
+        # The step-advancement tool's thoughts->completion_summary capture was
+        # removed in M6 along with the tool itself.
         base.last_action = _summarize_call(e.tool, e.input)
         base.current_tool_call_id = e.tool_call_id
-        if e.tool == "koan_complete_step":
-            thoughts = e.input.get("thoughts", "")
-            if isinstance(thoughts, str) and thoughts:
-                base.completion_summary = thoughts[:500]
         return base
 
     if kind == "tool_result":
