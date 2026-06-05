@@ -1,22 +1,20 @@
 # Unit tests for ToolPolicy and compose_toolset.
 #
 # Verifies that compose_toolset produces the correct per-(role, phase) tool
-# set for representative cases, and that it agrees with check_permission for
-# a cross-checked sample -- keeping the two in sync until M9 deletes
-# check_permission.
+# set for representative cases.
 
 from __future__ import annotations
 
 import pytest
 
-from koan.tools.tool_policy import build_tool_policy, compose_toolset
-from koan.lib.permissions import (
+from koan.tools.tool_policy import (
+    build_tool_policy,
+    compose_toolset,
     _ORCHESTRATOR_STORY_TOOLS,
     _ORCHESTRATOR_SCOUT_PHASES,
     _UNIVERSAL_MEMORY_TOOLS,
     _UNIVERSAL_READ_TOOLS,
     _NON_BASH_READ_TOOLS,
-    check_permission,
 )
 
 # -- Shared constants for assertions ------------------------------------------
@@ -82,10 +80,15 @@ class TestOrchestratorPlanningPhase:
         assert "koan_request_executor" not in toolset
 
     def test_step_machine_tools_present(self, policy):
-        """koan_complete_step and koan_set_phase must always be present."""
+        """koan_set_phase and koan_suggest_next must always be present for orchestrator.
+
+        koan_complete_step was removed in M6; koan_suggest_next is the
+        orchestrator-only hand-back suggestion tool that replaced it.
+        """
         toolset = _compose(policy, "orchestrator", self.PHASE)
-        assert "koan_complete_step" in toolset
         assert "koan_set_phase" in toolset
+        assert "koan_suggest_next" in toolset
+        assert "koan_complete_step" not in toolset
 
     def test_memory_tools_present(self, policy):
         """Orchestrator-specific memory tools (memorize, forget, reflect) present."""
@@ -154,10 +157,10 @@ class TestExecutorRole:
         toolset = _compose(policy, "executor", self.PHASE)
         assert "bash" in toolset
 
-    def test_koan_complete_step_present(self, policy):
-        """Executors need koan_complete_step to advance through their steps."""
+    def test_koan_complete_step_absent(self, policy):
+        """koan_complete_step removed in M6 -- not in executor toolset."""
         toolset = _compose(policy, "executor", self.PHASE)
-        assert "koan_complete_step" in toolset
+        assert "koan_complete_step" not in toolset
 
     def test_no_orchestrator_story_tools(self, policy):
         """Story management tools are orchestrator-only."""
@@ -192,10 +195,14 @@ class TestScoutRole:
         toolset = _compose(policy, "scout", self.PHASE)
         assert _ALWAYS_PRESENT <= toolset
 
-    def test_koan_complete_step_present(self, policy):
-        """Scouts need koan_complete_step."""
+    def test_koan_complete_step_absent(self, policy):
+        """koan_complete_step removed in M6 -- not in scout toolset either.
+
+        Scouts advance through steps by ending each turn; the loop resolver
+        delivers the next step and terminates at exhaustion.
+        """
         toolset = _compose(policy, "scout", self.PHASE)
-        assert "koan_complete_step" in toolset
+        assert "koan_complete_step" not in toolset
 
     def test_bash_present(self, policy):
         """Non-orchestrator roles always have bash."""
@@ -215,67 +222,3 @@ class TestScoutRole:
         assert "koan_reflect" not in toolset
 
 
-# -- Cross-check: compose_toolset vs check_permission -------------------------
-
-# Sample triples (role, phase, tool) whose allow/deny must agree between
-# compose_toolset and check_permission. This keeps the two in sync until M9.
-# check_permission uses (role, tool_name, current_phase) keyword arguments.
-_CROSS_CHECK_SAMPLES: list[tuple[str, str, str, bool]] = [
-    # (role, phase, tool, expected_allowed)
-    # Orchestrator universals -- always allowed in any phase.
-    ("orchestrator", "plan-spec",   "koan_memory_status",   True),
-    ("orchestrator", "plan-spec",   "koan_search",          True),
-    ("orchestrator", "plan-spec",   "koan_artifact_list",   True),
-    ("orchestrator", "plan-spec",   "koan_artifact_view",   True),
-    # Orchestrator phase-conditional tools.
-    ("orchestrator", "plan-spec",   "koan_request_scouts",  True),
-    ("orchestrator", "execution",   "koan_request_scouts",  False),
-    ("orchestrator", "execution",   "koan_select_story",    True),
-    ("orchestrator", "plan-spec",   "koan_select_story",    False),
-    ("orchestrator", "execution",   "bash",                 True),
-    ("orchestrator", "plan-spec",   "bash",                 False),
-    # Executor.
-    ("executor",     "execute",     "koan_complete_step",   True),
-    ("executor",     "execute",     "bash",                 True),
-    ("executor",     "execute",     "koan_set_phase",       False),
-    # Scout.
-    ("scout",        "plan-spec",   "koan_complete_step",   True),
-    ("scout",        "plan-spec",   "koan_set_phase",       False),
-    ("scout",        "plan-spec",   "koan_reflect",         False),
-    # Non-bash read tools: always allowed for all roles.
-    ("scout",        "plan-spec",   "read",                 True),
-    ("orchestrator", "execution",   "glob",                 True),
-]
-
-
-class TestCrossCheckWithCheckPermission:
-    """compose_toolset and check_permission must agree on allow/deny for every sample.
-
-    This asserts that the two gate implementations stay in sync. If they
-    diverge, either compose_toolset has a bug or the permissions table
-    changed without updating the policy.
-    """
-
-    @pytest.mark.parametrize("role,phase,tool,expected", _CROSS_CHECK_SAMPLES)
-    def test_agree(self, policy, role, phase, tool, expected):
-        """Both gates must return the same decision for (role, phase, tool)."""
-        toolset = compose_toolset(policy, role, phase)
-        compose_says = tool in toolset
-        perm_says = check_permission(
-            role=role, tool_name=tool, current_phase=phase
-        )["allowed"]
-
-        assert compose_says == expected, (
-            f"compose_toolset({role!r}, {phase!r}) -> {tool!r} in set = {compose_says}, "
-            f"expected {expected}"
-        )
-        assert perm_says == expected, (
-            f"check_permission(role={role!r}, tool={tool!r}, phase={phase!r}) = {perm_says}, "
-            f"expected {expected}"
-        )
-        # Belt-and-suspenders: both implementations agree with each other.
-        assert compose_says == perm_says, (
-            f"compose_toolset and check_permission disagree on "
-            f"(role={role!r}, phase={phase!r}, tool={tool!r}): "
-            f"compose={compose_says}, check_permission={perm_says}"
-        )

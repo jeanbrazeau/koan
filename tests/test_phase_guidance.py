@@ -451,16 +451,9 @@ def test_steering_message_block_no_artifact_path():
 
 def test_koan_artifact_propose_removed_from_permissions():
     """koan_artifact_propose must not appear in orchestrator ROLE_PERMISSIONS."""
-    from koan.lib.permissions import ROLE_PERMISSIONS
+    # ROLE_PERMISSIONS now lives in koan.tools.tool_policy (inlined from permissions.py in M1).
+    from koan.tools.tool_policy import ROLE_PERMISSIONS
     assert "koan_artifact_propose" not in ROLE_PERMISSIONS["orchestrator"]
-
-
-def test_koan_artifact_propose_not_importable_as_handler():
-    """koan_artifact_propose must not be importable as a handler from mcp_endpoint."""
-    from koan.web.mcp_endpoint import Handlers
-    assert not hasattr(Handlers, "koan_artifact_propose"), (
-        "koan_artifact_propose field was not removed from Handlers dataclass"
-    )
 
 
 def test_phase_summaries_field_removed():

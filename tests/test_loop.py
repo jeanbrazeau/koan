@@ -3,14 +3,15 @@
 # Two layers:
 #   - Pure-helper tests for assemble_resume_prompt / _yolo_yield_response /
 #     _directed_yolo_response / drain_and_render_steering (deterministic, no model).
+#   - resolve_turn_outcome unit tests (step-machine outcome logic).
 #   - Integration tests that drive PydanticAIAgent.run() (which delegates to
 #     run_agent_loop) with pydantic-ai's TestModel, covering the four control-flow
 #     paths: non-primary single turn, workflow_done termination, primary
 #     park/resume, and yolo synthesis-without-parking.
 #
-# The primary park/resume path is the one the golden tests in
-# test_pydantic_ai_agent.py deliberately avoid (they run non-primary single
-# turns); it is pinned here.
+# With the M6 per-step-turn model, each turn delivers one step. The fake phase
+# module uses get_next_step=None (phase exhausted after step 1) so the resolver
+# terminates non-primary agents and parks primary agents after their first turn.
 
 from __future__ import annotations
 
@@ -27,6 +28,7 @@ from koan.agents.loop import (
     _yolo_yield_response,
     assemble_resume_prompt,
     drain_and_render_steering,
+    resolve_turn_outcome,
 )
 from koan.phases import PhaseContext, StepGuidance
 from koan.state import AgentState, AppState, ChatMessage
@@ -102,17 +104,128 @@ def test_drain_and_render_steering_emits_event_and_text():
     assert drain_and_render_steering(app_state, None) is None
 
 
+# -- resolve_turn_outcome unit tests ------------------------------------------
+
+
+def _fake_phase_module_exhausted() -> MagicMock:
+    """Phase module whose steps are exhausted after step 1 (get_next_step=None)."""
+    mod = MagicMock()
+    mod.ROLE = "orchestrator"
+    mod.TOTAL_STEPS = 1
+    mod.PHASE_ROLE_CONTEXT = ""
+    mod.STEP_NAMES = {1: "Comprehend"}
+    mod.validate_step_completion = MagicMock(return_value=None)
+    mod.get_next_step = MagicMock(return_value=None)
+    mod.step_guidance = MagicMock(return_value=StepGuidance(
+        title="Comprehend", instructions=["Read the brief."],
+    ))
+    mod.on_loop_back = AsyncMock()
+    return mod
+
+
+def _make_agent_state(
+    tmp_dir: str,
+    *,
+    is_primary: bool = True,
+    step: int = 1,
+    phase_module=None,
+) -> tuple[AppState, AgentState]:
+    """Build a minimal AppState + AgentState pair for resolver tests."""
+    app_state = AppState()
+    app_state.run.phase = "intake"
+    app_state.run.workflow = None
+    event_log = AsyncMock()
+    event_log.emit_step_transition = AsyncMock()
+    agent = AgentState(
+        agent_id="resolver-test",
+        role="orchestrator",
+        subagent_dir=tmp_dir,
+        run_dir="",
+        step=step,
+        phase_module=phase_module or _fake_phase_module_exhausted(),
+        phase_ctx=PhaseContext(run_dir="", subagent_dir=tmp_dir),
+        event_log=event_log,
+        is_primary=is_primary,
+        runner_type="pydantic_ai",
+    )
+    app_state.agents[agent.agent_id] = agent
+    return app_state, agent
+
+
+@pytest.mark.anyio
+async def test_resolver_step_zero_injects_handshake(tmp_path):
+    """step==0 triggers the phase handshake and returns an inject outcome."""
+    app_state, agent = _make_agent_state(str(tmp_path), step=0)
+    outcome, payload = await resolve_turn_outcome(agent, app_state)
+    assert outcome == "inject"
+    assert payload is not None and len(payload) > 0
+    # Handshake sets agent.step to 1.
+    assert agent.step == 1
+
+
+@pytest.mark.anyio
+async def test_resolver_mid_phase_step_advances(tmp_path):
+    """A mid-phase step with a further step returns inject with the next guidance."""
+    mod = _fake_phase_module_exhausted()
+    mod.get_next_step = MagicMock(return_value=2)  # further step exists
+    mod.TOTAL_STEPS = 3
+    mod.STEP_NAMES = {1: "Comprehend", 2: "Plan", 3: "Write"}
+    app_state, agent = _make_agent_state(str(tmp_path), step=1, phase_module=mod)
+    outcome, payload = await resolve_turn_outcome(agent, app_state)
+    assert outcome == "inject"
+    assert payload is not None
+    # Step advances to 2.
+    assert agent.step == 2
+
+
+@pytest.mark.anyio
+async def test_resolver_phase_exhausted_primary_returns_handback(tmp_path):
+    """Phase exhausted + is_primary=True -> handback outcome."""
+    app_state, agent = _make_agent_state(str(tmp_path), is_primary=True, step=1)
+    # get_next_step returns None (exhausted).
+    outcome, payload = await resolve_turn_outcome(agent, app_state)
+    assert outcome == "handback"
+    assert payload is None
+
+
+@pytest.mark.anyio
+async def test_resolver_phase_exhausted_non_primary_returns_terminate(tmp_path):
+    """Phase exhausted + is_primary=False -> terminate outcome."""
+    app_state, agent = _make_agent_state(str(tmp_path), is_primary=False, step=1)
+    outcome, payload = await resolve_turn_outcome(agent, app_state)
+    assert outcome == "terminate"
+    assert payload is None
+
+
+@pytest.mark.anyio
+async def test_resolver_validation_failure_reinjects_same_step(tmp_path):
+    """Non-empty validate_step_completion re-injects the same step."""
+    mod = _fake_phase_module_exhausted()
+    mod.validate_step_completion = MagicMock(return_value="Must write landscape.md first")
+    app_state, agent = _make_agent_state(str(tmp_path), step=1, phase_module=mod)
+    outcome, payload = await resolve_turn_outcome(agent, app_state)
+    assert outcome == "inject"
+    assert "Must write landscape.md first" in (payload or "")
+    # Step does NOT advance on validation failure.
+    assert agent.step == 1
+
+
 # -- Integration harness -------------------------------------------------------
 
 
 def _fake_phase_module(total_steps: int = 3) -> MagicMock:
+    """Phase module with steps exhausted after step 1 (for integration tests).
+
+    get_next_step returns None so the resolver terminates non-primary agents
+    and parks primary agents after their first step -- the expected M6 behaviour.
+    """
     mod = MagicMock()
     mod.ROLE = "orchestrator"
     mod.TOTAL_STEPS = total_steps
     mod.PHASE_ROLE_CONTEXT = ""
     mod.STEP_NAMES = {1: "Comprehend", 2: "Plan", 3: "Write"}
     mod.validate_step_completion = MagicMock(return_value=None)
-    mod.get_next_step = MagicMock(return_value=1)
+    mod.get_next_step = MagicMock(return_value=None)  # exhausted after step 1
     mod.step_guidance = MagicMock(return_value=StepGuidance(
         title="Comprehend", instructions=["Read the brief."],
     ))
@@ -165,9 +278,10 @@ def _agent(app_state: AppState, tmp_path) -> PydanticAIAgent:
 
 
 def _options(agent_id: str) -> AgentOptions:
+    """Build AgentOptions without boot_prompt (removed in M6)."""
     return AgentOptions(
         role="orchestrator", agent_id=agent_id, model=None, thinking=None,
-        system_prompt="", boot_prompt="Begin.", mcp_url="",
+        system_prompt="",
     )
 
 
@@ -176,7 +290,11 @@ def _options(agent_id: str) -> AgentOptions:
 
 @pytest.mark.anyio
 async def test_non_primary_runs_single_turn_no_park(tmp_path):
-    """A non-primary agent runs exactly one turn and returns without parking."""
+    """A non-primary agent runs exactly one turn and returns without parking.
+
+    With the M6 resolver: bootstrap sets step=1, model runs turn 1, resolver
+    finds get_next_step=None -> terminate. One turn_complete, no park.
+    """
     app_state, _ = _make("loop-np", str(tmp_path), is_primary=False)
     with _test_model(call_tools=[]):
         events = [ev async for ev in _agent(app_state, tmp_path).run(_options("loop-np"))]
@@ -187,7 +305,11 @@ async def test_non_primary_runs_single_turn_no_park(tmp_path):
 @pytest.mark.anyio
 async def test_workflow_done_terminates_primary_without_parking(tmp_path):
     """workflow_done set before the run -> a primary agent runs one turn and
-    returns at the post-turn termination check, never reaching the hand-back."""
+    returns at the post-turn termination check, never reaching the hand-back.
+
+    Bootstrap still runs (sets step=1), but workflow_done is checked before the
+    resolver so the loop returns without parking.
+    """
     app_state, _ = _make("loop-done", str(tmp_path), is_primary=True)
     app_state.run.workflow_done = True
     with _test_model(call_tools=[]):
@@ -198,9 +320,12 @@ async def test_workflow_done_terminates_primary_without_parking(tmp_path):
 
 @pytest.mark.anyio
 async def test_primary_parks_then_resumes_then_terminates(tmp_path):
-    """A primary agent parks on yield_future at the terminal-text hand-back,
+    """A primary agent parks on yield_future when steps are exhausted,
     resumes with the buffered user message on resolution, and terminates once
-    workflow_done is set. Asserts >= 2 turns and that history accumulated."""
+    workflow_done is set. Asserts >= 2 turns and that history accumulated.
+
+    With M6: resolver returns handback after step 1 (get_next_step=None).
+    """
     app_state, agent_state = _make("loop-pr", str(tmp_path), is_primary=True)
     events = []
 
@@ -238,7 +363,11 @@ async def test_primary_parks_then_resumes_then_terminates(tmp_path):
 async def test_yolo_primary_synthesizes_without_parking(tmp_path, monkeypatch):
     """Under yolo, a primary agent never parks -- it synthesizes the next prompt.
     The yolo helper is patched to set workflow_done so the loop terminates after
-    the second turn instead of synthesizing forever."""
+    the second turn instead of synthesizing forever.
+
+    With M6: resolver returns handback when steps exhausted; hand-back block
+    calls _yolo_yield_response(suggestions) (not None) before resuming.
+    """
     app_state, _ = _make("loop-yolo", str(tmp_path), is_primary=True)
     app_state.server.yolo = True
 
@@ -254,3 +383,48 @@ async def test_yolo_primary_synthesizes_without_parking(tmp_path, monkeypatch):
 
     assert app_state.interactions.yield_future is None, "yolo must not park"
     assert len([e for e in events if e.type == "turn_complete"]) >= 2
+
+
+@pytest.mark.anyio
+async def test_koan_suggest_next_suggestions_appear_on_yield_started(tmp_path):
+    """Recorded koan_suggest_next suggestions appear on the yield_started event.
+
+    The loop reads app_state.interactions.next_suggestions at hand-back and
+    passes them to yield_started. build_phase_suggestions is the fallback when
+    none are recorded (workflow is None here, so fallback = []).
+    """
+    app_state, agent_state = _make("loop-sugg", str(tmp_path), is_primary=True)
+    # Pre-record orchestrator-authored suggestions.
+    recorded = [{"id": "plan-spec", "label": "Write plan", "command": "plan-spec", "recommended": True}]
+    app_state.interactions.next_suggestions = list(recorded)
+    events = []
+
+    async def consume(run_iter):
+        async for ev in run_iter:
+            events.append(ev)
+
+    with _test_model(call_tools=[]):
+        run_iter = _agent(app_state, tmp_path).run(_options("loop-sugg"))
+        task = asyncio.create_task(consume(run_iter))
+
+        for _ in range(500):
+            if app_state.interactions.yield_future is not None:
+                break
+            await asyncio.sleep(0.005)
+        assert app_state.interactions.yield_future is not None, "loop did not park"
+
+        app_state.run.workflow_done = True
+        app_state.interactions.yield_future.set_result(None)
+        await asyncio.wait_for(task, timeout=10)
+
+    # next_suggestions consumed and cleared.
+    assert app_state.interactions.next_suggestions is None
+
+    # yield_started event carries the recorded suggestions.
+    yield_events = [
+        e for e in app_state.projection_store.events if e.event_type == "yield_started"
+    ]
+    assert yield_events, "expected yield_started event"
+    payload = yield_events[0].payload
+    sugg_ids = [s["id"] for s in payload.get("suggestions", [])]
+    assert "plan-spec" in sugg_ids

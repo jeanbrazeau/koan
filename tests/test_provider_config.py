@@ -95,13 +95,13 @@ class TestResolveModelSpec:
 class TestComputeBuiltinProfiles:
     def test_returns_balanced_and_frontier(self):
         """compute_builtin_profiles returns at least balanced and frontier profiles."""
-        profiles = compute_builtin_profiles([])
+        profiles = compute_builtin_profiles()
         assert "balanced" in profiles
         assert "frontier" in profiles
 
     def test_balanced_tiers_are_google_provider(self):
         """All balanced profile tiers use provider='google'."""
-        profiles = compute_builtin_profiles([])
+        profiles = compute_builtin_profiles()
         balanced = profiles["balanced"]
         for tier in ("strong", "standard", "cheap"):
             assert tier in balanced.tiers, f"Missing tier: {tier}"
@@ -109,23 +109,22 @@ class TestComputeBuiltinProfiles:
 
     def test_frontier_tiers_are_google_provider(self):
         """All frontier profile tiers use provider='google'."""
-        profiles = compute_builtin_profiles([])
+        profiles = compute_builtin_profiles()
         frontier = profiles["frontier"]
         for tier in ("strong", "standard", "cheap"):
             assert tier in frontier.tiers, f"Missing tier: {tier}"
             assert frontier.tiers[tier].model.provider == "google"
 
     def test_probe_results_ignored(self):
-        """probe_results is vestigial; passing non-empty list returns same result."""
-        from koan.probe import ProbeResult
-        probes = [ProbeResult(runner_type="claude", available=True)]
-        profiles_with = compute_builtin_profiles(probes)
-        profiles_without = compute_builtin_profiles([])
-        assert profiles_with["balanced"].tiers.keys() == profiles_without["balanced"].tiers.keys()
+        """M2: compute_builtin_profiles takes no argument; probe_results param removed."""
+        # Both calls return identical results (probe_results was vestigial and is now gone).
+        profiles_a = compute_builtin_profiles()
+        profiles_b = compute_builtin_profiles()
+        assert profiles_a["balanced"].tiers.keys() == profiles_b["balanced"].tiers.keys()
         for tier in ("strong", "standard", "cheap"):
             assert (
-                profiles_with["balanced"].tiers[tier].model.provider
-                == profiles_without["balanced"].tiers[tier].model.provider
+                profiles_a["balanced"].tiers[tier].model.provider
+                == profiles_b["balanced"].tiers[tier].model.provider
             )
 
 

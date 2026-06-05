@@ -542,8 +542,13 @@ class TestFoldTools:
         assert entry.in_flight is True
 
     def test_tool_called_koan_prefix_skipped(self):
+        """koan_ prefixed tools (except koan_reflect) are skipped in the tool_called fold path.
+
+        Using koan_suggest_next as the representative koan tool here;
+        koan_complete_step was removed in M6.
+        """
         p = _proj_with_primary("a1")
-        r = fold(p, _e("tool_called", {"call_id": "c1", "tool": "koan_complete_step", "args": {}}, agent_id="a1"))
+        r = fold(p, _e("tool_called", {"call_id": "c1", "tool": "koan_suggest_next", "args": {}}, agent_id="a1"))
         assert r.run.agents["a1"].conversation.entries == []
 
     def test_tool_called_mcp_koan_prefix_skipped(self):
@@ -755,68 +760,6 @@ class TestFoldFocus:
         assert isinstance(r.run.focus, ConversationFocus)
         assert r.run.focus.agent_id == "a1"
 
-    def test_installation_created_adds_to_dict(self):
-        p = Projection()
-        r = fold(p, _e("installation_created", {
-            "alias": "claude-default", "runner_type": "claude",
-            "binary": "/fake/bin/claude", "extra_args": [],
-        }))
-        assert "claude-default" in r.settings.installations
-        inst = r.settings.installations["claude-default"]
-        assert inst.runner_type == "claude"
-        assert inst.available is False  # not yet probed
-
-    def test_probe_completed_sets_available_flag(self):
-        p = Projection()
-        p = fold(p, _e("installation_created", {
-            "alias": "claude-default", "runner_type": "claude",
-            "binary": "/fake/bin/claude", "extra_args": [],
-        }))
-        r = fold(p, _e("probe_completed", {"results": {"claude-default": True}}))
-        assert r.settings.installations["claude-default"].available is True
-
-    def test_probe_completed_sets_unavailable(self):
-        p = Projection()
-        p = fold(p, _e("installation_created", {
-            "alias": "claude-default", "runner_type": "claude",
-            "binary": "/fake/bin/claude", "extra_args": [],
-        }))
-        r = fold(p, _e("probe_completed", {"results": {"claude-default": False}}))
-        assert r.settings.installations["claude-default"].available is False
-
-    def test_probe_completed_ignores_unknown_aliases(self):
-        """probe_completed for an alias not in installations is silently ignored."""
-        p = Projection()
-        r = fold(p, _e("probe_completed", {"results": {"ghost": True}}))
-        assert r.settings.installations == {}
-
-    def test_installation_modified_updates(self):
-        p = Projection()
-        p = fold(p, _e("installation_created", {
-            "alias": "my-claude", "runner_type": "claude",
-            "binary": "/old/claude", "extra_args": [],
-        }))
-        r = fold(p, _e("installation_modified", {
-            "alias": "my-claude", "runner_type": "claude",
-            "binary": "/new/claude", "extra_args": ["--effort", "low"],
-        }))
-        assert r.settings.installations["my-claude"].binary == "/new/claude"
-        assert r.settings.installations["my-claude"].extra_args == ["--effort", "low"]
-
-    def test_installation_modified_preserves_available(self):
-        """Modifying an installation keeps its probe result."""
-        p = Projection()
-        p = fold(p, _e("installation_created", {"alias": "c", "runner_type": "claude", "binary": "/b", "extra_args": []}))
-        p = fold(p, _e("probe_completed", {"results": {"c": True}}))
-        r = fold(p, _e("installation_modified", {"alias": "c", "runner_type": "claude", "binary": "/new", "extra_args": []}))
-        assert r.settings.installations["c"].available is True
-
-    def test_installation_removed(self):
-        p = Projection()
-        p = fold(p, _e("installation_created", {"alias": "c", "runner_type": "claude", "binary": "/b", "extra_args": []}))
-        r = fold(p, _e("installation_removed", {"alias": "c"}))
-        assert "c" not in r.settings.installations
-
     def test_profile_created(self):
         p = Projection()
         r = fold(p, _e("profile_created", {"name": "fast", "read_only": False, "tiers": {}}))
@@ -824,10 +767,14 @@ class TestFoldFocus:
         assert r.settings.profiles["fast"].read_only is False
 
     def test_profile_modified_updates(self):
+        # M3: tier values are nested {provider, model, thinking} dicts.
         p = Projection()
         p = fold(p, _e("profile_created", {"name": "fast", "read_only": False, "tiers": {}}))
-        r = fold(p, _e("profile_modified", {"name": "fast", "read_only": False, "tiers": {"scout": "haiku-default"}}))
-        assert r.settings.profiles["fast"].tiers["scout"] == "haiku-default"
+        r = fold(p, _e("profile_modified", {"name": "fast", "read_only": False, "tiers": {
+            "scout": {"provider": "google", "model": "gemini-2.5-flash-lite", "thinking": "disabled"},
+        }}))
+        assert r.settings.profiles["fast"].tiers["scout"].provider == "google"
+        assert r.settings.profiles["fast"].tiers["scout"].model == "gemini-2.5-flash-lite"
 
     def test_profile_removed(self):
         p = Projection()
@@ -848,7 +795,7 @@ class TestFoldFocus:
     def test_settings_events_do_not_touch_run(self):
         """Settings events must not modify run state."""
         p = _proj_with_run()
-        r = fold(p, _e("installation_created", {"alias": "c", "runner_type": "claude", "binary": "/b", "extra_args": []}))
+        r = fold(p, _e("default_profile_changed", {"name": "fast"}))
         assert r.run is not None
         assert r.run.config == p.run.config
 
@@ -885,9 +832,8 @@ class TestFoldArtifacts:
     def test_run_events_do_not_touch_settings(self):
         """Artifact events must not modify settings."""
         p = _proj_with_run()
-        p = fold(p, _e("installation_created", {"alias": "c", "runner_type": "claude", "binary": "/b", "extra_args": []}))
         r = fold(p, _e("artifact_created", {"path": "foo.md", "size": 100, "modified_at": 1000}))
-        assert r.settings.installations == p.settings.installations
+        assert r.settings == p.settings
 
 
 # ---------------------------------------------------------------------------
@@ -1033,9 +979,10 @@ class TestProjectionStore:
             "started_at_ms": 0, "label": "", "model": None,
         }, agent_id="a1")
         q = store.subscribe()
-        # koan MCP tool is filtered — no state change → no patch broadcast
+        # koan MCP tool is filtered -- no state change -> no patch broadcast.
+        # Using koan_suggest_next as representative; koan_complete_step removed in M6.
         store.push_event("tool_called", {
-            "call_id": "c1", "tool": "koan_complete_step", "args": {},
+            "call_id": "c1", "tool": "koan_suggest_next", "args": {},
         }, agent_id="a1")
         assert q.empty()
 
@@ -1055,19 +1002,6 @@ class TestJSONPatchPaths:
         ops = msg["patch"]
         paths = [op["path"] for op in ops]
         assert any("/run" in p for p in paths)
-
-    def test_patch_has_camelcase_settings_path(self):
-        store = ProjectionStore()
-        q = store.subscribe()
-        store.push_event("installation_created", {
-            "alias": "claude-default", "runner_type": "claude",
-            "binary": "/fake/bin/claude", "extra_args": [],
-        })
-        msg = q.get_nowait()
-        ops = msg["patch"]
-        paths = [op["path"] for op in ops]
-        # Should contain /settings/installations/claude-default
-        assert any("/settings/installations/claude-default" in p for p in paths)
 
     def test_patch_has_camelcase_agent_fields(self):
         """Agent fields use camelCase in patch paths: lastTool, stepName, etc."""
@@ -1158,17 +1092,6 @@ class TestSnapshotRoundTrip:
         assert "pendingText" in conv        # not pending_text
         assert "isThinking" in conv         # not is_thinking
 
-    def test_snapshot_settings_camelcase(self):
-        store = ProjectionStore()
-        store.push_event("installation_created", {
-            "alias": "claude-default", "runner_type": "claude",
-            "binary": "/fake/bin/claude", "extra_args": [],
-        })
-        state = store.get_snapshot()["state"]
-        inst = state["settings"]["installations"]["claude-default"]
-        assert "runnerType" in inst         # not runner_type
-        assert "extraArgs" in inst          # not extra_args
-
 
 # ---------------------------------------------------------------------------
 # build_artifact_diff (unchanged — regression guard)
@@ -1223,52 +1146,6 @@ class TestBuildArtifactDiff:
         assert "artifact_modified" in types
         assert "artifact_created" in types
         assert "artifact_removed" in types
-
-
-# ---------------------------------------------------------------------------
-# Tool name normalization (runner integration — unchanged)
-# ---------------------------------------------------------------------------
-
-class TestToolNameNormalization:
-
-    # Claude runner tests removed in M2; ClaudeRunner is deleted.
-    # Claude path coverage comes from tests/test_subagent.py (FakeAgent).
-
-    def test_codex_normalizes_read_file(self):
-        import json
-        from koan.runners.codex import CodexRunner
-        runner = CodexRunner()
-        line = json.dumps({"type": "item.completed", "item": {"type": "function_call", "name": "read_file", "arguments": "{}"}})
-        evts = runner.parse_stream_event(line)
-        # Three-event sequence; all carry the normalized tool_name.
-        assert len(evts) == 3
-        assert evts[0].tool_name == "read"
-
-    def test_codex_filters_koan_mcp_tool(self):
-        import json
-        from koan.runners.codex import CodexRunner
-        runner = CodexRunner()
-        line = json.dumps({"type": "item.completed", "item": {"type": "function_call", "name": "koan_ask_question", "arguments": "{}"}})
-        evts = runner.parse_stream_event(line)
-        assert evts == []
-
-    def test_gemini_normalizes_tool(self):
-        import json
-        from koan.runners.gemini import GeminiRunner
-        runner = GeminiRunner(subagent_dir="/tmp/test")
-        line = json.dumps({"type": "tool_use", "name": "read_file", "input": {}})
-        evts = runner.parse_stream_event(line)
-        # Three-event sequence; all carry the normalized tool_name.
-        assert len(evts) == 3
-        assert evts[0].tool_name == "read"
-
-    def test_gemini_filters_koan_mcp_tool(self):
-        import json
-        from koan.runners.gemini import GeminiRunner
-        runner = GeminiRunner(subagent_dir="/tmp/test")
-        line = json.dumps({"type": "tool_use", "name": "koan_complete_step", "input": {}})
-        evts = runner.parse_stream_event(line)
-        assert evts == []
 
 
 # ---------------------------------------------------------------------------

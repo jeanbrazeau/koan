@@ -2,8 +2,9 @@
 # plus a credential-gated live smoke test against Gemini.
 #
 # The golden test pins the highest-risk seam: that PydanticAIAgent.run() emits
-# the correct StreamEvent sequence when the model calls koan_complete_step and
+# the correct StreamEvent sequence when the model calls a koan tool and
 # returns final text. It uses pydantic-ai's TestModel so no network calls are made.
+# koan_complete_step was removed in M6; the golden test now uses koan_suggest_next.
 #
 # The live smoke test gates on GOOGLE_API_KEY / GEMINI_API_KEY and verifies
 # that a degenerate intake turn advances at least one step and reaches
@@ -20,7 +21,7 @@ import pytest
 from koan.agents.base import AgentOptions
 from koan.agents.pydantic_ai import PydanticAIAgent
 from koan.phases import PhaseContext, StepGuidance
-from koan.runners.base import StreamEvent
+from koan.agents.events import StreamEvent
 from koan.state import AgentState, AppState
 from koan.types import CachingPolicy, ModelSpec
 
@@ -33,6 +34,8 @@ def _fake_phase_module(total_steps: int = 3) -> MagicMock:
 
     Uses the same helper pattern as test_subagent.py's _fake_phase_module()
     so the two test files share the same dependency-free stub shape.
+    get_next_step returns None (phase exhausted after step 1) so non-primary
+    agents terminate cleanly without looping.
     """
     mod = MagicMock()
     mod.ROLE = "orchestrator"
@@ -40,7 +43,7 @@ def _fake_phase_module(total_steps: int = 3) -> MagicMock:
     mod.PHASE_ROLE_CONTEXT = ""
     mod.STEP_NAMES = {1: "Comprehend", 2: "Plan", 3: "Write"}
     mod.validate_step_completion = MagicMock(return_value=None)
-    mod.get_next_step = MagicMock(return_value=1)
+    mod.get_next_step = MagicMock(return_value=None)  # exhausted after step 1
     mod.step_guidance = MagicMock(return_value=StepGuidance(
         title="Comprehend",
         instructions=["Read the brief."],
@@ -68,10 +71,9 @@ def _make_app_state_with_agent(
     event_log = AsyncMock()
     event_log.emit_step_transition = AsyncMock()
 
-    # is_primary=False: run_agent_loop runs exactly one turn and returns for
-    # non-primary agents. These golden tests pin the single-turn translation,
-    # so they use the non-primary path to avoid parking on the yield_future
-    # hand-back that a primary orchestrator would take. The multi-turn primary
+    # is_primary=False: run_agent_loop runs one turn (bootstrap) then terminates
+    # (resolver returns "terminate" when get_next_step=None for non-primary).
+    # These golden tests pin the single-turn translation. The multi-turn primary
     # park/resume path is covered in tests/test_loop.py.
     agent = AgentState(
         agent_id=agent_id,
@@ -94,19 +96,21 @@ def _make_app_state_with_agent(
 class TestPydanticAIAgentGolden:
     """Golden test: PydanticAIAgent.run() emits the correct StreamEvent sequence.
 
-    Uses TestModel (no network) scripted to call koan_complete_step once then
+    Uses TestModel (no network) scripted to call koan_suggest_next once then
     return final text. Asserts the exact event type sequence so regressions in
     the translation layer are caught immediately.
+    koan_complete_step was removed in M6; koan_suggest_next is the replacement
+    orchestration tool used here to exercise the tool_start/tool_result path.
     """
 
     @pytest.mark.anyio
     async def test_event_sequence_tool_call_then_final_text(self, tmp_path):
         """PydanticAIAgent emits tool_start, tool_result, token_delta, assistant_text, turn_complete.
 
-        TestModel calls koan_complete_step exactly once (call_tools=['koan_complete_step'])
-        then returns a fixed text response. The test asserts:
-        1. A tool_start event for koan_complete_step with a non-None tool_use_id.
-        2. A tool_result event with tool_name='koan_complete_step' and the same tool_use_id.
+        TestModel calls koan_suggest_next exactly once then returns a fixed text
+        response. The test asserts:
+        1. A tool_start event for koan_suggest_next with a non-None tool_use_id.
+        2. A tool_result event with tool_name='koan_suggest_next' and the same tool_use_id.
         3. At least one token_delta event.
         4. An assistant_text event with non-empty content.
         5. A turn_complete event with non-None usage carrying input_tokens > 0.
@@ -137,16 +141,15 @@ class TestPydanticAIAgentGolden:
         )
 
         # Patch build_model to return TestModel so no network call is made.
-        # TestModel is scripted to call koan_complete_step once then emit text.
-        # build_model_settings is also patched to return an empty dict (TestModel
-        # ignores model_settings, but the adapter raises NotImplementedError for
-        # thinking='disabled' before M7 adds all providers).
+        # TestModel is scripted to call koan_suggest_next once then emit text.
+        # boot_prompt removed in M6; the loop bootstrap injects step-1 guidance
+        # as the first turn's prompt -- no AgentOptions.boot_prompt needed.
         import koan.agents.adapter as adapter_mod
 
         original_build_model = adapter_mod.build_model
         original_build_model_settings = adapter_mod.build_model_settings
         adapter_mod.build_model = lambda spec: TestModel(
-            call_tools=["koan_complete_step"],
+            call_tools=["koan_suggest_next"],
             custom_output_text="Analysis complete.",
         )
         adapter_mod.build_model_settings = lambda spec: {}
@@ -157,8 +160,6 @@ class TestPydanticAIAgentGolden:
                 model=None,
                 thinking=None,
                 system_prompt="You are a koan orchestrator.",
-                boot_prompt="Call koan_complete_step to receive your instructions.",
-                mcp_url="",
             )
 
             events: list[StreamEvent] = []
@@ -171,18 +172,18 @@ class TestPydanticAIAgentGolden:
         # Extract event types for assertion.
         types = [e.type for e in events]
 
-        # A tool_start for koan_complete_step must appear.
+        # A tool_start for koan_suggest_next must appear.
         tool_starts = [e for e in events if e.type == "tool_start"]
         assert len(tool_starts) >= 1, f"expected tool_start, got: {types}"
         tool_start = tool_starts[0]
-        assert tool_start.tool_name == "koan_complete_step"
+        assert tool_start.tool_name == "koan_suggest_next"
         assert tool_start.tool_use_id is not None, "tool_start must carry tool_use_id"
 
-        # A tool_result for koan_complete_step must appear after the tool_start.
+        # A tool_result for koan_suggest_next must appear after the tool_start.
         tool_results = [e for e in events if e.type == "tool_result"]
         assert len(tool_results) >= 1, f"expected tool_result, got: {types}"
         tool_result = tool_results[0]
-        assert tool_result.tool_name == "koan_complete_step"
+        assert tool_result.tool_name == "koan_suggest_next"
         assert tool_result.tool_use_id == tool_start.tool_use_id, (
             f"tool_result.tool_use_id {tool_result.tool_use_id!r} must match "
             f"tool_start.tool_use_id {tool_start.tool_use_id!r}"
@@ -202,11 +203,14 @@ class TestPydanticAIAgentGolden:
         )
 
     @pytest.mark.anyio
-    async def test_agent_state_handshake_observed(self, tmp_path):
-        """After run(), agent.handshake_observed is True and agent.step > 0.
+    async def test_agent_state_first_turn_completed(self, tmp_path):
+        """After run(), agent.first_turn_completed is True and agent.step > 0.
 
-        Verifies that advance_step correctly marks the handshake and advances
-        the step counter even when driven via PydanticAIAgent.run() with TestModel.
+        Verifies that run_agent_loop correctly marks first_turn_completed and
+        the bootstrap advances the step counter, even when driven via
+        PydanticAIAgent.run() with TestModel.
+        koan_complete_step removed in M6; first_turn_completed replaces
+        handshake_observed as the bootstrap signal.
         """
         from pydantic_ai.models.test import TestModel
         import koan.agents.adapter as adapter_mod
@@ -222,7 +226,7 @@ class TestPydanticAIAgentGolden:
 
         orig_bm = adapter_mod.build_model
         orig_bms = adapter_mod.build_model_settings
-        adapter_mod.build_model = lambda s: TestModel(call_tools=["koan_complete_step"])
+        adapter_mod.build_model = lambda s: TestModel(call_tools=[])
         adapter_mod.build_model_settings = lambda s: {}
         try:
             options = AgentOptions(
@@ -231,8 +235,6 @@ class TestPydanticAIAgentGolden:
                 model=None,
                 thinking=None,
                 system_prompt="",
-                boot_prompt="Call koan_complete_step.",
-                mcp_url="",
             )
             async for _ in pai_agent.run(options):
                 pass
@@ -240,8 +242,10 @@ class TestPydanticAIAgentGolden:
             adapter_mod.build_model = orig_bm
             adapter_mod.build_model_settings = orig_bms
 
-        assert agent_state.handshake_observed is True, "handshake_observed should be True after run"
-        assert agent_state.step >= 1, f"step should be >= 1 after handshake, got {agent_state.step}"
+        assert agent_state.first_turn_completed is True, (
+            "first_turn_completed should be True after run (set by run_agent_loop)"
+        )
+        assert agent_state.step >= 1, f"step should be >= 1 after bootstrap, got {agent_state.step}"
 
     @pytest.mark.anyio
     async def test_exit_code_success(self, tmp_path):
@@ -273,8 +277,6 @@ class TestPydanticAIAgentGolden:
                 model=None,
                 thinking=None,
                 system_prompt="",
-                boot_prompt="Call koan_complete_step.",
-                mcp_url="",
             )
             async for _ in pai_agent.run(options):
                 pass
@@ -294,7 +296,7 @@ class TestPydanticAIAgentGolden:
         agent_state.injected_context_files must contain the AGENTS.md path,
         proving that the ProcessHistory capability fired and injected it.
 
-        TestModel does NOT call any built-in file tools (call_tools=['koan_complete_step'])
+        TestModel does NOT call any built-in file tools (call_tools=[])
         so only the project-dir seed injection (loop start) is exercised here --
         not the just-in-time path-recording injection.
         """
@@ -324,7 +326,7 @@ class TestPydanticAIAgentGolden:
 
         orig_bm = adapter_mod.build_model
         orig_bms = adapter_mod.build_model_settings
-        adapter_mod.build_model = lambda s: TestModel(call_tools=["koan_complete_step"])
+        adapter_mod.build_model = lambda s: TestModel(call_tools=[])
         adapter_mod.build_model_settings = lambda s: {}
         try:
             options = AgentOptions(
@@ -333,8 +335,6 @@ class TestPydanticAIAgentGolden:
                 model=None,
                 thinking=None,
                 system_prompt="",
-                boot_prompt="Call koan_complete_step.",
-                mcp_url="",
                 project_dir=str(project_dir),
             )
             async for _ in pai_agent.run(options):
@@ -365,32 +365,34 @@ _GOOGLE_KEY_SET = bool(
 )
 @pytest.mark.anyio
 async def test_live_gemini_intake_turn_advances_step(tmp_path):
-    """Live: a degenerate intake turn on Gemini advances at least one step.
+    """Live: a degenerate intake turn on Gemini boots and reaches turn_complete.
 
-    Runs PydanticAIAgent.run() with a real Gemini model (google-gla provider).
-    Asserts that at least one koan_complete_step tool_result is emitted (proving
-    the step machine was called) and that the run reaches turn_complete.
-    Skips when no Google API key is configured (cost-conscious per testing posture).
+    Runs PydanticAIAgent.run() with a real Gemini model (google provider).
+    Asserts that the bootstrap injects step-1 guidance, the model responds,
+    and the run reaches turn_complete without error.
+    The step-advancement tool was removed in M6; the model no longer drives step
+    advancement -- end-of-turn triggers the resolver instead.
     """
     agent_id = "live-smoke-001"
     phase_mod = _fake_phase_module()
-    # get_next_step returning None after step 1 causes advance_step to emit
-    # "All steps complete." for non-primary agents (is_primary=False below),
-    # which is a natural termination signal for the model.  Without this,
-    # a live Gemini model would loop indefinitely calling koan_complete_step.
+    # get_next_step returning None after step 1 means the resolver terminates
+    # the non-primary agent cleanly after one turn.
     phase_mod.get_next_step = MagicMock(return_value=None)
     app_state, agent_state = _make_app_state_with_agent(
         agent_id, phase_mod, str(tmp_path)
     )
-    # Non-primary agent: "All steps complete" rather than "call koan_set_phase"
-    # on phase boundary, giving the model a clean exit signal.
+    # Non-primary agent: terminates at step exhaustion rather than parking.
     agent_state.is_primary = False
+    # Initialize memory services so koan_memory_status does not crash if the
+    # live model calls it (the model may call any available tool).
+    app_state.run.project_dir = str(tmp_path)
+    app_state.init_memory_services()
 
     # Build a ModelSpec directly rather than going through resolve_model_spec:
     # builtin profiles map orchestrator -> strong tier -> gemini-2.5-pro-latest
     # which may not be available on all API keys.  gemini-flash-latest is the
     # conservative baseline used for live tests; it is available on standard
-    # GOOGLE_API_KEY grants and is sufficient to exercise the tool/step path.
+    # GOOGLE_API_KEY grants and is sufficient to exercise the bootstrap path.
     model_spec = ModelSpec(
         provider="google",
         model="gemini-flash-latest",
@@ -408,16 +410,15 @@ async def test_live_gemini_intake_turn_advances_step(tmp_path):
         agent_id=agent_id,
         model=None,
         thinking=None,
-        system_prompt="You are a koan orchestrator agent.",
-        # Explicit instruction to call the tool exactly once and then reply
-        # with text: prevents Gemini from looping or calling koan_set_phase
-        # on an empty fake workflow.
-        boot_prompt=(
-            "Call koan_complete_step exactly once to receive your instructions,"
-            " then reply with a brief text summary of what you received."
-            " Do not call any other tools."
+        # Explicit instruction to produce only a text summary and end the turn
+        # without calling any tools. This prevents the model from calling
+        # koan_search or koan_memory_status on the empty test memory store,
+        # which would fail with a LanceDB missing-index error.
+        system_prompt=(
+            "You are a koan orchestrator agent. "
+            "Read the instructions in your turn and reply with a brief text summary. "
+            "Do not call any tools -- just reply with text and end your turn."
         ),
-        mcp_url="",
     )
 
     events: list[StreamEvent] = []
@@ -425,15 +426,6 @@ async def test_live_gemini_intake_turn_advances_step(tmp_path):
         events.append(ev)
 
     types = [e.type for e in events]
-
-    # Must have called koan_complete_step (tool_result proves the call returned).
-    tool_results = [
-        e for e in events
-        if e.type == "tool_result" and e.tool_name == "koan_complete_step"
-    ]
-    assert len(tool_results) >= 1, (
-        f"expected koan_complete_step tool_result in live run, got event types: {types}"
-    )
 
     # Must reach turn_complete.
     turn_completes = [e for e in events if e.type == "turn_complete"]

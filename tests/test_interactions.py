@@ -34,8 +34,7 @@ def _make_interaction(
 class TestQueueCap:
     @pytest.mark.anyio
     async def test_9th_request_raises_queue_full(self):
-        from fastmcp.exceptions import ToolError
-
+        """Queue overflow raises RuntimeError (fastmcp.exceptions.ToolError removed in M4)."""
         from koan.state import AgentState
         from koan.web.interactions import enqueue_interaction
 
@@ -53,7 +52,7 @@ class TestQueueCap:
             subagent_dir="/tmp/test",
         )
 
-        with pytest.raises(ToolError) as exc_info:
+        with pytest.raises(RuntimeError) as exc_info:
             await enqueue_interaction(agent, app_state, "ask", {"questions": []})
 
         err = json.loads(str(exc_info.value))

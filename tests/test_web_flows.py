@@ -24,31 +24,58 @@ import pytest
 from starlette.testclient import TestClient
 
 from koan.config import KoanConfig
-from koan.probe import ProbeResult
 from koan.state import AppState
-from koan.types import AgentInstallation, ModelInfo, Profile, ProfileTier
+from koan.types import ModelRegistryEntry, Profile, ProfileTier, ProviderStatus
 from koan.web.app import create_app
 
 
 # -- Helpers ------------------------------------------------------------------
 
-def _make_probe_results() -> list[ProbeResult]:
+def _make_provider_status() -> list[ProviderStatus]:
+    """Build a minimal provider_status list for tests.
+
+    M3: updated to use real provider names (google/anthropic/openai) so tests
+    that exercise the new profile CRUD validation work with the model_registry.
+    google is available; anthropic and openai are not, so start-run guards work.
+    """
     return [
-        ProbeResult(
-            runner_type="claude", available=True, binary_path="/fake/bin/claude", version="1.0",
-            models=[
-                # Opus advertises the full vocabulary including xhigh and max.
-                ModelInfo(alias="opus", display_name="Opus",
-                         thinking_modes=frozenset({"disabled", "low", "medium", "high", "xhigh", "max"}),
-                         tier_hint="strong"),
-                # Sonnet does not support xhigh or max; resolver clamps explicitly.
-                ModelInfo(alias="sonnet", display_name="Sonnet",
-                         thinking_modes=frozenset({"disabled", "low", "medium", "high"}),
-                         tier_hint="standard"),
-            ],
+        ProviderStatus(provider="google", available=True, env_keys=["GOOGLE_API_KEY"]),
+        ProviderStatus(provider="anthropic", available=False, env_keys=["ANTHROPIC_API_KEY"]),
+        ProviderStatus(provider="openai", available=False, env_keys=["OPENAI_API_KEY"]),
+    ]
+
+
+def _make_model_registry() -> list[ModelRegistryEntry]:
+    """Build a minimal model registry for profile-CRUD tests.
+
+    Provides one entry per provider tier so that model-ID and thinking-mode
+    validation in _validate_profile_tiers can be exercised end-to-end.
+    """
+    return [
+        ModelRegistryEntry(
+            provider="google",
+            model="gemini-2.5-pro",
+            display_name="Gemini 2.5 Pro",
+            context_window=1_000_000,
+            thinking_modes=["low", "medium"],
+            tier_hint="strong",
         ),
-        ProbeResult(runner_type="codex", available=False),
-        ProbeResult(runner_type="gemini", available=False),
+        ModelRegistryEntry(
+            provider="google",
+            model="gemini-2.5-flash",
+            display_name="Gemini 2.5 Flash",
+            context_window=1_000_000,
+            thinking_modes=["low"],
+            tier_hint="standard",
+        ),
+        ModelRegistryEntry(
+            provider="google",
+            model="gemini-2.5-flash-lite",
+            display_name="Gemini 2.5 Flash Lite",
+            context_window=1_000_000,
+            thinking_modes=[],
+            tier_hint="cheap",
+        ),
     ]
 
 
@@ -88,7 +115,7 @@ def test_start_run_requires_task(client, app_state):
 
 
 def test_start_run_requires_profile(client, app_state):
-    app_state.runner_config.probe_results = _make_probe_results()
+    app_state.runner_config.provider_status = _make_provider_status()
     resp = client.post("/api/start-run", json={"task": "build something"})
     assert resp.status_code == 422
     assert resp.json()["error"] == "validation_error"
@@ -96,7 +123,7 @@ def test_start_run_requires_profile(client, app_state):
 
 
 def test_start_run_rejects_empty_profile(client, app_state):
-    app_state.runner_config.probe_results = _make_probe_results()
+    app_state.runner_config.provider_status = _make_provider_status()
     resp = client.post("/api/start-run", json={"task": "build something", "profile": ""})
     assert resp.status_code == 422
     assert resp.json()["error"] == "validation_error"
@@ -106,8 +133,8 @@ def test_start_run_rejects_empty_profile(client, app_state):
 def test_start_run_blocked_no_providers(client, app_state):
     # Env-credential model: when no provider's credentials resolve, start-run is
     # blocked with `no_providers` (replaces the old CLI `no_runners`).
-    app_state.runner_config.probe_results = [
-        ProbeResult(runner_type="google", available=False),
+    app_state.runner_config.provider_status = [
+        ProviderStatus(provider="google", available=False),
     ]
     resp = client.post("/api/start-run", json={"task": "build something", "profile": "balanced"})
     assert resp.status_code == 422
@@ -118,7 +145,7 @@ def test_start_run_blocked_no_providers(client, app_state):
 
 def test_preflight_returns_required_providers(client, app_state):
     from koan.agents.registry import compute_builtin_profiles
-    app_state.runner_config.builtin_profiles = compute_builtin_profiles([])
+    app_state.runner_config.builtin_profiles = compute_builtin_profiles()
     resp = client.get("/api/start-run/preflight?profile=balanced")
     assert resp.status_code == 200
     data = resp.json()
@@ -182,12 +209,13 @@ def test_path_traversal_blocked(client, app_state):
 # -- Profile endpoints --------------------------------------------------------
 
 def test_profiles_create_invalid_runner(client, app_state):
-    app_state.runner_config.probe_results = _make_probe_results()
+    """M3: provider field replaces runner_type; unavailable provider returns 422."""
+    app_state.runner_config.provider_status = _make_provider_status()
 
     resp = client.post("/api/profiles", json={
         "name": "bad-runner",
         "tiers": {
-            "strong": {"runner_type": "codex", "model": "gpt-5", "thinking": "disabled"},
+            "strong": {"provider": "anthropic", "model": "claude-opus-4-0", "thinking": "disabled"},
         },
     })
     assert resp.status_code == 422
@@ -195,12 +223,14 @@ def test_profiles_create_invalid_runner(client, app_state):
 
 
 def test_profiles_create_invalid_model(client, app_state):
-    app_state.runner_config.probe_results = _make_probe_results()
+    """M3: model must be in model_registry for the provider; unknown model returns 422."""
+    app_state.runner_config.provider_status = _make_provider_status()
+    app_state.runner_config.model_registry = _make_model_registry()
 
     resp = client.post("/api/profiles", json={
         "name": "bad-model",
         "tiers": {
-            "strong": {"runner_type": "claude", "model": "nonexistent", "thinking": "disabled"},
+            "strong": {"provider": "google", "model": "nonexistent-model", "thinking": "disabled"},
         },
     })
     assert resp.status_code == 422
@@ -208,12 +238,14 @@ def test_profiles_create_invalid_model(client, app_state):
 
 
 def test_profiles_create_invalid_thinking(client, app_state):
-    app_state.runner_config.probe_results = _make_probe_results()
+    """M3: thinking mode must be in the registry entry's thinking_modes; unknown mode returns 422."""
+    app_state.runner_config.provider_status = _make_provider_status()
+    app_state.runner_config.model_registry = _make_model_registry()
 
     resp = client.post("/api/profiles", json={
         "name": "bad-thinking",
         "tiers": {
-            "strong": {"runner_type": "claude", "model": "opus", "thinking": "turbo"},
+            "strong": {"provider": "google", "model": "gemini-2.5-pro", "thinking": "turbo"},
         },
     })
     assert resp.status_code == 422
@@ -339,7 +371,7 @@ def test_api_artifact_comment_commits_attachments(client, app_state, tmp_path):
 
 
 def test_profiles_create_non_dict_tiers(client, app_state):
-    app_state.runner_config.probe_results = _make_probe_results()
+    app_state.runner_config.provider_status = _make_provider_status()
     resp = client.post("/api/profiles", json={
         "name": "bad-tiers",
         "tiers": [],
@@ -350,7 +382,7 @@ def test_profiles_create_non_dict_tiers(client, app_state):
 
 
 def test_profiles_create_non_dict_tier_entry(client, app_state):
-    app_state.runner_config.probe_results = _make_probe_results()
+    app_state.runner_config.provider_status = _make_provider_status()
     resp = client.post("/api/profiles", json={
         "name": "bad-entry",
         "tiers": {"strong": "bad"},
@@ -361,7 +393,7 @@ def test_profiles_create_non_dict_tier_entry(client, app_state):
 
 
 def test_profiles_update_non_dict_tiers(client, app_state):
-    app_state.runner_config.probe_results = _make_probe_results()
+    app_state.runner_config.provider_status = _make_provider_status()
     app_state.runner_config.config.profiles.append(Profile(name="myprofile", tiers={}))
     resp = client.put("/api/profiles/myprofile", json={"tiers": "bad"})
     assert resp.status_code == 422
@@ -377,25 +409,139 @@ def test_profiles_delete_user_profile(client, app_state):
     assert not any(p.name == "myprofile" for p in app_state.runner_config.config.profiles)
 
 
-# -- Agent detect endpoint ----------------------------------------------------
+# -- Profile CRUD success: round-trips through ModelSpec (M3) -----------------
 
-def test_agents_detect_found(client, app_state):
-    with patch("koan.web.app.shutil.which", return_value="/usr/bin/claude"):
-        resp = client.get("/api/agents/detect?runner_type=claude")
-    assert resp.status_code == 200
-    assert resp.json()["path"] == "/usr/bin/claude"
+def test_profiles_create_success_round_trips_model_spec(client, app_state):
+    """M3: a valid profile create saves a ModelSpec-backed ProfileTier in the config.
+
+    Previously broken: api_profiles_create tried ProfileTier(runner_type=...) which
+    does not exist on the M1-reshaped ProfileTier(model=ModelSpec). This test asserts
+    the successful path end-to-end.
+    """
+    from koan.types import ModelSpec
+    app_state.runner_config.provider_status = _make_provider_status()
+    app_state.runner_config.model_registry = _make_model_registry()
+
+    resp = client.post("/api/profiles", json={
+        "name": "my-test-profile",
+        "tiers": {
+            "strong": {"provider": "google", "model": "gemini-2.5-pro", "thinking": "medium"},
+            "cheap": {"provider": "google", "model": "gemini-2.5-flash-lite", "thinking": "disabled"},
+        },
+    })
+    assert resp.status_code == 200, resp.json()
+    assert resp.json()["ok"] is True
+
+    saved = next(p for p in app_state.runner_config.config.profiles if p.name == "my-test-profile")
+    assert "strong" in saved.tiers
+    strong_tier = saved.tiers["strong"]
+    # ProfileTier.model must be a ModelSpec (not a string or dict)
+    assert isinstance(strong_tier.model, ModelSpec)
+    assert strong_tier.model.provider == "google"
+    assert strong_tier.model.model == "gemini-2.5-pro"
+    assert strong_tier.model.thinking == "medium"
+    assert strong_tier.model.context_window == 1_000_000
 
 
-def test_agents_detect_not_found(client, app_state):
-    with patch("koan.web.app.shutil.which", return_value=None):
-        resp = client.get("/api/agents/detect?runner_type=claude")
-    assert resp.status_code == 200
-    assert resp.json()["path"] is None
+def test_profiles_update_success_round_trips_model_spec(client, app_state):
+    """M3: profile update also constructs ProfileTier(model=ModelSpec(...)) correctly."""
+    from koan.types import ModelSpec
+    app_state.runner_config.provider_status = _make_provider_status()
+    app_state.runner_config.model_registry = _make_model_registry()
+    app_state.runner_config.config.profiles.append(Profile(name="edit-me", tiers={}))
+
+    resp = client.put("/api/profiles/edit-me", json={
+        "tiers": {
+            "standard": {"provider": "google", "model": "gemini-2.5-flash", "thinking": "low"},
+        },
+    })
+    assert resp.status_code == 200, resp.json()
+    assert resp.json()["ok"] is True
+
+    saved = next(p for p in app_state.runner_config.config.profiles if p.name == "edit-me")
+    assert isinstance(saved.tiers["standard"].model, ModelSpec)
+    assert saved.tiers["standard"].model.provider == "google"
+    assert saved.tiers["standard"].model.model == "gemini-2.5-flash"
 
 
-def test_agents_detect_missing_param(client, app_state):
-    resp = client.get("/api/agents/detect")
+# -- Validate provider endpoint (M3) -----------------------------------------
+
+def test_validate_provider_no_registry_entry(client, app_state):
+    """POST /api/settings/validate-provider with unknown provider returns 422."""
+    app_state.runner_config.model_registry = []  # empty -- provider has no entry
+    resp = client.post("/api/settings/validate-provider", json={"provider": "unknown-ai"})
     assert resp.status_code == 422
+    assert resp.json()["valid"] is False
+    assert "unknown-ai" in resp.json()["reason"]
+
+
+def test_validate_provider_missing_credential(client, app_state):
+    """Provider in registry but no env var -> valid=False, reason contains 'no credential'."""
+    app_state.runner_config.model_registry = _make_model_registry()
+    import os
+    # Ensure GOOGLE_API_KEY is unset for this test
+    with patch.dict(os.environ, {}, clear=False):
+        saved = os.environ.pop("GOOGLE_API_KEY", None)
+        saved_gemini = os.environ.pop("GEMINI_API_KEY", None)
+        try:
+            resp = client.post("/api/settings/validate-provider", json={"provider": "google"})
+        finally:
+            if saved is not None:
+                os.environ["GOOGLE_API_KEY"] = saved
+            if saved_gemini is not None:
+                os.environ["GEMINI_API_KEY"] = saved_gemini
+    assert resp.status_code == 200
+    assert resp.json()["valid"] is False
+    assert "no credential" in resp.json()["reason"]
+
+
+def test_validate_provider_present_credential(client, app_state):
+    """Provider with a credential env var set -> build_model is called; result depends on provider."""
+    app_state.runner_config.model_registry = _make_model_registry()
+    import os
+    from unittest.mock import patch as _patch
+    # build_model is imported inline in api_validate_provider; patch at the source module.
+    with _patch.dict(os.environ, {"GOOGLE_API_KEY": "fake-key-for-test"}):
+        with _patch("koan.agents.adapter.build_model") as mock_bm:
+            mock_bm.return_value = object()  # any truthy return = success
+            resp = client.post("/api/settings/validate-provider", json={"provider": "google"})
+    assert resp.status_code == 200
+    assert resp.json()["valid"] is True
+    mock_bm.assert_called_once()
+
+
+def test_validate_provider_missing_body_field(client, app_state):
+    """POST without 'provider' field returns 422."""
+    resp = client.post("/api/settings/validate-provider", json={})
+    assert resp.status_code == 422
+    assert resp.json()["valid"] is False
+
+
+# -- Agent installation endpoints removed (M3) --------------------------------
+
+def test_agents_create_removed(client, app_state):
+    """M3: POST /api/agents endpoint was deleted; the SPA fallback serves HTML."""
+    resp = client.post("/api/agents", json={
+        "alias": "my-claude", "runner_type": "claude",
+        "binary": "/usr/bin/claude", "extra_args": [],
+    })
+    # Starlette routes POST /api/agents to nothing; SPA fallback or 405
+    assert resp.status_code in (200, 404, 405)
+
+
+def test_agents_detect_removed(client, app_state):
+    """M3: /api/agents/detect endpoint was deleted; SPA fallback serves HTML."""
+    resp = client.get("/api/agents/detect?runner_type=claude")
+    # Route gone: SPA serves the React app (200 HTML) rather than a JSON response
+    assert resp.status_code in (200, 404, 405)
+    if resp.status_code == 200:
+        assert "root" in resp.text  # HTML, not JSON
+
+
+def test_agents_installation_form_removed(client, app_state):
+    """M3: /api/settings/installation-form endpoint was deleted."""
+    resp = client.get("/api/settings/installation-form")
+    assert resp.status_code in (200, 404, 405)
 
 
 # -- SSE replay ---------------------------------------------------------------
@@ -457,17 +603,17 @@ def test_landing_includes_profile_selector(client, app_state):
     # After SPA migration, GET / serves the React SPA, not server-rendered HTML.
     # Profile selector is rendered client-side by React.
     from koan.agents.registry import compute_builtin_profiles
-    app_state.runner_config.probe_results = _make_probe_results()
-    app_state.runner_config.builtin_profiles = compute_builtin_profiles([])
+    app_state.runner_config.provider_status = _make_provider_status()
+    app_state.runner_config.builtin_profiles = compute_builtin_profiles()
     resp = client.get("/")
     assert resp.status_code == 200
 
 
 def test_landing_start_run_disabled_no_runners(client, app_state):
     # After SPA migration, runner availability is checked client-side via /api/probe.
-    app_state.runner_config.probe_results = [
-        ProbeResult(runner_type="claude", available=False),
-        ProbeResult(runner_type="codex", available=False),
+    app_state.runner_config.provider_status = [
+        ProviderStatus(provider="claude", available=False),
+        ProviderStatus(provider="codex", available=False),
     ]
     resp = client.get("/")
     assert resp.status_code == 200
@@ -475,14 +621,14 @@ def test_landing_start_run_disabled_no_runners(client, app_state):
 
 def test_landing_start_run_enabled_with_runners(client, app_state):
     # After SPA migration, GET / serves the SPA regardless of runner state.
-    app_state.runner_config.probe_results = _make_probe_results()
+    app_state.runner_config.provider_status = _make_provider_status()
     app_state.runner_config.builtin_profiles = {"balanced": Profile(name="balanced", tiers={})}
     resp = client.get("/")
     assert resp.status_code == 200
 
 
 def test_start_run_sends_profile(client, app_state):
-    app_state.runner_config.probe_results = _make_probe_results()
+    app_state.runner_config.provider_status = _make_provider_status()
     resp = client.post(
         "/api/start-run",
         json={"task": "build something", "profile": "balanced"},
@@ -493,7 +639,7 @@ def test_start_run_sends_profile(client, app_state):
 
 
 def test_start_run_unknown_profile_rejected(client, app_state):
-    app_state.runner_config.probe_results = _make_probe_results()
+    app_state.runner_config.provider_status = _make_provider_status()
     resp = client.post(
         "/api/start-run",
         json={"task": "build something", "profile": "nonexistent"},
@@ -509,22 +655,21 @@ class TestProbeRefresh:
         # refresh=1 recomputes builtin profiles + provider availability (env-
         # credential model; no CLI probe). Asserts the endpoint returns 200 and
         # provider rows.
-        app_state.runner_config.probe_results = []
+        app_state.runner_config.provider_status = []
         app_state.runner_config.builtin_profiles = {}
         resp = client.get("/api/probe?refresh=1")
         assert resp.status_code == 200
         assert app_state.runner_config.builtin_profiles  # repopulated
-        assert app_state.runner_config.probe_results  # provider rows present
+        assert app_state.runner_config.provider_status  # provider rows present
 
     def test_probe_no_refresh_skips_restate(self, client, app_state):
-        app_state.runner_config.probe_results = _make_probe_results()
+        app_state.runner_config.provider_status = _make_provider_status()
         app_state.runner_config.builtin_profiles = {"balanced": Profile(name="balanced", tiers={})}
 
-        with patch("koan.probe.probe_all_runners", new_callable=AsyncMock) as mock_probe:
-            resp = client.get("/api/probe")
+        # M4: koan.probe deleted; /api/probe without refresh=1 just returns cached state.
+        resp = client.get("/api/probe")
 
         assert resp.status_code == 200
-        mock_probe.assert_not_called()
         data = resp.json()
         assert len(data["runners"]) == 3
 
@@ -627,27 +772,16 @@ def _make_orchestrator_agent(tmp_path, agent_id="test-write"):
     return app_state, agent
 
 
-class _FakeCtx:
-    """Minimal fastmcp Context stub that returns a fixed agent."""
-    def __init__(self, agent):
-        self._agent = agent
-
-    async def get_state(self, key):
-        if key == "agent":
-            return self._agent
-        return None
-
-
 @pytest.mark.anyio
 async def test_artifact_write_atomic_writes_with_frontmatter(tmp_path):
     """koan_artifact_write creates the file with driver-managed frontmatter."""
-    from koan.web.mcp_endpoint import build_mcp_server
+    from koan.tools.koan_tools import ToolDeps, artifact_write_core
     from koan.artifacts import split_frontmatter
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-write-fm")
-    _, handlers = build_mcp_server(app_state)
+    deps = ToolDeps(app_state=app_state, agent=agent)
 
-    result = await handlers.koan_artifact_write(_FakeCtx(agent), "smoke.md", "hello")
+    result = await artifact_write_core(deps, "smoke.md", "hello")
 
     assert (tmp_path / "smoke.md").exists()
     text = (tmp_path / "smoke.md").read_text()
@@ -659,9 +793,9 @@ async def test_artifact_write_atomic_writes_with_frontmatter(tmp_path):
     assert "created" in meta
     assert body == "hello"
 
-    # Return value is ok=True JSON
+    # Return value is ok=True JSON string (cores return str, not content blocks).
     import json
-    payload = json.loads(result[0].text)
+    payload = json.loads(result)
     assert payload["ok"] is True
     assert payload["filename"] == "smoke.md"
     assert "status" not in payload
@@ -670,28 +804,22 @@ async def test_artifact_write_atomic_writes_with_frontmatter(tmp_path):
 @pytest.mark.anyio
 async def test_artifact_write_emits_diff_events(tmp_path):
     """koan_artifact_write triggers artifact_diff so the sidebar refreshes."""
-    from koan.web.mcp_endpoint import build_mcp_server
+    from koan.tools.koan_tools import ToolDeps, artifact_write_core
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-write-diff")
-    _, handlers = build_mcp_server(app_state)
-
-    await handlers.koan_artifact_write(_FakeCtx(agent), "smoke.md", "hello")
+    await artifact_write_core(ToolDeps(app_state=app_state, agent=agent), "smoke.md", "hello")
 
     event_types = [e.event_type for e in app_state.projection_store.events]
-    # _push_artifact_diff emits artifact_created or artifact_modified depending
-    # on whether the file existed before the call
     assert any(t in event_types for t in ("artifact_created", "artifact_modified", "artifact_diff"))
 
 
 @pytest.mark.anyio
 async def test_artifact_write_does_not_emit_review_events(tmp_path):
     """koan_artifact_write must not emit review_started or review_cleared."""
-    from koan.web.mcp_endpoint import build_mcp_server
+    from koan.tools.koan_tools import ToolDeps, artifact_write_core
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-write-noreview")
-    _, handlers = build_mcp_server(app_state)
-
-    await handlers.koan_artifact_write(_FakeCtx(agent), "smoke.md", "hello")
+    await artifact_write_core(ToolDeps(app_state=app_state, agent=agent), "smoke.md", "hello")
 
     event_types = [e.event_type for e in app_state.projection_store.events]
     assert "artifact_review_started" not in event_types
@@ -701,42 +829,36 @@ async def test_artifact_write_does_not_emit_review_events(tmp_path):
 @pytest.mark.anyio
 async def test_artifact_write_does_not_block(tmp_path):
     """koan_artifact_write returns immediately (non-blocking)."""
-    from koan.web.mcp_endpoint import build_mcp_server
+    from koan.tools.koan_tools import ToolDeps, artifact_write_core
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-write-noblock")
-    _, handlers = build_mcp_server(app_state)
-
-    # If this awaits without blocking, the test passes implicitly.
-    result = await handlers.koan_artifact_write(_FakeCtx(agent), "smoke.md", "hello")
+    result = await artifact_write_core(ToolDeps(app_state=app_state, agent=agent), "smoke.md", "hello")
     assert result is not None
 
 
 @pytest.mark.anyio
 async def test_artifact_write_does_not_block_2(tmp_path):
     """koan_artifact_write returns immediately without a status argument."""
-    from koan.web.mcp_endpoint import build_mcp_server
+    from koan.tools.koan_tools import ToolDeps, artifact_write_core
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-write-noarg")
-    _, handlers = build_mcp_server(app_state)
-
-    result = await handlers.koan_artifact_write(_FakeCtx(agent), "smoke.md", "content")
+    result = await artifact_write_core(ToolDeps(app_state=app_state, agent=agent), "smoke.md", "content")
     assert result is not None
 
 
 @pytest.mark.anyio
 async def test_artifact_view_strips_frontmatter(tmp_path):
     """koan_artifact_view returns body only -- no YAML preamble visible to LLM."""
-    from koan.web.mcp_endpoint import build_mcp_server
+    from koan.tools.koan_tools import ToolDeps, artifact_view_core
     from koan.artifacts import write_artifact_atomic
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-view-strip")
-    _, handlers = build_mcp_server(app_state)
 
     target = tmp_path / "doc.md"
     write_artifact_atomic(target, "# Hello\nbody text\n")
 
-    result = await handlers.koan_artifact_view(_FakeCtx(agent), "doc.md")
-    returned_text = result[0].text
+    # Cores return str directly (no content blocks).
+    returned_text = await artifact_view_core(ToolDeps(app_state=app_state, agent=agent), "doc.md")
     assert "---" not in returned_text
     assert "# Hello\nbody text\n" == returned_text
 
@@ -745,22 +867,20 @@ async def test_artifact_view_strips_frontmatter(tmp_path):
 async def test_artifact_list_omits_status(tmp_path):
     """koan_artifact_list JSON must not contain a status field per artifact."""
     import json
-    from koan.web.mcp_endpoint import build_mcp_server
+    from koan.tools.koan_tools import ToolDeps, artifact_list_core
     from koan.artifacts import write_artifact_atomic
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-list-no-status")
-    _, handlers = build_mcp_server(app_state)
 
     write_artifact_atomic(tmp_path / "with-fm.md", "body")
     (tmp_path / "plain.md").write_text("# No frontmatter\n")
 
-    result = await handlers.koan_artifact_list(_FakeCtx(agent))
-    payload = json.loads(result[0].text)
+    result = await artifact_list_core(ToolDeps(app_state=app_state, agent=agent))
+    payload = json.loads(result)
     by_path = {a["path"]: a for a in payload["artifacts"]}
 
     assert "status" not in by_path["with-fm.md"]
     assert "status" not in by_path["plain.md"]
-    # Canonical fields must be present
     assert "path" in by_path["with-fm.md"]
     assert "size" in by_path["with-fm.md"]
     assert "modified_at" in by_path["with-fm.md"]
@@ -772,16 +892,17 @@ async def test_artifact_list_omits_status(tmp_path):
 async def test_artifact_edit_replaces_single_occurrence(tmp_path):
     """koan_artifact_edit replaces exactly one occurrence and the body is updated."""
     import json
-    from koan.web.mcp_endpoint import build_mcp_server
+    from koan.tools.koan_tools import ToolDeps, artifact_write_core, artifact_edit_core
     from koan.artifacts import split_frontmatter
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-edit-replace")
-    _, handlers = build_mcp_server(app_state)
+    deps = ToolDeps(app_state=app_state, agent=agent)
 
-    await handlers.koan_artifact_write(_FakeCtx(agent), "doc.md", "hello world\n")
+    await artifact_write_core(deps, "doc.md", "hello world\n")
 
-    result = await handlers.koan_artifact_edit(_FakeCtx(agent), "doc.md", "world", "koan")
-    payload = json.loads(result[0].text)
+    result = await artifact_edit_core(deps, "doc.md", "world", "koan")
+    # Cores return a JSON string directly (no content blocks).
+    payload = json.loads(result)
     assert payload["ok"] is True
     assert payload["filename"] == "doc.md"
 
@@ -793,18 +914,18 @@ async def test_artifact_edit_replaces_single_occurrence(tmp_path):
 @pytest.mark.anyio
 async def test_artifact_edit_preserves_created(tmp_path):
     """koan_artifact_edit preserves the created timestamp across edits."""
-    from koan.web.mcp_endpoint import build_mcp_server
+    from koan.tools.koan_tools import ToolDeps, artifact_write_core, artifact_edit_core
     from koan.artifacts import split_frontmatter
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-edit-created")
-    _, handlers = build_mcp_server(app_state)
+    deps = ToolDeps(app_state=app_state, agent=agent)
 
-    await handlers.koan_artifact_write(_FakeCtx(agent), "doc.md", "original content\n")
+    await artifact_write_core(deps, "doc.md", "original content\n")
     first_meta, _ = split_frontmatter((tmp_path / "doc.md").read_text())
     assert first_meta is not None
     original_created = first_meta["created"]
 
-    await handlers.koan_artifact_edit(_FakeCtx(agent), "doc.md", "original", "updated")
+    await artifact_edit_core(deps, "doc.md", "original", "updated")
     second_meta, _ = split_frontmatter((tmp_path / "doc.md").read_text())
     assert second_meta is not None
     assert second_meta["created"] == original_created
@@ -813,105 +934,91 @@ async def test_artifact_edit_preserves_created(tmp_path):
 
 @pytest.mark.anyio
 async def test_artifact_edit_file_not_found(tmp_path):
-    """koan_artifact_edit raises ToolError with error=not_found for missing file."""
-    import json
-    from fastmcp.exceptions import ToolError
-    from koan.web.mcp_endpoint import build_mcp_server
+    """koan_artifact_edit raises ValueError with 'not_found:' for a missing file."""
+    from koan.tools.koan_tools import ToolDeps, artifact_edit_core
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-edit-notfound")
-    _, handlers = build_mcp_server(app_state)
+    deps = ToolDeps(app_state=app_state, agent=agent)
 
-    with pytest.raises(ToolError) as exc_info:
-        await handlers.koan_artifact_edit(_FakeCtx(agent), "missing.md", "old", "new")
-    body = json.loads(str(exc_info.value))
-    assert body["error"] == "not_found"
+    # Cores raise ValueError("code: message") instead of ToolError.
+    with pytest.raises(ValueError) as exc_info:
+        await artifact_edit_core(deps, "missing.md", "old", "new")
+    assert "not_found:" in str(exc_info.value)
 
 
 @pytest.mark.anyio
 async def test_artifact_edit_no_match(tmp_path):
-    """koan_artifact_edit raises ToolError with error=no_match when old_string absent."""
-    import json
-    from fastmcp.exceptions import ToolError
-    from koan.web.mcp_endpoint import build_mcp_server
+    """koan_artifact_edit raises ValueError with 'no_match:' when old_string is absent."""
+    from koan.tools.koan_tools import ToolDeps, artifact_write_core, artifact_edit_core
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-edit-nomatch")
-    _, handlers = build_mcp_server(app_state)
+    deps = ToolDeps(app_state=app_state, agent=agent)
 
-    await handlers.koan_artifact_write(_FakeCtx(agent), "doc.md", "hello world\n")
+    await artifact_write_core(deps, "doc.md", "hello world\n")
 
-    with pytest.raises(ToolError) as exc_info:
-        await handlers.koan_artifact_edit(_FakeCtx(agent), "doc.md", "nonexistent", "x")
-    body = json.loads(str(exc_info.value))
-    assert body["error"] == "no_match"
+    with pytest.raises(ValueError) as exc_info:
+        await artifact_edit_core(deps, "doc.md", "nonexistent", "x")
+    assert "no_match:" in str(exc_info.value)
 
 
 @pytest.mark.anyio
 async def test_artifact_edit_multiple_matches(tmp_path):
-    """koan_artifact_edit raises ToolError with error=multiple_matches when >1 occurrence."""
-    import json
-    from fastmcp.exceptions import ToolError
-    from koan.web.mcp_endpoint import build_mcp_server
+    """koan_artifact_edit raises ValueError with 'multiple_matches:' when >1 occurrence."""
+    from koan.tools.koan_tools import ToolDeps, artifact_write_core, artifact_edit_core
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-edit-multi")
-    _, handlers = build_mcp_server(app_state)
+    deps = ToolDeps(app_state=app_state, agent=agent)
 
-    await handlers.koan_artifact_write(_FakeCtx(agent), "doc.md", "foo bar foo\n")
+    await artifact_write_core(deps, "doc.md", "foo bar foo\n")
 
-    with pytest.raises(ToolError) as exc_info:
-        await handlers.koan_artifact_edit(_FakeCtx(agent), "doc.md", "foo", "baz")
-    body = json.loads(str(exc_info.value))
-    assert body["error"] == "multiple_matches"
+    with pytest.raises(ValueError) as exc_info:
+        await artifact_edit_core(deps, "doc.md", "foo", "baz")
+    assert "multiple_matches:" in str(exc_info.value)
 
 
 @pytest.mark.anyio
 async def test_artifact_edit_invalid_edit_empty_old(tmp_path):
-    """koan_artifact_edit raises ToolError with error=invalid_edit for empty old_string."""
-    import json
-    from fastmcp.exceptions import ToolError
-    from koan.web.mcp_endpoint import build_mcp_server
+    """koan_artifact_edit raises ValueError with 'invalid_edit:' for an empty old_string."""
+    from koan.tools.koan_tools import ToolDeps, artifact_write_core, artifact_edit_core
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-edit-empty")
-    _, handlers = build_mcp_server(app_state)
+    deps = ToolDeps(app_state=app_state, agent=agent)
 
-    await handlers.koan_artifact_write(_FakeCtx(agent), "doc.md", "content\n")
+    await artifact_write_core(deps, "doc.md", "content\n")
 
-    with pytest.raises(ToolError) as exc_info:
-        await handlers.koan_artifact_edit(_FakeCtx(agent), "doc.md", "", "new")
-    body = json.loads(str(exc_info.value))
-    assert body["error"] == "invalid_edit"
+    with pytest.raises(ValueError) as exc_info:
+        await artifact_edit_core(deps, "doc.md", "", "new")
+    assert "invalid_edit:" in str(exc_info.value)
 
 
 @pytest.mark.anyio
 async def test_artifact_edit_invalid_edit_same_strings(tmp_path):
-    """koan_artifact_edit raises ToolError with error=invalid_edit when old==new."""
-    import json
-    from fastmcp.exceptions import ToolError
-    from koan.web.mcp_endpoint import build_mcp_server
+    """koan_artifact_edit raises ValueError with 'invalid_edit:' when old==new."""
+    from koan.tools.koan_tools import ToolDeps, artifact_write_core, artifact_edit_core
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-edit-same")
-    _, handlers = build_mcp_server(app_state)
+    deps = ToolDeps(app_state=app_state, agent=agent)
 
-    await handlers.koan_artifact_write(_FakeCtx(agent), "doc.md", "same content\n")
+    await artifact_write_core(deps, "doc.md", "same content\n")
 
-    with pytest.raises(ToolError) as exc_info:
-        await handlers.koan_artifact_edit(_FakeCtx(agent), "doc.md", "same", "same")
-    body = json.loads(str(exc_info.value))
-    assert body["error"] == "invalid_edit"
+    with pytest.raises(ValueError) as exc_info:
+        await artifact_edit_core(deps, "doc.md", "same", "same")
+    assert "invalid_edit:" in str(exc_info.value)
 
 
 @pytest.mark.anyio
 async def test_artifact_edit_emits_diff_events(tmp_path):
     """koan_artifact_edit triggers artifact_diff so the sidebar refreshes."""
-    from koan.web.mcp_endpoint import build_mcp_server
+    from koan.tools.koan_tools import ToolDeps, artifact_write_core, artifact_edit_core
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-edit-diff")
-    _, handlers = build_mcp_server(app_state)
+    deps = ToolDeps(app_state=app_state, agent=agent)
 
-    await handlers.koan_artifact_write(_FakeCtx(agent), "doc.md", "before edit\n")
+    await artifact_write_core(deps, "doc.md", "before edit\n")
     # Clear events recorded during write so we can isolate the edit's events
     events_before = len(app_state.projection_store.events)
 
-    await handlers.koan_artifact_edit(_FakeCtx(agent), "doc.md", "before", "after")
+    await artifact_edit_core(deps, "doc.md", "before", "after")
 
     new_event_types = [
         e.event_type for e in app_state.projection_store.events[events_before:]
@@ -966,9 +1073,8 @@ def test_api_sessions_list_handles_empty_history(tmp_path, client):
 @pytest.mark.anyio
 async def test_koan_set_workflow_swaps_app_state_and_appends_history(tmp_path):
     """koan_set_workflow swaps app_state.run.workflow and appends a history entry to task.json."""
-    from fastmcp.exceptions import ToolError
     from koan.lib.workflows import get_workflow
-    from koan.web.mcp_endpoint import build_mcp_server
+    from koan.tools.koan_tools import ToolDeps, apply_set_workflow
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-set-workflow")
     # Set up the run with the "plan" workflow so the transition makes sense.
@@ -979,8 +1085,9 @@ async def test_koan_set_workflow_swaps_app_state_and_appends_history(tmp_path):
         "workflow_history": [{"name": "plan", "phase": "intake", "started_at": 0.0}],
     }))
 
-    _, handlers = build_mcp_server(app_state)
-    result = await handlers.koan_set_workflow(_FakeCtx(agent), "milestones")
+    deps = ToolDeps(app_state=app_state, agent=agent)
+    # apply_set_workflow returns a plain string (no content blocks).
+    result = await apply_set_workflow(deps, "milestones")
 
     # app_state should reflect the new workflow.
     assert app_state.run.workflow.name == "milestones"
@@ -996,28 +1103,27 @@ async def test_koan_set_workflow_swaps_app_state_and_appends_history(tmp_path):
     assert history[1]["phase"] == "intake"
 
     # Return value mentions the new workflow and phase.
-    assert "milestones" in result[0].text
-    assert "intake" in result[0].text
+    assert "milestones" in result
+    assert "intake" in result
 
 
 @pytest.mark.anyio
 async def test_koan_set_workflow_unknown_workflow_raises(tmp_path):
-    """koan_set_workflow raises ToolError with error=unknown_workflow for an unregistered name."""
+    """koan_set_workflow raises ValueError with 'unknown_workflow:' for an unregistered name."""
     import json as _json
-    from fastmcp.exceptions import ToolError
-    from koan.web.mcp_endpoint import build_mcp_server
+    from koan.tools.koan_tools import ToolDeps, apply_set_workflow
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-set-workflow-bad")
     (tmp_path / "task.json").write_text(_json.dumps({
         "workflow_history": [{"name": "plan", "phase": "intake", "started_at": 0.0}],
     }))
 
-    _, handlers = build_mcp_server(app_state)
+    deps = ToolDeps(app_state=app_state, agent=agent)
 
-    with pytest.raises(ToolError) as exc_info:
-        await handlers.koan_set_workflow(_FakeCtx(agent), "nonexistent")
-    body = json.loads(str(exc_info.value))
-    assert body["error"] == "unknown_workflow"
+    # Cores raise ValueError("unknown_workflow: ...") instead of ToolError.
+    with pytest.raises(ValueError) as exc_info:
+        await apply_set_workflow(deps, "nonexistent")
+    assert "unknown_workflow:" in str(exc_info.value)
 
 
 @pytest.mark.anyio
@@ -1025,7 +1131,7 @@ async def test_koan_set_workflow_emits_projection_events(tmp_path):
     """koan_set_workflow emits workflow_selected, phase_started, yield_cleared, agent_step_advanced in order."""
     import json as _json
     from koan.lib.workflows import get_workflow
-    from koan.web.mcp_endpoint import build_mcp_server
+    from koan.tools.koan_tools import ToolDeps, apply_set_workflow
 
     app_state, agent = _make_orchestrator_agent(tmp_path, "test-set-workflow-events")
     app_state.run.workflow = get_workflow("plan")
@@ -1033,11 +1139,11 @@ async def test_koan_set_workflow_emits_projection_events(tmp_path):
         "workflow_history": [{"name": "plan", "phase": "intake", "started_at": 0.0}],
     }))
 
-    _, handlers = build_mcp_server(app_state)
+    deps = ToolDeps(app_state=app_state, agent=agent)
 
     # Record projection events emitted during the call.
     events_before = len(app_state.projection_store.events)
-    await handlers.koan_set_workflow(_FakeCtx(agent), "milestones")
+    await apply_set_workflow(deps, "milestones")
     new_events = app_state.projection_store.events[events_before:]
 
     event_types = [e.event_type for e in new_events]
