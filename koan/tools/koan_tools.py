@@ -1,19 +1,23 @@
-# In-process step-machine tool cores: advance_step and apply_set_phase.
+# In-process koan tool cores: apply_set_phase, suggest_next_core, and the
+# step-machine cores (_step_phase_handshake_core, _step_within_phase_core).
 #
-# These functions extract the business logic from koan/web/mcp_endpoint.py's
-# koan_complete_step and koan_set_phase handlers so the logic has a single
-# home. Both the MCP handlers (HTTP path) and the PydanticAI in-process tools
-# call these cores. The MCP handlers are deleted at M9.
+# These functions extract the business logic from the deleted HTTP MCP handlers
+# so the logic has a single home. The PydanticAI in-process tools call these
+# cores directly; the HTTP MCP layer (mcp_endpoint.py) is gone as of M1.
+# The step-advancement tool was removed in M6; end-of-turn drives advancement.
 #
 # Circular-import discipline: this module imports from koan.phases, koan.events,
 # koan.driver, and koan.run_state -- all stable, non-circular. It does NOT import
-# from koan.web.* at module load (that would be circular via subagent.py). The
-# _compute_memory_injection_core helper imports from koan.web.mcp_endpoint lazily
-# to reuse _compose_rag_anchor; this deferred import is safe at call time.
+# from koan.web.* at module load (that would be circular via subagent.py). Helpers
+# formerly imported from koan.web.mcp_endpoint are now local (relocated in M1) or
+# imported from koan.web.uploads. Tests patch koan.memory.retrieval.search and
+# koan.memory.retrieval.run_reflect_agent (the origin modules, not any re-export).
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
@@ -32,6 +36,82 @@ class ToolDeps:
 
     app_state: Any  # AppState -- Any avoids a circular import at module load
     agent: Any      # AgentState -- same reasoning
+
+
+# -- Relocated pure helpers ---------------------------------------------------
+# These were in koan/web/mcp_endpoint.py; relocated here in M1 so the MCP
+# module can be deleted without leaving dangling imports in this module.
+
+_FILENAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*\.md$")
+
+
+def _validate_artifact_filename(filename: str) -> str | None:
+    """Return an error message if the filename is invalid, else None."""
+    if not isinstance(filename, str) or not filename:
+        return "filename is required"
+    if "/" in filename or "\\" in filename:
+        return "filename must be a root basename, no slashes"
+    if not _FILENAME_PATTERN.fullmatch(filename):
+        return (
+            "filename must match [a-z0-9][a-z0-9_-]*.md "
+            f"(got {filename!r})"
+        )
+    return None
+
+
+def _compose_rag_anchor(
+    task_description: str,
+    run_dir: str | None,
+) -> str:
+    """Compose the anchor string fed to rag.generate_queries().
+
+    Order: task -> artifacts (mtime ascending). Chronological artifact ordering
+    puts the most recent artifact closest to the end (where attention is
+    strongest). brief.md (written by intake) is the de facto initiative anchor;
+    it appears among the run-dir markdown sorted by mtime.
+    """
+    sections: list[str] = []
+    if task_description:
+        sections.append(f"# Task description\n\n{task_description}")
+
+    if run_dir:
+        run_dir_path = Path(run_dir)
+        if run_dir_path.is_dir():
+            md_files = sorted(
+                (p for p in run_dir_path.glob("*.md") if p.is_file()),
+                key=lambda p: p.stat().st_mtime,
+            )
+            for p in md_files:
+                try:
+                    body = p.read_text(encoding="utf-8")
+                except OSError:
+                    continue
+                sections.append(f"# Artifact: {p.name}\n\n{body}")
+
+    return "\n\n".join(sections)
+
+
+def _yolo_memory_propose_response(batch: Any) -> str:
+    """Return a synthetic curation payload for yolo mode -- all proposals approved.
+
+    Mirrors _render_curation_payload output so the orchestrator sees identical
+    structure in yolo and interactive runs.
+    """
+    import json as _json
+    items = [
+        {
+            "proposal_id": p.id,
+            "op": p.op,
+            "seq": p.seq,
+            "type": p.type,
+            "title": p.title,
+            "decision": "approved",
+            "feedback": "",
+        }
+        for p in batch.proposals
+    ]
+    payload = {"batch_id": batch.batch_id, "decisions": items}
+    return _json.dumps(payload, indent=2)
 
 
 # -- Private helpers -----------------------------------------------------------
@@ -61,8 +141,8 @@ async def _compute_memory_injection_core(app_state: AppState, agent: AgentState)
     best-effort: failure must never block the phase handshake.
 
     Mirrors mcp_endpoint.py's _compute_memory_injection closure; extracting it
-    here allows advance_step to call it from the in-process path without the
-    HTTP layer.
+    here allows the resolver in loop.py to call it from the in-process path
+    without the HTTP layer.
     """
     workflow = app_state.run.workflow
     if workflow is None:
@@ -71,9 +151,7 @@ async def _compute_memory_injection_core(app_state: AppState, agent: AgentState)
     if binding is None or not binding.retrieval_directive:
         return ""
 
-    # Reuse _compose_rag_anchor from mcp_endpoint to keep the anchor logic
-    # single-sourced until M9 deletes the MCP path entirely.
-    from ..web.mcp_endpoint import _compose_rag_anchor
+    # Use the module-local _compose_rag_anchor (relocated from mcp_endpoint in M1).
     anchor = _compose_rag_anchor(
         task_description=app_state.run.task_description or "",
         run_dir=(
@@ -107,7 +185,7 @@ async def _step_phase_handshake_core(agent: AgentState, app_state: AppState) -> 
 
     Mirrors mcp_endpoint.py's _step_phase_handshake nested function; the
     difference is that app_state is passed explicitly rather than captured via
-    closure. Called by advance_step for the initial step of every phase.
+    closure. Called by resolve_turn_outcome (loop.py) for the initial step of every phase.
     """
     from ..events import build_step_advanced
     from ..lib.workflows import get_suggested_phases
@@ -223,74 +301,10 @@ async def _step_within_phase_core(
 
 
 # -- Step-machine cores --------------------------------------------------------
-
-
-async def advance_step(deps: ToolDeps, thoughts: str = "") -> str:
-    """Core step-machine logic for koan_complete_step.
-
-    Handles the step 0 -> 1 phase handshake (with memory injection and
-    phase role context prepend), and normal within-phase step advancement.
-    Returns the formatted step guidance string that the tool returns to the model.
-
-    Raises ValueError on step validation failure so that both the MCP handler
-    (which catches and re-raises as ToolError) and the PydanticAI tool (which
-    lets pydantic-ai surface it as a model retry prompt) can handle it cleanly.
-
-    Called by both the in-process koan_complete_step PydanticAI tool and
-    by the MCP handler in koan/web/mcp_endpoint.py. The MCP handler adds
-    steering drain and start-run attachment handling post-core; those are
-    HTTP-transport-only concerns absent from the in-process path.
-    """
-    from ..events import build_step_advanced
-
-    agent = deps.agent
-    app_state = deps.app_state
-
-    agent.handshake_observed = True
-
-    # workflow_done tombstone: orchestrator called koan_set_phase("done") earlier.
-    if app_state.run.workflow_done:
-        return "All phases complete. You may now exit."
-
-    phase_module = agent.phase_module
-    ctx = agent.phase_ctx
-
-    # Step 0: phase handshake (initial call or post-koan_set_phase).
-    if agent.step == 0:
-        return await _step_phase_handshake_core(agent, app_state)
-
-    # Validate current step completion before advancing.
-    err = phase_module.validate_step_completion(agent.step, ctx)
-    if err:
-        # Raise ValueError; the MCP handler catches this and converts to ToolError.
-        # The PydanticAI tool lets it surface as a ModelRetry-style error message.
-        raise ValueError(f"step_validation_failed: {err}")
-
-    # Get next step from phase module (may return None at phase boundary).
-    next_step = phase_module.get_next_step(agent.step, ctx)
-
-    if next_step is None:
-        if not agent.is_primary:
-            # Non-primary agents (scouts/executors) are done.
-            return "All steps complete. You may now exit."
-        # Phase boundary defensive fallback: the prior step's invoke_after should
-        # have directed the orchestrator to call koan_set_phase, not come here.
-        app_state.projection_store.push_event(
-            "agent_step_advanced",
-            build_step_advanced(agent.step, "", total_steps=phase_module.TOTAL_STEPS),
-            agent_id=agent.agent_id,
-        )
-        from ..driver import _push_artifact_diff
-        _push_artifact_diff(app_state)
-        return (
-            "This phase has no further steps. The directive at the end of your"
-            " prior step's guidance instructed you to call koan_set_phase or to"
-            " end your turn (no tool call) to hand back to the user -- follow"
-            " that directive now."
-        )
-
-    # Normal within-phase advancement.
-    return await _step_within_phase_core(agent, app_state, phase_module, ctx, next_step)
+# The step-advancement tool was removed in M6: end-of-turn is the signal.
+# _step_phase_handshake_core and _step_within_phase_core are kept; they are
+# called by resolve_turn_outcome in loop.py via function-local imports (to
+# avoid the circular-import cycle between loop.py and koan_tools.py).
 
 
 async def apply_set_phase(deps: ToolDeps, phase: str) -> str:
@@ -300,12 +314,10 @@ async def apply_set_phase(deps: ToolDeps, phase: str) -> str:
     state, emits projection events, and rebuilds PhaseContext. Returns a
     confirmation string for the model.
 
-    Raises ValueError on invalid transitions so both the MCP handler (which
-    converts to ToolError) and the PydanticAI tool (which surfaces it as an
-    error message) can handle it without knowing about fastmcp.
+    Raises ValueError on invalid transitions so both callers (the in-process
+    PydanticAI tool and any transport wrapper) can handle it uniformly.
 
-    Called by both the in-process koan_set_phase PydanticAI tool and by the
-    MCP handler in koan/web/mcp_endpoint.py (which adds steering drain post-core).
+    Called by the in-process koan_set_phase PydanticAI tool.
     """
     from ..driver import _push_artifact_diff
     from ..events import build_step_advanced
@@ -330,7 +342,7 @@ async def apply_set_phase(deps: ToolDeps, phase: str) -> str:
             "phase": current,
             "summary": f"Workflow completed from phase '{current}'",
         })
-        return "Workflow complete. Call koan_complete_step to finish."
+        return "Workflow complete. End your turn to finish."
 
     # Validate transition using workflow membership check.
     if workflow is None or not wf_is_valid(workflow, current, phase):
@@ -396,7 +408,30 @@ async def apply_set_phase(deps: ToolDeps, phase: str) -> str:
         completed_phase=current,
     )
 
-    return f"Phase set to '{phase}'. Call koan_complete_step to begin."
+    return f"Phase set to '{phase}'. End your turn now -- the new phase's first step will be delivered automatically."
+
+
+# -- Suggest-next core ---------------------------------------------------------
+
+
+async def suggest_next_core(deps: ToolDeps, suggestions: list[dict]) -> str:
+    """Record orchestrator-authored hand-back suggestions for the upcoming phase-boundary.
+
+    Stores suggestions on app_state.interactions.next_suggestions so the loop can
+    consume them at the next hand-back. build_phase_suggestions is the fallback when
+    this is never called. Coerces None to [] so callers need not guard for None.
+
+    Each suggestion is a dict with keys: id, label, command, and optionally
+    recommended (bool). No strict schema validation -- permissive to avoid
+    blocking the orchestrator on schema changes.
+    """
+    app_state = deps.app_state
+    # Coerce None to [] so the loop's `recorded if recorded` check works correctly
+    # (an empty list is falsy and falls back to build_phase_suggestions, which is
+    # the intended behaviour when the orchestrator calls with an empty list).
+    app_state.interactions.next_suggestions = suggestions if suggestions else []
+    n = len(suggestions)
+    return f"Recorded {n} next-step suggestion(s) for the hand-back."
 
 
 # -- Workflow core -------------------------------------------------------------
@@ -521,7 +556,7 @@ async def apply_set_workflow(deps: ToolDeps, workflow: str) -> str:
 
     return (
         f"Workflow set to '{workflow}'. Now in phase "
-        f"'{new_initial_phase}'. Call koan_complete_step to begin."
+        f"'{new_initial_phase}'. End your turn now -- the new phase's first step will be delivered automatically."
     )
 
 
@@ -768,8 +803,8 @@ async def search_core(
     Raises ValueError("invalid type: ...") for unknown memory type values.
     Re-raises RuntimeError on search failures.
 
-    Imports retrieval_search via mcp_endpoint's module namespace so that
-    monkeypatching mcp_endpoint.retrieval_search in tests is visible here.
+    Imports retrieval_search from koan.memory.retrieval (the origin module).
+    Tests patch koan.memory.retrieval.search to intercept calls here.
     The lazy import inside the function body re-evaluates the module attribute
     on each call, picking up any active monkeypatch.
     """
@@ -777,11 +812,9 @@ async def search_core(
 
     from ..memory.types import MEMORY_TYPES
 
-    # Import via mcp_endpoint rather than directly from memory.retrieval so
-    # that tests patching mcp_endpoint.retrieval_search see the mock here too.
-    # The existing _compute_memory_injection_core uses the same pattern for
-    # _compose_rag_anchor.
-    from ..web.mcp_endpoint import retrieval_search
+    # Import directly from the origin module; tests patch
+    # koan.memory.retrieval.search (not the deleted mcp_endpoint namespace).
+    from ..memory.retrieval import search as retrieval_search
 
     app_state = deps.app_state
 
@@ -867,15 +900,11 @@ async def artifact_write_core(deps: ToolDeps, filename: str, content: str) -> st
     Raises ValueError("no_run_dir: ...") when no run directory is available.
     """
     import json
-    from pathlib import Path
 
     from ..artifacts import write_artifact_atomic
     from ..driver import _push_artifact_diff
 
-    # Lazy import avoids a module-level dependency on mcp_endpoint from tools.
-    # _validate_artifact_filename and _FILENAME_PATTERN live there until M9.
-    from ..web.mcp_endpoint import _validate_artifact_filename
-
+    # _validate_artifact_filename is now module-local (relocated from mcp_endpoint in M1).
     agent = deps.agent
     app_state = deps.app_state
 
@@ -913,12 +942,11 @@ async def artifact_edit_core(
     """
     import json
     import os
-    from pathlib import Path
 
     from ..artifacts import split_frontmatter, write_artifact_atomic
     from ..driver import _push_artifact_diff
-    from ..web.mcp_endpoint import _validate_artifact_filename
 
+    # _validate_artifact_filename is now module-local (relocated from mcp_endpoint in M1).
     agent = deps.agent
     app_state = deps.app_state
 
@@ -990,7 +1018,6 @@ async def artifact_view_core(deps: ToolDeps, filename: str) -> str:
     or ValueError("not_found: ...") on failure.
     """
     import os
-    from pathlib import Path
 
     from ..artifacts import split_frontmatter
 
@@ -1033,8 +1060,7 @@ async def ask_question_core(deps: ToolDeps, questions: list[dict]) -> str:
     attachment blocks on top; the in-process pydantic-ai tool returns this
     string directly to the model.
 
-    Raises RuntimeError when the interaction queue is full (converted from the
-    fastmcp ToolError so the in-process path gets a clean exception type).
+    Raises RuntimeError when the interaction queue is full.
     """
     agent = deps.agent
     app_state = deps.app_state
@@ -1044,8 +1070,7 @@ async def ask_question_core(deps: ToolDeps, questions: list[dict]) -> str:
     try:
         future = await enqueue_interaction(agent, app_state, "ask", {"questions": questions or []})
     except Exception as exc:
-        # enqueue_interaction raises ToolError (fastmcp) when the queue is full;
-        # convert to RuntimeError so pydantic-ai does not see a foreign exception type.
+        # convert to RuntimeError so pydantic-ai receives a standard exception type.
         raise RuntimeError(f"ask_question_enqueue_failed: {exc}") from exc
 
     if app_state.server.yolo:
@@ -1132,7 +1157,7 @@ async def propose_memory_core(
     )
 
     if app_state.server.yolo:
-        from ..web.mcp_endpoint import _yolo_memory_propose_response
+        # _yolo_memory_propose_response is now module-local (relocated from mcp_endpoint in M1).
         yolo_text = _yolo_memory_propose_response(batch)
         app_state.projection_store.push_event(
             "memory_curation_cleared",
@@ -1154,7 +1179,8 @@ async def propose_memory_core(
         decisions = []
 
     run_dir = _resolve_run_dir_core(agent, app_state) or ""
-    from ..web.mcp_endpoint import _render_curation_payload
+    # _render_curation_payload relocated from mcp_endpoint to uploads in M1.
+    from ..web.uploads import _render_curation_payload
     blocks, _ = _render_curation_payload(
         batch, decisions,
         app_state.uploads, run_dir, agent.runner_type,
@@ -1319,13 +1345,14 @@ async def request_executor_core(
 
 
 def build_koan_toolset(allowed_names: "frozenset[str] | None" = None) -> Any:
-    """Build a koan FunctionToolset with all 20 implemented koan tools.
+    """Build a koan FunctionToolset with all implemented koan tools.
 
-    Registers koan_complete_step, koan_set_phase (M2), the 14 M3 tools
+    Registers koan_set_phase, koan_suggest_next (M2/M6), the 14 M3 tools
     (koan_set_workflow; the 4 story tools; the 5 memory tools; the 4 artifact
     tools), the 2 M5 in-process interaction tools (koan_ask_question,
     koan_memory_propose), and the 2 M6 in-process subagent tools
     (koan_request_scouts, koan_request_executor).
+    The step-advancement tool was removed in M6; end-of-turn drives advancement.
 
     Args:
         allowed_names: When provided, only tools whose names are in this set
@@ -1350,31 +1377,38 @@ def build_koan_toolset(allowed_names: "frozenset[str] | None" = None) -> Any:
             ts.add_function(func, takes_ctx=True, name=name, description=description)
 
     # ---- M2 tools ----
-
-    async def _koan_complete_step(ctx, thoughts: str = "") -> str:
-        """Advance the step machine and receive guidance for the current step."""
-        return await advance_step(ctx.deps, thoughts)
+    # The step-advancement tool was removed in M6. The resolver in run_agent_loop
+    # calls _step_phase_handshake_core and _step_within_phase_core directly;
+    # no tool entrypoint is needed -- end-of-turn drives step advancement.
 
     async def _koan_set_phase(ctx, phase: str) -> str:
         """Transition to a new workflow phase, or tombstone the workflow with 'done'."""
         return await apply_set_phase(ctx.deps, phase)
 
     _reg(
-        _koan_complete_step,
-        "koan_complete_step",
-        (
-            "Advance the step machine and receive guidance for the current step. "
-            "Call this at the start of each agent turn to receive your instructions. "
-            "Pass optional reflective thoughts as the 'thoughts' argument."
-        ),
-    )
-    _reg(
         _koan_set_phase,
         "koan_set_phase",
         (
             "Commit transition to the next workflow phase. Call after the user "
-            "has confirmed a direction. The next koan_complete_step call delivers "
-            "the new phase's first-step guidance. Pass 'done' to end the workflow."
+            "has confirmed a direction. End your turn after calling this tool -- "
+            "the new phase's first step will be delivered automatically. "
+            "Pass 'done' to end the workflow."
+        ),
+    )
+
+    # ---- M6: koan_suggest_next ----
+
+    async def _koan_suggest_next(ctx, suggestions: list[dict] | None = None) -> str:
+        """Record the next-step suggestions to show the user at the upcoming phase-boundary hand-back."""
+        return await suggest_next_core(ctx.deps, suggestions or [])
+
+    _reg(
+        _koan_suggest_next,
+        "koan_suggest_next",
+        (
+            "Record the next-step suggestions to show the user at the upcoming "
+            "phase-boundary hand-back. Call before ending your final turn of a phase. "
+            "Args: suggestions (list of {id, label, command, recommended?})."
         ),
     )
 
@@ -1389,7 +1423,7 @@ def build_koan_toolset(allowed_names: "frozenset[str] | None" = None) -> Any:
         "koan_set_workflow",
         (
             "Switch the active workflow mid-run. The new workflow's initial_phase "
-            "becomes active; call koan_complete_step to begin. "
+            "becomes active; end your turn after calling this tool to begin. "
             "Pass a workflow name registered in koan/lib/workflows.py."
         ),
     )
@@ -1622,13 +1656,11 @@ def build_koan_toolset(allowed_names: "frozenset[str] | None" = None) -> Any:
 
 
 def build_minimal_koan_toolset() -> Any:
-    """Backwards-compatible alias: build a toolset with only koan_complete_step and koan_set_phase.
+    """Build a minimal toolset with only koan_set_phase and koan_suggest_next.
 
-    Kept for M2 compatibility; callers that need the full 16-tool set should
-    use build_koan_toolset() directly.  PydanticAIAgent.run() switched to
-    build_koan_toolset() in M3; this alias avoids breaking any remaining
-    import sites.
+    Kept for backwards compatibility; callers that need the full toolset should
+    use build_koan_toolset() directly.  PydanticAIAgent.run() uses
+    build_koan_toolset() in M3+.
+    The step-advancement tool was removed in M6.
     """
-    # Filter to only the two M2 tools so callers that relied on the minimal
-    # set continue to see exactly the same vocabulary.
-    return build_koan_toolset(allowed_names=frozenset({"koan_complete_step", "koan_set_phase"}))
+    return build_koan_toolset(allowed_names=frozenset({"koan_set_phase", "koan_suggest_next"}))

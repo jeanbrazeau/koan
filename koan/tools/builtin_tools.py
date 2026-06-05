@@ -15,7 +15,7 @@
 # Path-scope: write and edit self-validate the resolved path against the
 # calling role and run_dir. Planning roles (intake/orchestrator/planner/scout)
 # are confined to run_dir; the executor role may write anywhere in the project
-# tree. This mirrors koan/lib/permissions.py's path-scope logic but lives
+# tree. koan/lib/permissions.py was deleted in M1; this path-scope logic lives
 # tool-internally -- a central gate cannot express argument-level constraints.
 #
 # Context-file injection: path-bearing tools (read/write/edit/glob/grep)
@@ -37,8 +37,7 @@ if TYPE_CHECKING:
 
 
 # Planning roles are confined to run_dir for write/edit operations.
-# Mirrors PLANNING_ROLES in koan/lib/permissions.py; defined here to avoid
-# importing the permissions module (scheduled for M9 deletion).
+# Defined here (not imported) because koan/lib/permissions.py was deleted in M1.
 _PLANNING_ROLES: frozenset[str] = frozenset({
     "intake",
     "orchestrator",

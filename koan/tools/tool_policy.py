@@ -1,25 +1,112 @@
 # Tool policy: allowlist data and per-(role, phase) toolset composition.
 #
-# ToolPolicy carries the retained allowlist tables from koan/lib/permissions.py
-# (the deleted check_permission fence's DATA survives -- only its GATE is gone).
-# compose_toolset reads it once per (role, phase) to build the registered
-# toolset for PydanticAIAgent.run(), replacing call-time permission gating with
-# construction-time vocabulary restriction -- disallowed tools never enter the
-# model's context.
+# ToolPolicy carries the allowlist tables (formerly in koan/lib/permissions.py,
+# inlined here in M1 when that module was deleted). compose_toolset reads them
+# once per (role, phase) to build the registered toolset for PydanticAIAgent.run(),
+# replacing call-time permission gating with construction-time vocabulary
+# restriction -- disallowed tools never enter the model's context.
 #
 # Composition is per (role, phase), NOT per step: the tool set stays byte-stable
 # within a phase so it does not invalidate the tool-definition cache at each step
 # boundary. The lone legacy step-level gate (brief-generation step 1) has no
 # active-workflow consumer and is dropped.
-#
-# The cross-check unit test in tests/test_tool_policy.py asserts that
-# compose_toolset and check_permission agree on (role, phase, tool) -> allow/deny
-# for every representative sample, keeping the two in sync until M9 deletes
-# check_permission.
 
 from __future__ import annotations
 
 from dataclasses import dataclass
+
+
+# -- Permission tables (single source of truth for toolset composition) -------
+# These were in koan/lib/permissions.py; inlined here in M1 when the fence
+# module was deleted. The data survives -- only the check_permission gate is gone.
+
+# Non-bash read tools -- unconditionally allowed for all roles.
+_NON_BASH_READ_TOOLS: frozenset[str] = frozenset({"read", "grep", "glob", "find", "ls"})
+
+ROLE_PERMISSIONS: dict[str, frozenset[str]] = {
+    # The step-advancement tool was removed from all roles in M6; end-of-turn
+    # is the advancement signal and the loop resolver drives step progression.
+    "intake": frozenset({
+        "koan_ask_question",
+        "koan_request_scouts",
+        "edit",
+        "write",
+    }),
+    "scout": frozenset({
+        # Scouts advance through steps by ending each turn; the loop delivers
+        # the next step and terminates at exhaustion. No tool needed.
+    }),
+    "orchestrator": frozenset({
+        # write/edit intentionally absent -- artifact mutations flow through
+        # koan_artifact_write / koan_artifact_edit.
+        "koan_set_phase",
+        "koan_set_workflow",
+        # koan_suggest_next: only the orchestrator hands back to a user;
+        # scouts/executors terminate at step exhaustion, so they don't need it.
+        "koan_suggest_next",
+        "koan_ask_question",
+        "koan_request_scouts",
+        "koan_request_executor",
+        "koan_select_story",
+        "koan_complete_story",
+        "koan_retry_story",
+        "koan_skip_story",
+        "koan_memorize",
+        "koan_forget",
+        "koan_memory_status",
+        "koan_search",
+        "koan_reflect",
+        "koan_artifact_write",
+        "koan_artifact_edit",
+        "koan_memory_propose",
+        "bash",
+    }),
+    "planner": frozenset({
+        "koan_ask_question",
+        "koan_request_scouts",
+        "edit",
+        "write",
+    }),
+    "executor": frozenset({
+        "koan_ask_question",
+        "edit",
+        "write",
+        "bash",
+    }),
+}
+
+# Memory query tools -- always allowed for all roles in every phase.
+_UNIVERSAL_MEMORY_TOOLS: frozenset[str] = frozenset({
+    "koan_memory_status",
+    "koan_search",
+})
+
+# Read-only artifact tools -- always allowed for all roles in every phase.
+_UNIVERSAL_READ_TOOLS: frozenset[str] = frozenset({
+    "koan_artifact_list",
+    "koan_artifact_view",
+})
+
+_ORCHESTRATOR_SCOUT_PHASES: frozenset[str] = frozenset({
+    "intake", "core-flows",
+    "tech-plan-spec", "tech-plan-review",
+    "ticket-breakdown", "cross-artifact-validation",
+    "plan-spec", "plan-review",
+    "milestone-spec", "milestone-review",
+    "curation",
+    "frame",
+})
+
+_ORCHESTRATOR_STORY_TOOLS: frozenset[str] = frozenset({
+    "koan_select_story", "koan_complete_story",
+    "koan_retry_story", "koan_skip_story",
+})
+
+_ORCHESTRATOR_BASH_PHASES: frozenset[str] = frozenset({
+    "execution", "implementation-validation",
+    "exec-review",
+    "frame",
+})
 
 
 @dataclass(frozen=True)
@@ -60,30 +147,16 @@ class ToolPolicy:
 
 
 def build_tool_policy() -> ToolPolicy:
-    """Construct ToolPolicy from koan/lib/permissions.py tables (single source of truth).
+    """Construct ToolPolicy from the module-level allowlist tables.
 
-    Reads the existing permission tables so the policy is derived from the
-    same constants that check_permission uses, preventing the two from
-    diverging until M9 deletes the gate.
+    The tables are the single source of truth for toolset composition
+    (formerly split between this module and the deleted koan/lib/permissions.py).
 
     The orchestrator's role_tools excludes the four phase-conditional tool sets
     (bash, koan_request_scouts, koan_request_executor, story tools) because
     compose_toolset adds them conditionally per phase. Non-orchestrator role_tools
     are used as-is from ROLE_PERMISSIONS.
     """
-    # Lazy import so that permissions.py (which uses get_logger) is not pulled
-    # into module scope at tool_policy import time -- keeps the tools boundary
-    # lightweight and avoids triggering logger initialisation too early.
-    from ..lib.permissions import (
-        ROLE_PERMISSIONS,
-        _NON_BASH_READ_TOOLS,
-        _ORCHESTRATOR_BASH_PHASES,
-        _ORCHESTRATOR_SCOUT_PHASES,
-        _ORCHESTRATOR_STORY_TOOLS,
-        _UNIVERSAL_MEMORY_TOOLS,
-        _UNIVERSAL_READ_TOOLS,
-    )
-
     # Orchestrator always-available tools: strip the four phase-conditional sets
     # so compose_toolset can add them only when the phase permits.
     # koan_request_executor is phase-gated to executor_phases (not always-on).
@@ -100,8 +173,7 @@ def build_tool_policy() -> ToolPolicy:
     }
     role_tools["orchestrator"] = orchestrator_always
 
-    # executor_phases is distinct from story_phases: check_permission allows
-    # koan_request_executor in ("execution", "execute") -- the plan workflow uses
+    # executor_phases is distinct from story_phases: the plan workflow uses
     # "execute" as its execution phase name, whereas story tools are "execution" only.
     return ToolPolicy(
         role_tools=role_tools,
@@ -131,8 +203,6 @@ def compose_toolset(policy: ToolPolicy, role: str, phase: str) -> frozenset[str]
     Returns:
         frozenset of tool name strings that are allowed for this (role, phase).
     """
-    from ..lib.permissions import _ORCHESTRATOR_STORY_TOOLS
-
     # Base: non-bash read tools + universal tools + role-specific always-on tools.
     allowed: frozenset[str] = (
         policy.read_tools
