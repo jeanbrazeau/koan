@@ -67,6 +67,13 @@ async def _voyage_rerank(
 async def search_candidates(
     index: RetrievalIndex, query: str, n: int = 20
 ) -> list[dict]:
+    # Voyage rejects empty/whitespace input with a 400 ("Input cannot contain
+    # empty strings or empty lists"). Short-circuit before embedding so a
+    # degenerate query (e.g. a model emitting an empty search) yields no
+    # candidates instead of crashing the whole retrieval.
+    if not query.strip():
+        log.debug("search_candidates: empty query, returning no candidates")
+        return []
     query_vec = await _embed_query(query)
     dense = await index.dense_search(query_vec, n)
     fts = await index.fts_search(query, n)

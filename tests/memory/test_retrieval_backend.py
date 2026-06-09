@@ -6,7 +6,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from koan.memory.retrieval.backend import _rrf_merge, rerank_results
+from koan.memory.retrieval.backend import _rrf_merge, rerank_results, search_candidates
 from koan.memory.retrieval.index import RetrievalIndex, _content_hash
 from koan.memory.retrieval.types import SearchResult
 
@@ -104,6 +104,33 @@ async def test_sync_removes_deleted_files(mem_dir: Path) -> None:
     rows = await index.dense_search(FAKE_VECTOR, n=10)
     assert len(rows) == 1
     assert rows[0]["entry_id"] == 1
+
+
+@pytest.mark.anyio
+async def test_fts_search_on_empty_store_returns_empty(mem_dir: Path) -> None:
+    # Fresh store with no entries: _sync never builds the FTS index, so Lance
+    # would raise "Cannot perform full text search unless an INVERTED index has
+    # been created". fts_search must degrade to [] instead of raising.
+    index = RetrievalIndex(mem_dir)
+    await index.ensure_synced()  # no files -> no embedding, empty table
+
+    results = await index.fts_search("anything")
+
+    assert results == []
+
+
+@pytest.mark.anyio
+async def test_search_candidates_empty_query_skips_embedding(mem_dir: Path) -> None:
+    # An empty/whitespace query must not reach the embedding call (Voyage 400),
+    # for any caller (RAG inject or reflect). It short-circuits to no candidates.
+    index = RetrievalIndex(mem_dir)
+    must_not_embed = AsyncMock(side_effect=AssertionError("embed must not run"))
+
+    with patch("koan.memory.retrieval.backend._embed_query", new=must_not_embed):
+        assert await search_candidates(index, "") == []
+        assert await search_candidates(index, "   \n  ") == []
+
+    must_not_embed.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

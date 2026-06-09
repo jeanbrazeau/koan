@@ -8,6 +8,7 @@ import os
 
 from pydantic_ai import Agent
 
+from ._retry import with_rate_limit_retry
 from ..logger import get_logger
 
 log = get_logger("memory.llm")
@@ -50,7 +51,11 @@ async def generate(prompt: str, system: str = "", max_tokens: int = 1024) -> str
         model_settings={"temperature": 0.0, "max_tokens": max_tokens},
         output_type=str,
     )
-    result = await agent.run(prompt)
+    # Retry transient provider rate limits (HTTP 429) with backoff; a fresh
+    # agent.run() coroutine is created per attempt.
+    result = await with_rate_limit_retry(
+        lambda: agent.run(prompt), label=f"llm.generate({model})"
+    )
     text = result.output or ""
     log.info("generate complete response_len=%d", len(text))
     return text

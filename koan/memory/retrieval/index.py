@@ -153,5 +153,14 @@ class RetrievalIndex:
     async def fts_search(self, query: str, n: int = 20) -> list[dict]:
         conn = await lancedb.connect_async(str(self._index_path))
         table = await conn.open_table(TABLE_NAME)
+        # The FTS (inverted) index is only built once the store has rows -- see
+        # the `if all_rows:` guard in _sync. On a fresh/empty store no index
+        # exists yet, and Lance raises ("Cannot perform full text search unless
+        # an INVERTED index has been created") rather than returning empty.
+        # Guard here so retrieval degrades to dense-only instead of failing the
+        # entire search (which would break RAG injection on a project's first run).
+        indices = await table.list_indices()
+        if not any(getattr(ix, "index_type", None) == "FTS" for ix in indices):
+            return []
         builder = await table.search(query, query_type="fts")
         return await builder.limit(n).to_list()

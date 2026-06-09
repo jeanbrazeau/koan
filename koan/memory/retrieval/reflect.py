@@ -25,6 +25,7 @@ from pydantic_ai.output import TextOutput
 
 from ..types import MemoryEntry
 from ..timestamps import iso_to_ms
+from .._retry import with_rate_limit_retry
 from ...logger import get_logger
 from .backend import search as retrieval_search
 from .index import RetrievalIndex
@@ -356,6 +357,14 @@ async def _dispatch_search(
     if k > 20:
         k = 20
 
+    # Reject an empty query before hitting the index: it would otherwise fail
+    # the embedding call (Voyage 400). Give the model a clear, actionable error.
+    if not query.strip():
+        return {
+            "error": "empty query: pass a single entity or concept, not a blank string",
+            "results": [],
+        }
+
     # Validate type before hitting the index to give the LLM a clear error.
     if type_filter is not None and type_filter not in (
         "decision", "context", "lesson", "procedure"
@@ -405,7 +414,9 @@ async def run_reflect_agent(
 
     Raises IterationCapExceeded if the model does not call "done" within
     max_iterations model-request turns. Raises RuntimeError for API-key or
-    client errors. No partial/best-effort answer is synthesized on overflow.
+    client errors. Transient provider rate limits (HTTP 429) are retried with
+    backoff before propagating. No partial/best-effort answer is synthesized on
+    overflow.
     """
     _api_key()  # raise early if key is missing, before touching the network
 
@@ -421,58 +432,66 @@ async def run_reflect_agent(
             f"{context}"
         )
 
-    deps = _Deps(index=index, on_trace=on_trace)
-    agent = _build_agent()
-    model_request_count = 0
+    async def _attempt() -> ReflectResult:
+        # Fresh deps + agent per attempt so a retry starts from a clean slate.
+        deps = _Deps(index=index, on_trace=on_trace)
+        agent = _build_agent()
+        model_request_count = 0
 
-    async with agent.iter(user_text, deps=deps) as run:
-        async for node in run:
-            if Agent.is_model_request_node(node):
-                model_request_count += 1
-                deps.iteration = model_request_count
-                async with node.stream(run.ctx) as stream:
-                    async for ev in stream:
-                        if on_trace is None:
-                            continue
-                        if isinstance(ev, PartStartEvent):
-                            if isinstance(ev.part, ThinkingPart) and ev.part.content:
-                                on_trace(ReflectTraceEvent(
-                                    iteration=model_request_count,
-                                    kind="thinking",
-                                    delta=ev.part.content,
-                                ))
-                            elif isinstance(ev.part, TextPart) and ev.part.content:
-                                on_trace(ReflectTraceEvent(
-                                    iteration=model_request_count,
-                                    kind="text",
-                                    delta=ev.part.content,
-                                ))
-                        elif isinstance(ev, PartDeltaEvent):
-                            if isinstance(ev.delta, ThinkingPartDelta) and ev.delta.content_delta:
-                                on_trace(ReflectTraceEvent(
-                                    iteration=model_request_count,
-                                    kind="thinking",
-                                    delta=ev.delta.content_delta,
-                                ))
-                            elif isinstance(ev.delta, TextPartDelta) and ev.delta.content_delta:
-                                on_trace(ReflectTraceEvent(
-                                    iteration=model_request_count,
-                                    kind="text",
-                                    delta=ev.delta.content_delta,
-                                ))
-                if model_request_count >= max_iterations:
-                    raise IterationCapExceeded(iterations=max_iterations)
-            if deps.done_result is not None:
-                break
+        async with agent.iter(user_text, deps=deps) as run:
+            async for node in run:
+                if Agent.is_model_request_node(node):
+                    model_request_count += 1
+                    deps.iteration = model_request_count
+                    async with node.stream(run.ctx) as stream:
+                        async for ev in stream:
+                            if on_trace is None:
+                                continue
+                            if isinstance(ev, PartStartEvent):
+                                if isinstance(ev.part, ThinkingPart) and ev.part.content:
+                                    on_trace(ReflectTraceEvent(
+                                        iteration=model_request_count,
+                                        kind="thinking",
+                                        delta=ev.part.content,
+                                    ))
+                                elif isinstance(ev.part, TextPart) and ev.part.content:
+                                    on_trace(ReflectTraceEvent(
+                                        iteration=model_request_count,
+                                        kind="text",
+                                        delta=ev.part.content,
+                                    ))
+                            elif isinstance(ev, PartDeltaEvent):
+                                if isinstance(ev.delta, ThinkingPartDelta) and ev.delta.content_delta:
+                                    on_trace(ReflectTraceEvent(
+                                        iteration=model_request_count,
+                                        kind="thinking",
+                                        delta=ev.delta.content_delta,
+                                    ))
+                                elif isinstance(ev.delta, TextPartDelta) and ev.delta.content_delta:
+                                    on_trace(ReflectTraceEvent(
+                                        iteration=model_request_count,
+                                        kind="text",
+                                        delta=ev.delta.content_delta,
+                                    ))
+                    if model_request_count >= max_iterations:
+                        raise IterationCapExceeded(iterations=max_iterations)
+                if deps.done_result is not None:
+                    break
 
-    if deps.done_result is not None:
-        r = deps.done_result
-        memory_ids = [int(x) for x in r.memory_ids]
-        citations = _resolve_citations(memory_ids, deps.retrieved)
-        return ReflectResult(
-            answer=r.answer,
-            citations=citations,
-            iterations=model_request_count,
-        )
+        if deps.done_result is not None:
+            r = deps.done_result
+            memory_ids = [int(x) for x in r.memory_ids]
+            citations = _resolve_citations(memory_ids, deps.retrieved)
+            return ReflectResult(
+                answer=r.answer,
+                citations=citations,
+                iterations=model_request_count,
+            )
 
-    raise IterationCapExceeded(iterations=model_request_count)
+        raise IterationCapExceeded(iterations=model_request_count)
+
+    # Reflect is read-only and idempotent, so retrying the whole loop on a
+    # transient rate limit is safe. Keep attempts low (one retry) to avoid
+    # burning extra quota when the budget is genuinely exhausted; the
+    # IterationCapExceeded path is not a rate limit and propagates immediately.
+    return await with_rate_limit_retry(_attempt, attempts=2, label=f"reflect({_model()})")
